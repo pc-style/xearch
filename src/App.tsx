@@ -123,8 +123,10 @@ function Modal({
             <X size={20} />
           </button>
         </header>
-        {notice && <p role="status">{notice}</p>}
-        {children}
+        <div className="modal-body">
+          {notice && <p role="status">{notice}</p>}
+          {children}
+        </div>
       </div>
     </dialog>
   );

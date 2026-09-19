@@ -573,7 +573,8 @@ dialog {
   border-radius: 12px;
   max-width: 580px;
   width: calc(100% - 32px);
-  max-height: 85svh;
+  max-height: calc(100svh - 48px);
+  overflow: hidden;
   box-shadow: 0 20px 100px #0009;
 }
 dialog::backdrop {
@@ -581,14 +582,22 @@ dialog::backdrop {
   backdrop-filter: blur(5px);
 }
 .modal-inner {
-  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100svh - 50px);
 }
 .modal-inner > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 15px;
-  margin-bottom: 18px;
+  flex-shrink: 0;
+  padding: 28px 28px 18px;
+}
+.modal-body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 28px 28px;
 }
 .modal-inner h2 {
   font-size: 22px;
@@ -888,8 +897,11 @@ code {
   .connection {
     margin-top: 8px;
   }
-  .modal-inner {
-    padding: 22px;
+  .modal-inner > header {
+    padding: 22px 22px 16px;
+  }
+  .modal-body {
+    padding: 0 22px 22px;
   }
   .proposal {
     flex-direction: column;
