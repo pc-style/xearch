@@ -624,7 +624,7 @@ dialog::backdrop {
   font-size: 12px;
 }
 .stack-form label small {
-  color: #7e776e;
+  color: var(--muted);
   margin-left: 6px;
 }
 .stack-form button {
