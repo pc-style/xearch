@@ -182,3 +182,38 @@ fn absent_metrics_sort_last_and_popularity_never_relaxes_matching() {
         );
     }
 }
+
+#[test]
+fn pagination_window_capping_and_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(dir.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    for id in 1..=5 {
+        writer.upsert(&post(id, "rust test")).unwrap();
+    }
+    writer.commit().unwrap();
+
+    let mut req = request("rust");
+    req.limit = 2;
+    let expr = search_query::parse(&req.query, None).unwrap();
+    let first = engine.search(&expr, &req, 100).unwrap();
+    let cursor_json: serde_json::Value =
+        serde_json::from_str(first.next_cursor.as_ref().unwrap()).unwrap();
+    let fingerprint = cursor_json["fingerprint"].as_str().unwrap().to_string();
+
+    // Fabricate a cursor near MAX_WINDOW (offset 9998) when corpus has only 5 items.
+    let near_window_cursor = serde_json::json!({
+        "fingerprint": fingerprint,
+        "offset": 9998,
+        "now": 100,
+    })
+    .to_string();
+
+    req.cursor = Some(near_window_cursor);
+    req.limit = 2;
+    let resp = engine.search(&expr, &req, 100).unwrap();
+    assert_eq!(resp.rows.len(), 0);
+    assert_eq!(resp.next_cursor, None);
+    // Crucially: no false warning that window was capped when results simply ended.
+    assert!(resp.warnings.is_empty());
+}

@@ -1,24 +1,20 @@
 [package]
-name = "search-api"
+name = "search-indexer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 [lints]
 workspace = true
 [dependencies]
+search-ingest.workspace = true
 search-model.workspace = true
 search-query.workspace = true
-search-backend.workspace = true
+search-tantivy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-axum.workspace = true
-tokio.workspace = true
-jiff.workspace = true
-hmac.workspace = true
 sha2.workspace = true
-hex.workspace = true
-[dev-dependencies]
-search-tantivy.workspace = true
-search-ingest.workspace = true
 tempfile.workspace = true
-tower = { version = "0.5", features = ["util"] }
+thiserror.workspace = true
+tokio.workspace = true
+[dev-dependencies]
+tempfile.workspace = true
