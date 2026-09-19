@@ -5,7 +5,7 @@
   background: #080808;
   font-synthesis: none;
   font-weight: 400;
-  --muted: #a09d98;
+  --muted: #b3b0ab;
   --line: #292827;
   --accent: #ffc99b;
   color-scheme: dark;
@@ -114,7 +114,7 @@ p {
 .topbar nav button {
   font-size: 13px;
   border-color: transparent;
-  color: #aaa8a4;
+  color: #bdbab5;
   padding: 8px;
 }
 .topbar nav button[aria-pressed="true"] {
@@ -196,7 +196,7 @@ main {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: #8f8c87;
+  color: #a8a5a0;
   font-size: 12px;
   margin-top: 12px;
 }
@@ -221,7 +221,7 @@ main {
   margin-bottom: 36px;
 }
 .hero-title p {
-  color: #9b9791;
+  color: #aca8a2;
   font-size: 12px;
   letter-spacing: 0.3px;
   margin-bottom: 12px;
@@ -485,7 +485,7 @@ mark {
   align-items: center;
   flex-direction: column;
   padding: 65px 20px 80px;
-  color: #8c8882;
+  color: #a29e98;
 }
 .empty > svg {
   color: #bda58a;
@@ -598,7 +598,7 @@ dialog::backdrop {
 }
 .muted-copy {
   font-size: 12px;
-  color: #9c958c;
+  color: #b0a99f;
 }
 .stack-form {
   display: flex;
@@ -644,7 +644,7 @@ dialog::backdrop {
 }
 .job p {
   font-size: 12px;
-  color: #a69e93;
+  color: #b3aca2;
   margin: 8px 0;
 }
 .job .config-warning {
