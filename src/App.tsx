@@ -592,25 +592,23 @@ export default function App() {
               <span>
                 Search everything, select a creator, or start with <b>@</b> to filter by account.
               </span>
-              <button
-                type="button"
-                className="text-button ai"
-                disabled={busy || !draft.trim() || !configured?.openai}
-                title={
-                  !configured?.openai
-                    ? "Query assistance is not connected yet"
-                    : "Suggest a clearer search"
-                }
-                onClick={() =>
-                  void task(async () => {
-                    await ensureSession();
-                    setProposal(await interpret({ raw: draft }));
-                  })
-                }
-              >
-                <Sparkles size={13} />
-                Help me search
-              </button>
+              {configured?.openai && (
+                <button
+                  type="button"
+                  className="text-button ai"
+                  disabled={busy || !draft.trim()}
+                  title="Suggest a clearer search"
+                  onClick={() =>
+                    void task(async () => {
+                      await ensureSession();
+                      setProposal(await interpret({ raw: draft }));
+                    })
+                  }
+                >
+                  <Sparkles size={13} />
+                  Help me search
+                </button>
+              )}
             </div>
           </form>
           {proposal && (
