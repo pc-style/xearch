@@ -625,6 +625,9 @@ dialog::backdrop {
 .stack-form button {
   margin-top: 8px;
 }
+.stack-form .text-button {
+  align-self: flex-start;
+}
 .config-warning {
   font-size: 12px;
   color: #e3b187;

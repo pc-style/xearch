@@ -515,15 +515,7 @@ export default function App() {
           xearch<span className="wordmark-dot">.</span>
         </button>
         <nav aria-label="Main navigation">
-          <button
-            aria-label="Import dashboard"
-            onClick={() => {
-              setDashboard(true);
-              const url = new URL(location.href);
-              url.searchParams.set("dashboard", "1");
-              history.replaceState(null, "", url);
-            }}
-          >
+          <button aria-label="Import dashboard" onClick={openDashboard}>
             <LayoutDashboard size={15} />
             <span>Dashboard</span>
           </button>
@@ -612,7 +604,7 @@ export default function App() {
                   maxLength={300}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
-                  placeholder="e.g. local-first software or @creator"
+                  placeholder="e.g. local-first software or @handle"
                   autoComplete="off"
                   list="accounts"
                 />
@@ -696,7 +688,7 @@ export default function App() {
                   <span className="status-dot muted" />
                   Connect your sources to start searching.
                   <button className="text-button" onClick={() => setModal("imports")}>
-                    Add one <Plus size={13} />
+                    Import an account <Plus size={13} />
                   </button>
                 </>
               )}
@@ -914,16 +906,18 @@ export default function App() {
               id="account"
               value={accountInput}
               onChange={(e) => setAccountInput(e.target.value)}
-              placeholder="@creator"
+              placeholder="@handle"
               required
               maxLength={16}
             />
             <label htmlFor="since">
-              Since <small>Optional</small>
+              History since <small>Optional, YYYY-MM-DD</small>
             </label>
             <input
-              type="date"
               id="since"
+              inputMode="numeric"
+              pattern="\d{4}-\d{2}-\d{2}"
+              placeholder="YYYY-MM-DD"
               value={since}
               onChange={(e) => setSince(e.target.value)}
             />
@@ -934,6 +928,9 @@ export default function App() {
             {configured && !configured.indexing && (
               <p className="config-warning">{indexingUnavailableMessage(configured)}</p>
             )}
+            <button type="button" className="text-button" onClick={openDashboard}>
+              More options in the dashboard <ArrowUpRight size={13} />
+            </button>
           </form>
           <div className="jobs">
             <h3>Recent imports</h3>
