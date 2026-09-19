@@ -18,10 +18,10 @@
 }
 .control-header p,
 .control-room small,
-.control-feed > p,
+.control-caveats p,
 .control-form p,
 .control-connections p {
-  color: #999;
+  color: #b3b3b3;
   font-size: 13px;
   line-height: 1.6;
   max-width: 68ch;
@@ -102,7 +102,7 @@
   gap: 10px;
 }
 .control-connections > div span:last-child {
-  color: #aaa;
+  color: #bdbdbd;
 }
 .control-job {
   padding: 24px 0;
@@ -122,7 +122,7 @@
 .control-job > p {
   font-size: 13px;
   line-height: 1.6;
-  color: #aaa;
+  color: #bdbdbd;
   max-width: 68ch;
 }
 .control-job .control-phase {
@@ -178,8 +178,19 @@
   max-width: 440px;
 }
 .control-empty p {
-  color: #aaa;
+  color: #bdbdbd;
   line-height: 1.6;
+}
+.control-caveats {
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.control-caveats summary {
+  cursor: pointer;
+  color: #b3b3b3;
+}
+.control-caveats p {
+  margin: 8px 0 0;
 }
 .control-online {
   font-size: 13px;

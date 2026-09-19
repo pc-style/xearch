@@ -165,8 +165,9 @@ export default function Dashboard({
               </select>
             </label>
             <label>
-              {kind === "post" ? "X post URL" : kind === "live" ? "Search query" : "Account handle"}
+              {kind === "post" ? "X post URL" : kind === "live" ? "Search query" : "X handle"}
               <input
+                id="import-input"
                 required
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -182,8 +183,14 @@ export default function Dashboard({
             {kind === "bulk" && (
               <>
                 <label>
-                  History since (optional)
-                  <input type="date" value={since} onChange={(e) => setSince(e.target.value)} />
+                  History since (optional, YYYY-MM-DD)
+                  <input
+                    inputMode="numeric"
+                    pattern="\d{4}-\d{2}-\d{2}"
+                    placeholder="YYYY-MM-DD"
+                    value={since}
+                    onChange={(e) => setSince(e.target.value)}
+                  />
                 </label>
                 <label className="control-check">
                   <input
@@ -193,10 +200,6 @@ export default function Dashboard({
                   />
                   Fetch fresh data instead of using x.md's cache
                 </label>
-                <p>
-                  Older batches download automatically. If x.md runs out of history or a usage limit
-                  is reached, we'll show why the import stopped.
-                </p>
               </>
             )}
             <button className="control-start" disabled={busy || !config?.indexing}>
@@ -236,10 +239,17 @@ export default function Dashboard({
         </aside>
         <section className="control-feed" aria-label="Import activity">
           <h2>Your imports</h2>
-          <p>
-            Updates appear as each batch is saved. Counts can include repeated posts at batch
-            boundaries. Downloads aren't searchable yet.
-          </p>
+          {jobs && jobs.length > 0 && (
+            <details className="control-caveats">
+              <summary>How progress is counted</summary>
+              <p>
+                Updates appear as each batch is saved. Counts can include repeated posts at batch
+                boundaries. Downloads aren't searchable yet. Older batches download automatically.
+                If x.md runs out of history or a usage limit is reached, we'll show why the import
+                stopped.
+              </p>
+            </details>
+          )}
           {!isAuthenticated ? (
             <button
               onClick={async () => {
@@ -256,10 +266,11 @@ export default function Dashboard({
             <p>Loading jobs…</p>
           ) : jobs.length === 0 ? (
             <div className="control-empty">
-              <h3>No collections yet</h3>
-              <p>
-                Start with a profile read to check the connection, then import an account’s history.
-              </p>
+              <h3>No imports yet</h3>
+              <p>Imports you start will show their progress here.</p>
+              <button onClick={() => document.getElementById("import-input")?.focus()}>
+                Start an import
+              </button>
             </div>
           ) : (
             jobs.map((job) => <Job key={job._id} job={job} />)
