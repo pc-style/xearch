@@ -11,7 +11,7 @@ Every backup story has two halves and most people only do the first: taking the 
 
 ## Workflow
 
-1. GUARD: deploy-guard — classify + announce the deployment being backed up (reading/exporting is safe; the drill's restore target is a throwaway preview, never prod).
+1. GUARD: deploy-guard — classify + announce the deployment being backed up. Before any production export (`--prod` or a named production source), obtain fresh explicit consent for that source and export in this session. Exporting does not mutate the source, but creates a sensitive data copy; read-only access alone does not authorize it. The drill's restore target is a throwaway preview, never prod.
 2. TAKE the snapshot from an explicit source: `bunx --no-install convex export --prod --path backup-<date>.zip` for the default production deployment, or `bunx --no-install convex export --deployment <source-deployment> --path backup-<date>.zip` for a named/reference source (add `--include-file-storage` if the app stores files). Record the exact source deployment alongside the backup artifact; treat it as sensitive real data.
 3. SCHEDULE it (the ongoing half): recommend a cadence matched to how fast the data changes and how much loss is tolerable (RPO) — e.g. a daily `bunx --no-install convex export --prod --path backup-<date>.zip` (or the same command with `--deployment <source-deployment>`) via CI/cron to durable storage the user controls, with a retention window. Convex's own platform backups exist; this adds a user-owned, portable copy.
 4. RESTORE DRILL (the half almost nobody does — this is the point):
