@@ -442,8 +442,59 @@ export default function App() {
       setPage(await readLink({ url }));
     }).finally(() => setReading(false));
   };
+  const connections = [
+    {
+      name: "Search service",
+      ready: configured?.search,
+      env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
+      purpose: "Finds posts in your library",
+    },
+    {
+      name: "Raw capture receiver",
+      ready: configured?.handoff,
+      env: "RAW_CAPTURE_URL, RAW_CAPTURE_TOKEN",
+      purpose: "Stores imported posts",
+    },
+    {
+      name: "x.md",
+      ready: configured?.xmd,
+      env: "X_MD_API_KEY",
+      purpose: "Account histories, live search, conversations",
+    },
+    {
+      name: "Firecrawl",
+      ready: configured?.firecrawl,
+      env: "FIRECRAWL_API_KEY",
+      purpose: "Reads pages linked in posts",
+    },
+    {
+      name: "OpenAI",
+      ready: configured?.openai,
+      env: "OPENAI_API_KEY",
+      purpose: "Turns a question into a clearer search",
+    },
+    {
+      name: "AgentMail",
+      ready: configured?.email,
+      env: "AGENTMAIL_API_KEY, AGENTMAIL_INBOX_ID",
+      purpose: "Emails search results",
+    },
+  ];
   const visible = view === "bookmarks" ? bookmarks : (result?.rows ?? []);
   const home = !raw && view === "search";
+  const resultsTitle = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (view !== "bookmarks") return;
+    resultsTitle.current?.scrollIntoView({ block: "start" });
+    resultsTitle.current?.focus({ preventScroll: true });
+  }, [view]);
+  const openDashboard = () => {
+    setModal(null);
+    setDashboard(true);
+    const url = new URL(location.href);
+    url.searchParams.set("dashboard", "1");
+    history.replaceState(null, "", url);
+  };
 
   if (dashboard)
     return (
@@ -1001,54 +1052,17 @@ export default function App() {
       {modal === "setup" && (
         <Modal title="Connections" close={() => setModal(null)}>
           <p className="muted-copy">
-            Keys are configured on the backend and are never included in the browser.
+            Configured on the backend by the operator. Nothing here is stored in your browser.
           </p>
-          {[
-            {
-              name: "Search service",
-              ready: configured?.search,
-              key: "SEARCH_API_URL + SEARCH_SERVICE_TOKEN",
-              purpose: "Your friend’s search endpoint",
-            },
-            {
-              name: "Raw capture receiver",
-              ready: configured?.handoff,
-              key: "RAW_CAPTURE_URL + RAW_CAPTURE_TOKEN",
-              purpose: "Your friend’s storage and normalization boundary",
-            },
-            {
-              name: "x.md",
-              ready: configured?.xmd,
-              key: "X_MD_API_KEY",
-              purpose: "Account histories, live search, conversations",
-            },
-            {
-              name: "Firecrawl",
-              ready: configured?.firecrawl,
-              key: "FIRECRAWL_API_KEY",
-              purpose: "Read pages linked in posts",
-            },
-            {
-              name: "OpenAI",
-              ready: configured?.openai,
-              key: "OPENAI_API_KEY",
-              purpose: "Turn a question into a clearer search",
-            },
-            {
-              name: "AgentMail",
-              ready: configured?.email,
-              key: "AGENTMAIL_API_KEY + AGENTMAIL_INBOX_ID",
-              purpose: "Email search results",
-            },
-          ].map((c) => (
+          {connections.map((c) => (
             <div className="connection-row" key={c.name}>
               <div>
                 <strong>{c.name}</strong>
-                <span>
+                <span className={c.ready ? "is-ready" : ""}>
                   {c.ready ? (
                     <>
                       <Check size={13} />
-                      Configured
+                      Connected
                     </>
                   ) : (
                     "Not connected"
@@ -1056,13 +1070,20 @@ export default function App() {
                 </span>
               </div>
               <p>{c.purpose}</p>
-              <code>{c.key}</code>
             </div>
           ))}
-          <p className="muted-copy">
-            For local setup: <code>bunx convex env set NAME</code> prompts for the value. Webhook
-            setup and production instructions are in the README.
-          </p>
+          <details className="local-setup">
+            <summary>Local setup</summary>
+            <p className="muted-copy">
+              <code>bunx convex env set NAME</code> prompts for each value. Webhook and production
+              steps are in the README.
+            </p>
+            {connections.map((c) => (
+              <p key={c.name}>
+                {c.name}: <code>{c.env}</code>
+              </p>
+            ))}
+          </details>
         </Modal>
       )}
       {contextPages && (

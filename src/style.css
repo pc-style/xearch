@@ -710,16 +710,32 @@ dialog::backdrop {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #a59c91;
+  color: #b5ada3;
   font-size: 11px;
 }
 .connection-row p {
   font-size: 12px;
-  color: #9e9488;
+  color: #b3a99d;
   margin: 8px 0;
 }
-.connection-row code {
-  font-size: 10px;
+.connection-row .is-ready {
+  color: #b4c49d;
+}
+.local-setup {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  font-size: 12px;
+}
+.local-setup summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.local-setup p {
+  margin: 10px 0 0;
+  color: #b3a99d;
+}
+.local-setup code {
   color: #c0ab93;
   overflow-wrap: anywhere;
 }
