@@ -720,7 +720,9 @@ export default function App() {
           <section className="results">
             <header className="results-header">
               <div>
-                <h1>{view === "bookmarks" ? "Bookmarks" : raw}</h1>
+                <h1 ref={resultsTitle} tabIndex={-1}>
+                  {view === "bookmarks" ? "Bookmarks" : raw}
+                </h1>
                 <p>
                   {view === "bookmarks"
                     ? `${bookmarks.length} saved posts in this browser's session`
