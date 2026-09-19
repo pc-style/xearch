@@ -12,14 +12,14 @@ Every backup story has two halves and most people only do the first: taking the 
 ## Workflow
 
 1. GUARD: deploy-guard — classify + announce the deployment being backed up (reading/exporting is safe; the drill's restore target is a throwaway preview, never prod).
-2. TAKE the snapshot: `npx convex export --path backup-<date>.zip` (add `--include-file-storage` if the app stores files). This is the backup artifact; treat it as sensitive real data.
-3. SCHEDULE it (the ongoing half): recommend a cadence matched to how fast the data changes and how much loss is tolerable (RPO) — e.g. a daily `npx convex export` via CI/cron to durable storage the user controls, with a retention window. Convex's own platform backups exist; this adds a user-owned, portable copy.
+2. TAKE the snapshot from an explicit source: `bunx --no-install convex export --prod --path backup-<date>.zip` for the default production deployment, or `bunx --no-install convex export --deployment <source-deployment> --path backup-<date>.zip` for a named/reference source (add `--include-file-storage` if the app stores files). Record the exact source deployment alongside the backup artifact; treat it as sensitive real data.
+3. SCHEDULE it (the ongoing half): recommend a cadence matched to how fast the data changes and how much loss is tolerable (RPO) — e.g. a daily `bunx --no-install convex export --prod --path backup-<date>.zip` (or the same command with `--deployment <source-deployment>`) via CI/cron to durable storage the user controls, with a retention window. Convex's own platform backups exist; this adds a user-owned, portable copy.
 4. RESTORE DRILL (the half almost nobody does — this is the point):
    (a) PRECONDITION: a Preview Deploy Key as `CONVEX_DEPLOY_KEY` (same requirement as migrate-rehearse; a paid-tier feature). If unavailable, drill against a fresh personal dev deployment instead and say so.
-   (b) create a throwaway preview from the CURRENT code: `npx convex deploy --preview-create restore-drill-<date>`.
-   (c) restore the snapshot into it: `npx convex import backup-<date>.zip --deployment restore-drill-<date> --replace` (import targets a deployment by NAME with `--deployment`; there is no `--preview-name` on import).
+   (b) create a throwaway preview from the CURRENT code: `bunx --no-install convex deploy --preview-create restore-drill-<date>`.
+   (c) restore the snapshot into it: `bunx --no-install convex import backup-<date>.zip --deployment restore-drill-<date> --replace` (import targets a deployment by NAME with `--deployment`; there is no `--preview-name` on import).
    (d) ASSERT recovery: read the restored data back (MCP `tables` for row counts, `data`/`runOneoffQuery` for spot-checks) and confirm the critical tables came back with the expected row counts and a sample of real records — a restore that 'succeeds' but lands 0 rows is a FAILED drill. Compare against the source's counts where available.
-5. REPORT the drill result plainly: what was backed up, that the restore was ACTUALLY performed and verified (or that it FAILED and why — a failed drill is the most valuable output, found before a real disaster), the recommended schedule + retention, and the recovery runbook (the exact commands to restore to prod: `npx convex import backup.zip --replace --prod`, gated by deploy-guard, with the post-snapshot-write-loss caveat stated).
+5. REPORT the drill result plainly: what was backed up, that the restore was ACTUALLY performed and verified (or that it FAILED and why — a failed drill is the most valuable output, found before a real disaster), the recommended schedule + retention, and the recovery runbook (the exact commands to restore to prod: `bunx --no-install convex import backup.zip --replace --prod`, gated by deploy-guard, with the post-snapshot-write-loss caveat stated).
 6. HYGIENE: delete local snapshot copies when done (real data); the drill preview auto-expires. Never commit a backup file.
 
 ## Rules
