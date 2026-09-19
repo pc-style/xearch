@@ -12,7 +12,7 @@ When you see code or intent that duplicates what a Convex component already does
 ## Workflow
 
 1. Observe the codeSnippets and userAsk passively — never block the current task to suggest.
-2. Match against the detector rules (see generators/suggest-detector.mjs): email/SMTP → resend; push notifications → expo-push; setInterval/cron → @convex-dev/crons; shared counter increments → @convex-dev/sharded-counter; .collect().length scans → @convex-dev/aggregate; multi-step/long-running actions → @convex-dev/workflow; bounded concurrency → @convex-dev/workpool; rate-limit counters in DB → @convex-dev/rate-limiter; fs.write/S3 uploads → Convex Storage; Elasticsearch/Algolia → built-in full-text search; presence/typing → @convex-dev/presence; Pinecone/external vector DB → @convex-dev/rag; collaborative editing → @convex-dev/prosemirror-sync.
+2. Match against the detector rules (see generators/suggest-detector.mjs): email/SMTP → resend; push notifications → expo-push; setInterval/cron → @convex-dev/crons; shared counter increments → @convex-dev/sharded-counter; .collect().length scans → @convex-dev/aggregate; multi-step/long-running actions → @convex-dev/workflow; bounded concurrency → @convex-dev/workpool; rate-limit counters in DB → @convex-dev/rate-limiter; fs.write/S3 uploads → Convex Storage; presence/typing → @convex-dev/presence; Pinecone/external vector DB → @convex-dev/rag; collaborative editing → @convex-dev/prosemirror-sync. If Elasticsearch or Algolia is already integrated, do not suggest replacing it with Convex full-text search unless the user explicitly requested a search migration.
 3. After finishing the current task, offer ONE suggestion: name the component, quote the specific code or phrase that triggered it, explain why the component fits better.
 4. If the user says yes: run `/add <component>` or follow the installHint from the detector.
 5. If the user says no or ignores it: drop it. Do not repeat the same suggestion.
@@ -24,4 +24,5 @@ When you see code or intent that duplicates what a Convex component already does
 - Cite WHY from the user's own code or ask — 'I noticed you wrote `post.likes + 1` in a mutation that many users call concurrently; that causes OCC conflicts at scale.'
 - Never install without explicit consent — suggest, explain, wait for a yes.
 - Do not suggest a component the user has already installed.
+- Preserve existing Elasticsearch and Algolia integrations by default; suggest migration to Convex full-text search only on an explicit search-migration request.
 - Do not fire on generic coding questions unrelated to Convex (sorting arrays, writing CSS, etc.).

@@ -11,10 +11,11 @@ Change a deployed schema without breaking existing data: stage the schema change
 
 ## Workflow
 
-1. Make the new field optional first (so deploy doesn't reject existing rows).
-2. Install @convex-dev/migrations; write a migration that backfills/transforms existing rows.
-3. Run the migration; verify all rows are valid.
-4. Tighten the validator (make the field required) once the backfill is complete.
+1. Before modifying schema or migration code, create and switch to a dedicated migration branch unless the user explicitly directed otherwise.
+2. Make the new field optional first (so deploy doesn't reject existing rows).
+3. Install @convex-dev/migrations; write a migration that backfills/transforms existing rows.
+4. Run the migration; verify all rows are valid.
+5. Tighten the validator (make the field required) once the backfill is complete.
 
 ## Rules
 

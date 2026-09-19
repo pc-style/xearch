@@ -1,7 +1,6 @@
 ---
 name: convex-create-component
-description:
-  Builds reusable Convex components with isolated tables and app-facing APIs.
+description: Builds reusable Convex components with isolated tables and app-facing APIs.
   Use for new components, reusable backend modules, integrations, or component
   boundary work.
 ---
@@ -38,7 +37,7 @@ API.
 4. Make a short plan for:
    - what tables the component owns
    - what public functions it exposes
-   - what data must be passed in from the app (auth, env vars, parent IDs)
+   - what data deliberately crosses from the app (auth-derived IDs, parent IDs, callbacks)
    - what stays in the app as wrappers or HTTP mounts
 5. Create the component structure with `convex.config.ts`, `schema.ts`, and
    function files.
@@ -131,9 +130,7 @@ export const listUnread = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("notifications")
-      .withIndex("by_user_read", (q) =>
-        q.eq("userId", args.userId).eq("read", false),
-      )
+      .withIndex("by_user_read", (q) => q.eq("userId", args.userId).eq("read", false))
       .collect();
   },
 });
@@ -193,8 +190,10 @@ Note the reference path shape: a function in
 
 - Keep authentication in the app, because `ctx.auth` is not available inside
   components.
-- Keep environment access in the app, because component functions cannot read
-  `process.env`.
+- Declare component-owned environment variables in the component's
+  `convex.config.ts`, bind them from the app's configuration, and read them
+  through the component's generated typed `env` export (or `process.env` when
+  appropriate).
 - Pass parent app IDs across the boundary as strings, because `Id` types become
   plain strings in the app-facing `ComponentApi`.
 - Do not use `v.id("parentTable")` for app-owned tables inside component args or
@@ -219,22 +218,40 @@ Note the reference path shape: a function in
 ### Authentication and environment access
 
 ```ts
-// Bad: component code cannot rely on app auth or env
+// Bad: component code cannot rely on app auth, and secrets should not be
+// passed through function arguments by default
 const identity = await ctx.auth.getUserIdentity();
-const apiKey = process.env.OPENAI_API_KEY;
+await ctx.runAction(components.translator.translate, {
+  apiKey: process.env.OPENAI_API_KEY,
+  text: args.text,
+});
 ```
 
 ```ts
-// Good: the app resolves auth and env, then passes explicit values
+// Good: the app resolves auth; the component declares and reads its own env
 const userId = await getAuthUserId(ctx);
 if (!userId) throw new Error("Not authenticated");
 
 await ctx.runAction(components.translator.translate, {
   userId,
-  apiKey: process.env.OPENAI_API_KEY,
   text: args.text,
 });
 ```
+
+```ts
+// component convex.config.ts
+import { defineComponent } from "convex/server";
+import { v } from "convex/values";
+
+export default defineComponent("translator", {
+  env: { OPENAI_API_KEY: v.string() },
+});
+```
+
+Bind the component env from the parent in the app's `convex.config.ts`, then
+read `OPENAI_API_KEY` from the component's generated `env` export. Use function
+arguments for deliberate boundary passing, not as the default transport for
+secrets.
 
 ### Client-facing API
 
@@ -319,7 +336,8 @@ Official docs:
 - [ ] Component lives under `convex/components/<name>/` (or package layout if
       publishing)
 - [ ] Component imports from its own `./_generated/server`
-- [ ] Auth, env access, and HTTP routes stay in the app
+- [ ] Auth and HTTP routes stay in the app; component env vars are declared,
+      bound, and read through supported env access
 - [ ] Parent app IDs cross the boundary as `v.string()`
 - [ ] Public functions have `args` and `returns` validators
 - [ ] Ran `npx convex dev` and fixed codegen or type issues

@@ -1,108 +1,52 @@
 # Xearch
 
-This is the shared app repository. Prronsh owns the local indexer and
-Elasticsearch work; the application keeps Convex orchestration and provider
-integrations. See the [integration contract](docs/integration-contract.md) for
-the acquisition and retrieval boundaries.
+Search X posts, import account histories through x.md, and read the pages behind
+the links. React is the frontend; Convex owns application state and integrations.
+Pronsh owns the separate search and indexing implementation.
 
-The production VM serves the frontend at https://exp-xearch.exe.xyz/ through the
-private exe.dev proxy. Convex remains on `prod:utmost-kudu-321`. See
-[production operations](docs/production.md) for deployment and service setup.
-Local-development instructions below are for an explicitly isolated checkout,
-not routine setup on the production VM.
+## Repository map
 
-## Local import dashboard
+| Path              | Purpose                                                         |
+| ----------------- | --------------------------------------------------------------- |
+| `src/`            | React application and styles                                    |
+| `convex/`         | Application backend, ownership, jobs, and provider integrations |
+| `search/`         | Pronsh's Rust search and indexing workspace                     |
+| `tests/`          | Application tests; Rust tests stay with their crates            |
+| `scripts/`        | Setup, acquisition, and operations commands                     |
+| `deploy/`         | systemd units and nginx configuration                           |
+| `docs/`           | Development, product, integration, and operations documentation |
+| `.agents/skills/` | Canonical project skills; `.claude/skills` links here           |
 
-Open `http://localhost:5173/?dashboard=1` for the live import controls. Start/stop/retry jobs, continue older pages, and inspect raw-capture receipts. All seven x.md collection tasks are available. Jobs are private to the current guest session; other tabs in that session update through Convex subscriptions.
+`to-do.md` is the application backlog. `hackathon.md` stays at the root for the
+submission, and `DECISIONS.md` records implementation decisions. Tool configs,
+`package.json`, and `bun.lock` stay at the root where their tools expect them.
 
-For the temporary local receiver, run `bun run capture:setup` once, then keep these three processes running in separate terminals:
+## Start here
 
-```sh
-bun run backend
-bun run capture
-bun run dev
-```
-
-The setup script is restricted to this anonymous local Convex deployment. It generates a private token and configures the loopback receiver automatically. Captures are saved unchanged under `.local-captures/raw/<sha256>.json`; the token is `.local-captures/token`. Both are ignored by Git. The receiver is loopback-only, checks authorization and checksums, and syncs files before acknowledging them. It is a temporary raw-file sink, not the normalization or search backend, and has no automatic deletion or disk quota. Monitor disk use. It is not suitable for a hosted Convex deployment without replacing the receiver with an authenticated reachable service.
-
-`Downloaded` means saved locally, not searchable. New history imports automatically fetch older 500-post batches under one job. They pause at the daily budget or 20 batches, and stop if the date boundary fails to move backwards. Counts show received posts and may include repeated posts at inclusive page boundaries. Stop prevents later work and acknowledgments; an already-running upstream request may still finish and already-written files remain. Technical details show up to 100 receipts per job. Older completed jobs with more history offer a continuation button; they are not silently restarted.
-
-Put backend keys and `OPENAI_MODEL` in `.env.local`, then run `bun run env:sync`. The script only syncs allowlisted nonempty variables to the local anonymous deployment and never prints their values. AgentMail webhooks need a public deployment URL; leave the webhook secret unset during local work unless a public callback has separately been configured.
-
-The search backend is still separate. Import controls work without `SEARCH_API_URL`. Replace `RAW_CAPTURE_URL` and `RAW_CAPTURE_TOKEN` with the collaborator's receiver when ready; no collector rewrite is needed.
-
-Search X posts, import account histories through x.md, and read the pages behind the links. The interaction follows [search.pronsh.dev](https://search.pronsh.dev/). Convex owns the app and indexing orchestration; a separately owned data service handles storage, normalization, and retrieval.
-
-- [Product and tool responsibilities](docs/product.md)
-- [Contract for the data-service owner](docs/integration-contract.md)
+- [Application backlog](to-do.md)
+- [Local development and provider configuration](docs/development.md)
+- [Production operations](docs/production.md)
+- [Application/search integration contract](docs/integration-contract.md)
+- [Product responsibilities](docs/product.md) and [spec adoption](docs/spec-adoption.md)
 - [Hackathon build evidence](hackathon.md)
 
-The previous [Xearch project](https://github.com/Priyansh4444/xearch) was used as an architecture reference. Its local reference checkout is preserved in `xearch-old/` and ignored by Git.
+The VM frontend is https://exp-xearch.exe.xyz/ through the private exe.dev proxy.
+The hosted frontend is https://utmost-kudu-321.convex.site. This VM is production:
+do not run local setup, paid imports, or service restarts as routine verification.
 
-## Hackathon build log
+## Keep the checkout clean
 
-The official Convex hackathon skill is included at `.agents/skills/hackathon`, with its log-format reference, agent configuration, and upstream license. Invoke `/hackathon` to update `hackathon.md` from repository evidence. Upstream: [get-convex/convex-hackathon-skill](https://github.com/get-convex/convex-hackathon-skill), revision `5306ddc9d0cbe8b659dd7d0d7b488be399bf55bf`.
+- Dependencies, build output, local Convex state, and runtime data are ignored by
+  Git and hidden in the VS Code explorer. They are not deleted or relocated by
+  editor settings; use **File: Open File** or the terminal to inspect them.
+- Keep screenshots worth reviewing under `docs/design/`, not at the root. Check
+  them for private data before committing. Do not commit captures or credentials.
+- Keep reference repositories outside this checkout. The old
+  [Xearch reference](https://github.com/Priyansh4444/xearch) on this VM lives at
+  `/home/exedev/xearch-reference`; it is not an application dependency.
+- Edit project skills only in `.agents/skills/`. The relative Claude symlink
+  prevents duplicate copies from drifting. Preserve symlinks when checking out
+  the repository.
 
-## Run locally
-
-```sh
-bun install --frozen-lockfile
-CONVEX_AGENT_MODE=anonymous bun run backend
-```
-
-On the first run the Firecrawl component requires its environment variable to exist. Without a key yet, set an empty value so other features can run; Firecrawl operations remain disabled:
-
-```sh
-bunx convex env set FIRECRAWL_API_KEY ''
-node scripts/setup-auth.mjs --local
-bun run dev
-```
-
-Run the auth-key script once per new local deployment. It generates backend signing keys without printing their values. Re-running rotates them and signs out existing sessions. The frontend is http://localhost:5173. `.env.local` and `.convex/` are ignored. Use Connections in the app to inspect which integrations are configured.
-
-## Connect providers
-
-Use `bunx convex env set NAME` and supply the value through stdin/the prompt. Do not use `VITE_` variables for secrets.
-
-| Variable                   | Purpose                                                     |
-| -------------------------- | ----------------------------------------------------------- |
-| `X_MD_API_KEY`             | x.md acquisition credential                                 |
-| `X_MD_BASE_URL`            | Optional alternate official origin, `https://x.pcstyle.dev` |
-| `RAW_CAPTURE_URL`          | Friend's durable raw-capture receiver                       |
-| `SEARCH_API_URL`           | Friend's retrieval endpoint                                 |
-| `SEARCH_SERVICE_TOKEN`     | Read-only credential for the search endpoint                |
-| `RAW_CAPTURE_TOKEN`        | Ingestion-only credential for the capture receiver          |
-| `DATA_SERVICE_TOKEN`       | Legacy shared fallback when a dedicated token is unset      |
-| `FIRECRAWL_API_KEY`        | Linked-page scraping and web-context search                 |
-| `OPENAI_API_KEY`           | Editable query interpretation                               |
-| `OPENAI_MODEL`             | Optional model override; default `gpt-5-mini`               |
-| `AGENTMAIL_API_KEY`        | Result-digest delivery                                      |
-| `AGENTMAIL_INBOX_ID`       | Existing sender inbox                                       |
-| `AGENTMAIL_WEBHOOK_SECRET` | Verification of delivery webhooks                           |
-
-Register AgentMail's webhook at `<deployment>.convex.site/agentmail/webhook` for delivery events. A send is queued only by the explicit Email → Send results action. The interface distinguishes queued/sent/delivered states.
-
-The UI exposes account imports, search, and conversation collection. The same `jobs.start` API accepts `profile`, `following`, `followers`, and `archive`; these preserve complete responses for downstream account-discovery work. `bulk` supports `refresh:true` for engagement updates. All collection paths require a configured receiver, so an import never claims success by merely fetching data.
-
-## Verify
-
-```sh
-bun run lint
-bun run typecheck
-bun run test
-bunx vite build --outDir "$(mktemp -d /tmp/xearch-build.XXXXXX)"
-```
-
-Build verification uses a temporary directory so it cannot overwrite the live VM frontend in `dist/`.
-
-Oxlint runs type-aware checks with the Effect presets; `prepare` patches Oxlint
-and tsgolint on install. Search-service responses are decoded with Effect Schema
-in `convex/lib/results.ts`; other validators still use Zod.
-
-Tests cover raw payload preservation, JSON backfill pagination, safe unordered-stream behavior, stream completion, partial capture, identity pinning, origin selection, retry timing, durable receipts, user isolation, and the Firecrawl component response shape. Provider calls are mocked in tests. No email is sent and no provider credits are consumed by the suite. Selected ideas and remaining work from the supplied local-first spec are tracked in [spec adoption](docs/spec-adoption.md).
-
-## Hosting and current limits
-
-The static-hosting Convex component is registered with root routing while auth and webhook routes remain intact. `bun run deploy` invokes its deployment workflow after a cloud project is configured. The existing hosted deployment and VM frontend are documented in [production operations](docs/production.md). Public launch still requires connected search, durable sign-in, verified email recipients, and explicitly approved live integration checks.
-
-Guest sessions let judges use the app without an invite. Saved state belongs to that browser session; clearing its credentials loses access. Per-session and global daily provider budgets bound usage. Guest sessions are not verified email identities: a public launch should add durable sign-in and a verified-recipient policy for email. Indexing is provider acquisition plus acknowledged raw handoff; the app does not claim that downstream normalization or indexing finished. Search pages are short-lived UI snapshots, not a local corpus. Only the temporary raw-file receiver is included; the collaborator owns the actual corpus/indexing server.
+The `/hackathon` skill and its upstream license are in
+[`.agents/skills/hackathon`](.agents/skills/hackathon/README.md).
