@@ -20,7 +20,8 @@
 .control-room small,
 .control-caveats p,
 .control-form p,
-.control-connections p {
+.control-connections p,
+.control-feed-note {
   color: #b3b3b3;
   font-size: 13px;
   line-height: 1.6;
@@ -31,6 +32,15 @@
   grid-template-columns: 310px minmax(0, 1fr);
   gap: 44px;
   align-items: start;
+}
+/* Second grid column of .control-layout: the account library (to-do.md P0
+   "Replace the job wall with an account library") stacked above the
+   remaining non-account job feed. Kept as one wrapper so .control-layout's
+   two-column grid still sees exactly two children. */
+.control-main {
+  display: grid;
+  gap: 40px;
+  min-width: 0;
 }
 .control-room h2 {
   font-size: 18px;
@@ -177,6 +187,9 @@
   border-top: 1px solid #333;
   max-width: 440px;
 }
+.control-feed-note {
+  margin: -8px 0 20px;
+}
 .control-empty p {
   color: #bdbdbd;
   line-height: 1.6;
@@ -215,5 +228,341 @@
   }
   .control-job-heading {
     align-items: flex-start;
+  }
+}
+
+/* --------------------------------------------------------------------- *
+ * Account library (src/library/*) — to-do.md P0 "Replace the job wall
+ * with an account library". Namespaced "library-*" and additive only:
+ * nothing above this block is modified, so the pre-existing "control-*"
+ * job-wall styling (still used by src/Dashboard.tsx/src/App.tsx) is
+ * untouched. Same dark palette and 760px breakpoint as the rules above.
+ * -------------------------------------------------------------------- */
+.library {
+  max-width: 1240px;
+  margin: auto;
+  padding: 32px 28px;
+  color: #eee;
+  display: grid;
+  gap: 36px;
+}
+.library-offline-banner {
+  border: 1px solid #776149;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #edb998;
+  background: rgba(237, 185, 152, 0.08);
+}
+.library-section {
+  display: grid;
+  gap: 14px;
+}
+.library-section h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.library-subhead {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9c9c9c;
+  margin: 0 0 10px;
+}
+.library-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.library-muted {
+  color: #b3b3b3;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 68ch;
+}
+.library-loading,
+.library-empty {
+  padding: 20px 0;
+  color: #bdbdbd;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.library-empty button {
+  margin-top: 10px;
+}
+
+/* Overview */
+.library-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+.library-stat {
+  background: #171717;
+  border: 1px solid #2c2c2c;
+  border-radius: 10px;
+  padding: 16px;
+  display: grid;
+  gap: 6px;
+}
+.library-stat .value {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+.library-stat .value.unknown {
+  color: #8a8a8a;
+  font-size: 18px;
+  font-weight: 500;
+  font-style: italic;
+}
+.library-stat .label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9c9c9c;
+}
+.library-stat .sub {
+  font-size: 12px;
+  color: #8a8a8a;
+}
+.library-health-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.library-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #232323;
+  color: #cfcfcf;
+  white-space: nowrap;
+}
+.library-badge.tone-positive {
+  color: #a9d6b8;
+  background: rgba(169, 214, 184, 0.12);
+}
+.library-badge.tone-info {
+  color: #9ecbff;
+  background: rgba(158, 203, 255, 0.12);
+}
+.library-badge.tone-warning {
+  color: #edb998;
+  background: rgba(237, 185, 152, 0.12);
+}
+.library-badge.tone-danger {
+  color: #ffaaa1;
+  background: rgba(255, 170, 161, 0.12);
+}
+
+/* Active queue */
+.library-queue-list {
+  display: grid;
+  gap: 8px;
+}
+.library-queue-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: #171717;
+  border: 1px solid #2c2c2c;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.library-queue-identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.library-queue-row .stalled {
+  color: #edb998;
+}
+
+/* Account library controls + rows */
+.library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.library-controls input[type="search"],
+.library-controls select {
+  background: #171717;
+  border: 1px solid #3b3b3b;
+  color: #eee;
+  padding: 9px 12px;
+  border-radius: 6px;
+  font: inherit;
+}
+.library-controls input[type="search"] {
+  flex: 1;
+  min-width: 200px;
+}
+.library-rows {
+  display: grid;
+  gap: 10px;
+}
+.library-row {
+  background: #171717;
+  border: 1px solid #2c2c2c;
+  border-radius: 10px;
+  padding: 18px 20px;
+  display: grid;
+  gap: 10px;
+}
+.library-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.library-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.library-avatar,
+.library-avatar-fallback {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.library-avatar {
+  object-fit: cover;
+  background: #2b2b2b;
+}
+.library-avatar-fallback {
+  background: #2b2b2b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #9c9c9c;
+}
+.library-identity-text {
+  min-width: 0;
+}
+.library-identity-text h3 {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.library-identity-text span {
+  font-size: 12px;
+  color: #9c9c9c;
+}
+.library-row-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.library-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: 13px;
+  color: #bdbdbd;
+}
+.library-row-meta strong {
+  color: #eee;
+  font-weight: 600;
+}
+.library-row-note {
+  font-size: 13px;
+  color: #a9d6b8;
+  margin: 0;
+  max-width: 68ch;
+}
+.library-row-failure {
+  border-left: 2px solid #776149;
+  padding-left: 12px;
+  font-size: 13px;
+  color: #ffaaa1;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.library-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.library-row-toggle {
+  margin-left: auto;
+}
+
+/* Per-account history */
+.library-history {
+  border-top: 1px solid #2c2c2c;
+  padding-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+.library-history-run {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.library-history-run .run-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.library-history-run p {
+  margin: 0;
+  color: #cfcfcf;
+}
+.library-raw-details summary {
+  cursor: pointer;
+  color: #9c9c9c;
+  font-size: 12px;
+}
+.library-history-receipts {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #aaa;
+  display: grid;
+  gap: 6px;
+}
+.library-history-receipts code {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .library {
+    padding: 20px 16px;
+    gap: 28px;
+  }
+  .library-row-head {
+    align-items: flex-start;
+  }
+  .library-row-toggle {
+    margin-left: 0;
+  }
+  .library-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .library-controls input[type="search"] {
+    min-width: 0;
+  }
+  .library-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

@@ -6,6 +6,7 @@ import "./dashboard.css";
 import { indexingUnavailableMessage } from "./integrationStatus";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
+import Library from "./library/Library";
 
 function Job({ job }: { job: Doc<"jobs"> }) {
   const [expanded, setExpanded] = useState(false),
@@ -36,7 +37,11 @@ function Job({ job }: { job: Doc<"jobs"> }) {
             ? "More history remains. Continue to download the rest automatically."
             : job.floorReached
               ? "x.md reached the oldest history it can retrieve. Older posts may still exist on X."
-              : "Saved locally. Search will be available when the search backend is connected."
+              : // This kind of job (live search, single post, profile, follower
+                // lookup, etc.) never creates a searchable account entry — that
+                // pipeline is covered per-account in the account library above,
+                // which is the only place search-publication state is reported.
+                "Saved. This isn't an account import, so it doesn't appear in your account library."
           : (job.phase ?? "Waiting to start")}
       </p>
       <small>
@@ -108,6 +113,12 @@ export default function Dashboard({
   const connected = useConvexConnectionState().isWebSocketConnected;
   const config = useQuery(api.integrations.configured, {});
   const jobs = useQuery(api.jobs.list, isAuthenticated ? {} : "skip");
+  // Account-history ("bulk") jobs are represented per-account in <Library>
+  // above (convex/library.ts groups exactly this kind); this feed exists
+  // only for the non-account job kinds to-do.md P0 says must stay out of
+  // the indexed-people list (live search, single post, profile, followers,
+  // following, archive).
+  const otherJobs = jobs?.filter((job) => job.kind !== "bulk") ?? [];
   const start = useMutation(api.jobs.start);
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
     [input, setInput] = useState(""),
@@ -237,45 +248,39 @@ export default function Dashboard({
             <p>Configuration status, not a live health check. Provider keys stay on the backend.</p>
           </section>
         </aside>
-        <section className="control-feed" aria-label="Import activity">
-          <h2>Your imports</h2>
-          {jobs && jobs.length > 0 && (
-            <details className="control-caveats">
-              <summary>How progress is counted</summary>
-              <p>
-                Updates appear as each batch is saved. Counts can include repeated posts at batch
-                boundaries. Downloads aren't searchable yet. Older batches download automatically.
-                If x.md runs out of history or a usage limit is reached, we'll show why the import
-                stopped.
-              </p>
-            </details>
-          )}
-          {!isAuthenticated ? (
-            <button
-              onClick={async () => {
-                try {
-                  await ensureSession();
-                } catch {
-                  setMessage("Could not start your session.");
-                }
-              }}
-            >
-              Connect to my jobs
-            </button>
-          ) : !jobs ? (
-            <p>Loading jobs…</p>
-          ) : jobs.length === 0 ? (
-            <div className="control-empty">
-              <h3>No imports yet</h3>
-              <p>Imports you start will show their progress here.</p>
-              <button onClick={() => document.getElementById("import-input")?.focus()}>
-                Start an import
+        <div className="control-main">
+          <Library ensureSession={ensureSession} />
+          <section className="control-feed" aria-label="Other imports">
+            <h2>Other imports</h2>
+            <p className="control-feed-note">
+              Live searches, single posts, profiles, and follower/following lookups. These aren't
+              account history imports, so they don't create or update a row in the account library
+              above.
+            </p>
+            {!isAuthenticated ? (
+              <button
+                onClick={async () => {
+                  try {
+                    await ensureSession();
+                  } catch {
+                    setMessage("Could not start your session.");
+                  }
+                }}
+              >
+                Connect to my jobs
               </button>
-            </div>
-          ) : (
-            jobs.map((job) => <Job key={job._id} job={job} />)
-          )}
-        </section>
+            ) : !jobs ? (
+              <p>Loading jobs…</p>
+            ) : otherJobs.length === 0 ? (
+              <div className="control-empty">
+                <h3>No other imports yet</h3>
+                <p>Live searches, single posts, and profile/follower lookups will show up here.</p>
+              </div>
+            ) : (
+              otherJobs.map((job) => <Job key={job._id} job={job} />)
+            )}
+          </section>
+        </div>
       </div>
     </main>
   );
