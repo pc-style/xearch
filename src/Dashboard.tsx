@@ -200,10 +200,6 @@ export default function Dashboard({
                   />
                   Fetch fresh data instead of using x.md's cache
                 </label>
-                <p>
-                  Older batches download automatically. If x.md runs out of history or a usage limit
-                  is reached, we'll show why the import stopped.
-                </p>
               </>
             )}
             <button className="control-start" disabled={busy || !config?.indexing}>
@@ -248,7 +244,9 @@ export default function Dashboard({
               <summary>How progress is counted</summary>
               <p>
                 Updates appear as each batch is saved. Counts can include repeated posts at batch
-                boundaries. Downloads aren't searchable yet.
+                boundaries. Downloads aren't searchable yet. Older batches download automatically.
+                If x.md runs out of history or a usage limit is reached, we'll show why the import
+                stopped.
               </p>
             </details>
           )}

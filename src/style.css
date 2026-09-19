@@ -73,7 +73,7 @@ select {
   min-width: 0;
 }
 input::placeholder {
-  color: #797775;
+  color: #9a9691;
 }
 p {
   line-height: 1.6;
@@ -357,6 +357,11 @@ main {
   letter-spacing: -0.6px;
   margin-bottom: 7px;
   overflow-wrap: anywhere;
+}
+.results-header h1:focus {
+  outline: 3px solid var(--accent);
+  outline-offset: 6px;
+  border-radius: 4px;
 }
 .results-header p {
   font-size: 12px;
