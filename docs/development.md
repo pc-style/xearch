@@ -57,8 +57,8 @@ offer a continuation button; they are not silently restarted.
 Put backend keys and `OPENAI_MODEL` in `.env.local`, then run `bun run env:sync`. The script only syncs allowlisted nonempty variables to the local anonymous deployment and never prints their values. AgentMail webhooks need a public deployment URL; leave the webhook secret unset during local work unless a public callback has separately been configured.
 
 Import controls work without `SEARCH_API_URL`. The separately owned search
-service is documented in [search indexer operations](search-indexer.md); its
-application boundary is in the [integration contract](integration-contract.md).
+service's application boundary is documented in the
+[integration contract](integration-contract.md).
 
 ## Connect providers
 
