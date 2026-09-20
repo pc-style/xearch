@@ -2,15 +2,22 @@ import { ConvexError } from "convex/values";
 import type { SummaryScope } from "./contracts";
 
 export type Sort = "relevance" | "engagement" | "likes" | "newest" | "oldest";
+// Three spellings of one author filter: `@theo`, `from:@theo` and `from:theo`.
+// The bare `from:handle` form was previously NOT recognised as an author — it
+// fell through to the operator check below and was rejected as an unsupported
+// operator, even though src/App.tsx's "find on X" button generated exactly
+// that spelling. All three now normalise to the same lowercased handle.
+// Built fresh per call rather than shared as one module-level /g regex: a
+// global regex carries `lastIndex` between uses, and this pattern is used
+// twice per parse (matchAll, then replace).
+const authorFilter = () => /(?:^|\s)(?:from:@?|@)([A-Za-z0-9_]{1,15})(?=\s|$)/g;
 export function parseQuery(raw: string) {
   if (raw.length > 300) throw new Error("Keep searches under 300 characters.");
-  const authors = [...raw.matchAll(/(?:^|\s)(?:from:)?@([A-Za-z0-9_]{1,15})(?=\s|$)/g)].map((m) =>
-    m[1].toLowerCase(),
-  );
+  const authors = [...raw.matchAll(authorFilter())].map((m) => m[1].toLowerCase());
   if (new Set(authors).size > 1)
     throw new Error("Search one author at a time, or remove the @ filters to search everyone.");
   const text = raw
-    .replace(/(?:^|\s)(?:from:)?@[A-Za-z0-9_]{1,15}(?=\s|$)/g, " ")
+    .replace(authorFilter(), " ")
     .trim()
     .replace(/\s+/g, " ");
   if (/(?:^|\s)-?(?!https?:\/\/)[a-z_][a-z0-9_]*:/i.test(text))

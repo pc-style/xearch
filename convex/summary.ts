@@ -34,16 +34,13 @@ import {
 // Convex query guidelines: never `.collect()` an unbounded table; use
 // `.take()` with a cap instead. These are generous relative to how many
 // jobs/accounts/receipts one account or one owner realistically has today.
-// A global sum this way is a real, documented tradeoff (this scans up to
-// MAX_PUBLICATIONS accountPublications rows, not literally "every account
-// that will ever exist") — the same tradeoff convex/library.ts already
-// accepts for its own owner-scoped job list, and the one
-// docs/publication-contract.md itself names for `savedCapturesAwaitingIndexing`
+// These are the same tradeoff convex/library.ts already accepts for its own
+// owner-scoped job list, and the one docs/publication-contract.md itself
+// names for `savedCapturesAwaitingIndexing`
 // ("a denormalized per-capture status table is a reasonable future addition
 // — not built now"). If this table outgrows these caps, the fix is
 // `@convex-dev/aggregate` (convex guidelines "Query guidelines"), not a
 // larger constant.
-const MAX_PUBLICATIONS = 5_000;
 const MAX_OWNED_JOBS = 1_000;
 const MAX_RECEIPTS_PER_JOB = 200;
 const MAX_PUBLICATION_UPDATES_PER_ACCOUNT = 500;
@@ -80,40 +77,35 @@ function unknownCount(unit: Count["unit"]): Count {
 // would be exactly the kind of parallel mechanism the frozen contract exists
 // to prevent.
 
-// --- Indexed posts / indexed people (global scope; accountPublications has
-// no owner field — see convex/lib/contracts.ts summaryScopeValidator: only
-// { kind: "global" } is meaningful until to-do.md P1's authorized/scoped
-// collection access is built) -------------------------------------------
+// --- Indexed posts / indexed people (owner-scoped) ----------------------
 //
-// IMPORTANT, tested limitation (tests/summary.test.ts "indexedAccounts is
-// GLOBAL, not owner-scoped"): because this scans every accountPublications
-// row with no owner filter, `indexedAccounts`/`indexedPosts` can report
-// accounts a given caller cannot see in their own convex/library.ts `rows`
-// query (which IS owner-scoped, to that owner's own bulk jobs). A caller
-// with zero imports of their own can see a nonzero indexedAccounts here while
-// `library.rows` returns `[]` for them. This is not this file inventing a
-// number — every value returned is still true for the stated `{ kind:
-// "global" }` scope in DashboardSummary.scope, which is the frozen contract's
-// own signal to the UI that this total is NOT scoped to the caller and must
-// not be presented as "click through to your account list". Do not treat
-// this total as addressable/linkable to one caller's own library rows until
-// to-do.md P1 lands real per-owner scoping — that requires schema changes
-// (an owner field on accounts/accountPublications) outside this unit's
-// owned files (convex/summary.ts, tests/summary.test.ts).
+// These two totals used to scan every `accountPublications` row in the
+// deployment with no owner filter, while `convex/library.ts` `rows` — the
+// list the "Indexed people" tile links to — was owner-scoped to the caller's
+// own bulk jobs. The screen therefore contradicted itself: a caller with
+// zero imports could read a nonzero "Indexed people" above an empty account
+// list, and every user saw everyone else's corpus counted as their own.
+//
+// Both numbers are now derived from exactly the account set
+// `convex/library.ts` builds its rows from: the accounts resolved from this
+// owner's own bulk jobs. The tile and the list agree by construction, and
+// the scan is bounded by how many accounts one person imported instead of by
+// how many exist globally — which also retires the old MAX_PUBLICATIONS
+// truncation case, since there is no unfiltered table scan left to truncate.
 
 async function computeIndexTotals(
   ctx: QueryCtx,
+  accountIds: Id<"accounts">[],
 ): Promise<{ indexedPosts: Count; indexedAccounts: Count }> {
-  // take(MAX_PUBLICATIONS + 1) so a full page is distinguishable from a
-  // truncated scan: a partial sum presented as a total is exactly the
-  // "invented number" this file exists to prevent.
-  const scanned = await ctx.db.query("accountPublications").take(MAX_PUBLICATIONS + 1);
-  const truncated = scanned.length > MAX_PUBLICATIONS;
-  const publications = truncated ? scanned.slice(0, MAX_PUBLICATIONS) : scanned;
   let sum = 0;
   let unknown = false;
   let searchableAccounts = 0;
-  for (const publication of publications) {
+  for (const accountId of accountIds) {
+    const publication = await ctx.db
+      .query("accountPublications")
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .unique();
+    if (!publication) continue;
     if (publication.state === "searchable") searchableAccounts += 1;
     if (publication.searchablePostCount !== undefined) {
       // Sticky "last known good" snapshot: included regardless of the
@@ -136,19 +128,13 @@ async function computeIndexTotals(
     // never had a post published for it yet: a true, known zero
     // contribution, not "unknown".
   }
-  if (truncated) {
-    // More accounts exist than this query is allowed to read, so neither
-    // total is knowable here. Say so rather than reporting the partial scan.
-    return { indexedPosts: unknownCount("posts"), indexedAccounts: unknownCount("accounts") };
-  }
   return {
     indexedPosts: unknown ? unknownCount("posts") : knownCount("posts", sum),
     // unit "accounts" — distinct accounts whose CURRENT state is
-    // "searchable" (convex/lib/contracts.ts dashboardSummaryValidator
-    // comment). Deliberately narrower than indexedPosts above: an account
-    // that regressed to "failed" still contributes its old post count to
-    // indexedPosts but is not counted here, since it is not currently
-    // indexed.
+    // "searchable". Deliberately narrower than indexedPosts above: an
+    // account that regressed to "failed" still contributes its old post
+    // count to indexedPosts but is not counted here, since it is not
+    // currently indexed.
     indexedAccounts: knownCount("accounts", searchableAccounts),
   };
 }
@@ -158,13 +144,14 @@ async function computeIndexTotals(
 // across owners today, see computeIndexTotals above) ----------------------
 
 async function ownedJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">[]> {
-  return ctx.db
+  const jobs = await ctx.db
     .query("jobs")
     .withIndex("by_owner", (q) => q.eq("owner", owner))
     // Newest first: a bounded read that silently kept the OLDEST jobs would
     // describe a queue the owner no longer has.
     .order("desc")
     .take(MAX_OWNED_JOBS);
+  return jobs;
 }
 
 // Resolve one job to the account it belongs to, the same identity rule as
@@ -182,17 +169,21 @@ async function resolveAccountId(
   const cacheKey = providerAccountId !== undefined ? `id:${providerAccountId}` : `handle:${job.input}`;
   const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
-  const found =
+  // `.take(2)` rather than `.unique()`: a handle released on X and claimed by
+  // a different account leaves two `accounts` rows sharing one handle, and
+  // `.unique()` throws on that instead of returning. Two matches means the
+  // identity is genuinely ambiguous, which is "unresolved", not "pick one".
+  const matches =
     providerAccountId !== undefined
       ? await ctx.db
           .query("accounts")
           .withIndex("by_user_id", (q) => q.eq("userId", providerAccountId))
-          .unique()
+          .take(2)
       : await ctx.db
           .query("accounts")
           .withIndex("by_handle", (q) => q.eq("handle", job.input))
-          .unique();
-  const id = found?._id ?? null;
+          .take(2);
+  const id = matches.length === 1 ? matches[0]._id : null;
   cache.set(cacheKey, id);
   return id;
 }
@@ -269,13 +260,27 @@ async function computeSavedCapturesAwaitingIndexing(
   return knownCount("captures", count);
 }
 
-async function computeQueue(ctx: QueryCtx, owner: Id<"users">): Promise<QueueBreakdown> {
-  const jobs = await ownedJobs(ctx, owner);
+async function computeQueue(
+  ctx: QueryCtx,
+  jobs: Doc<"jobs">[],
+): Promise<{ queue: QueueBreakdown; bulkJobs: Doc<"jobs">[] }> {
   let waiting = 0;
   let active = 0;
   let failedRetryable = 0;
   const bulkJobs: Doc<"jobs">[] = [];
   for (const job of jobs) {
+    // A dismissed run is one the owner explicitly cleared (convex/jobs.ts
+    // `dismiss`), so it must stop counting toward the work-to-do numbers —
+    // otherwise dismissing changes nothing a person can see. Only terminal
+    // runs can be dismissed, so this can never hide active work.
+    //
+    // It is deliberately NOT applied to `bulkJobs` below: the captures those
+    // runs produced are still stored and still unconfirmed by the indexer.
+    // `savedCapturesAwaitingIndexing` is a statement about data on disk, not
+    // about which rows someone wants to look at, and hiding a row must never
+    // silently retire the evidence under it.
+    if (job.kind === ACCOUNT_JOB_KIND) bulkJobs.push(job);
+    if (job.dismissedAt !== undefined) continue;
     if (job.status === "queued") waiting += 1;
     else if (job.status === "running") active += 1;
     // Exactly "failed" | "partial" (a person can retry these — see
@@ -283,13 +288,15 @@ async function computeQueue(ctx: QueryCtx, owner: Id<"users">): Promise<QueueBre
     // person's own choice, not a failure to surface as retryable.
     // convex/lib/contracts.ts queueBreakdownValidator comment.
     else if (job.status === "failed" || job.status === "partial") failedRetryable += 1;
-    if (job.kind === ACCOUNT_JOB_KIND) bulkJobs.push(job);
   }
   return {
-    waitingDownloads: knownCount("jobs", waiting),
-    activeDownloads: knownCount("jobs", active),
-    savedCapturesAwaitingIndexing: await computeSavedCapturesAwaitingIndexing(ctx, bulkJobs),
-    failedRetryable: knownCount("jobs", failedRetryable),
+    queue: {
+      waitingDownloads: knownCount("jobs", waiting),
+      activeDownloads: knownCount("jobs", active),
+      savedCapturesAwaitingIndexing: await computeSavedCapturesAwaitingIndexing(ctx, bulkJobs),
+      failedRetryable: knownCount("jobs", failedRetryable),
+    },
+    bulkJobs,
   };
 }
 
@@ -317,17 +324,31 @@ export const summary = query({
     // returned field is exactly a Count, a timestamp, or the fixed "global"
     // scope literal.
     const owner = await user(ctx);
-    const { indexedPosts, indexedAccounts } = await computeIndexTotals(ctx);
-    const queue = await computeQueue(ctx, owner);
+    const jobs = await ownedJobs(ctx, owner);
+    const { queue, bulkJobs } = await computeQueue(ctx, jobs);
+    // The same account set convex/library.ts builds its rows from, resolved
+    // once and shared, so the "Indexed people" tile and the account list it
+    // links to can never disagree.
+    const accountCache = new Map<string, Id<"accounts"> | null>();
+    const accountIds: Id<"accounts">[] = [];
+    const seen = new Set<Id<"accounts">>();
+    for (const job of bulkJobs) {
+      const accountId = await resolveAccountId(ctx, job, accountCache);
+      if (accountId && !seen.has(accountId)) {
+        seen.add(accountId);
+        accountIds.push(accountId);
+      }
+    }
+    const { indexedPosts, indexedAccounts } = await computeIndexTotals(ctx, accountIds);
     return {
       indexedPosts,
       indexedAccounts,
       queue,
-      // Only "global" is meaningful today — convex/lib/contracts.ts
-      // summaryScopeValidator's "account" variant is reserved for to-do.md
-      // P1's authorized/scoped collection access, not wired to anything
-      // yet. Not implemented here; see that file's comment.
-      scope: { kind: "global" },
+      // Everything above is scoped to this caller's own imports — see
+      // computeIndexTotals. convex/lib/contracts.ts summaryScopeValidator's
+      // "account" variant remains reserved for to-do.md P1's authorized
+      // collection access and is not wired to anything.
+      scope: { kind: "owner" },
       observedAt: args.now,
     };
   },

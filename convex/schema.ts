@@ -230,6 +230,13 @@ export default defineSchema({
     error: v.optional(v.string()),
     updatedAt: v.number(),
     readyAt: v.optional(v.number()),
+    // When the owner dismissed this finished run from their feeds, if they
+    // did. Dismissing HIDES a run; it never deletes it, and it never touches
+    // the `receipts` rows that prove a capture was durably stored — to-do.md
+    // P0 "Preserve receipts and failure evidence; do not delete records just
+    // to hide duplicates". Only a terminal run can be dismissed (see
+    // convex/jobs.ts `dismiss`), and `restore` clears this field again.
+    dismissedAt: v.optional(v.number()),
   })
     .index("by_status", ["status"])
     .index("by_owner", ["owner"])

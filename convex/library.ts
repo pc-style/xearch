@@ -47,21 +47,14 @@ async function ownedAccountJobs(ctx: QueryCtx, owner: Id<"users">) {
 // never by whatever handle string it happened to carry. See
 // docs/publication-contract.md "Account identity".
 //
-// Scope of this guarantee: it only holds among account rows that already
-// exist as distinct rows. It does not, by itself, guarantee that a handle
-// reassignment can never produce a merged row in the first place — that
-// depends on how `accounts` rows are created/updated, which happens in
-// convex/jobs.ts (`finish`), not here. As of this writing, jobs.ts's
-// account upsert there resolves purely `by_handle` and unconditionally
-// patches whatever row it finds with the new profile (including its
-// `userId`), so a real handle reassignment (old account renames away, a
-// different provider id later claims the freed handle) can still overwrite
-// an existing account row's identity in place. That write-path gap is
-// out of scope for this file/unit (library.ts only reads `accounts`); see
-// to-do.md P0 "Do not combine different identities after a handle
-// reassignment" and docs/publication-contract.md's `accountHandles`
-// section, which documents the intended create-new-row-on-reassignment
-// rule that jobs.ts does not yet implement.
+// The matching write-side rule now exists too: convex/jobs.ts `upsertAccount`
+// resolves `by_user_id` and gives an unknown provider id arriving on a known
+// handle its OWN row rather than patching the incumbent's identity in place,
+// and records every handle an account has held in `accountHandles`. Before
+// that, this file's guarantee only held among rows that were already
+// distinct — a reassignment could still merge two identities at write time.
+// See to-do.md P0 "Do not combine different identities after a handle
+// reassignment" and docs/publication-contract.md's `accountHandles` section.
 async function resolveAccount(
   ctx: QueryCtx,
   job: Doc<"jobs">,
@@ -71,16 +64,22 @@ async function resolveAccount(
   const cacheKey = providerAccountId !== undefined ? `id:${providerAccountId}` : `handle:${job.input}`;
   const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
-  const found =
+  // `.take(2)` rather than `.unique()`: after a handle reassignment two
+  // `accounts` rows legitimately share one handle, and `.unique()` throws on
+  // that rather than returning. Two matches is "ambiguous", which resolves to
+  // nothing — never to an arbitrary pick, which is how the two identities
+  // would get merged back together on the read side.
+  const matches =
     providerAccountId !== undefined
       ? await ctx.db
           .query("accounts")
           .withIndex("by_user_id", (q) => q.eq("userId", providerAccountId))
-          .unique()
+          .take(2)
       : await ctx.db
           .query("accounts")
           .withIndex("by_handle", (q) => q.eq("handle", job.input))
-          .unique();
+          .take(2);
+  const found = matches.length === 1 ? matches[0] : null;
   cache.set(cacheKey, found);
   return found;
 }
@@ -157,7 +156,14 @@ export const rows = query({
       // "waiting_for_indexing" is the honest default.
       const publicationState = publication?.state ?? "waiting_for_indexing";
       if (args.status && args.status !== publicationState) continue;
-      const latestJob = latestOf(jobs);
+      // Dismissed runs stay in `jobs` (and in this account's expandable
+      // history, which is the evidence trail) but must not be what the row
+      // reports as its latest activity or base its next action on —
+      // otherwise clearing a failure would leave the row still advertising
+      // it. An account whose every run has been dismissed keeps its row and
+      // its published counts, and simply reports no latest run.
+      const visible = jobs.filter((job) => job.dismissedAt === undefined);
+      const latestJob = visible.length > 0 ? latestOf(visible) : undefined;
       out.push({
         accountId,
         handle: account.handle,
@@ -180,13 +186,13 @@ export const rows = query({
         lastError: publication?.lastError
           ? { message: publication.lastError.message, observedAt: publication.lastError.observedAt }
           : undefined,
-        latestJob: {
+        latestJob: latestJob && {
           jobId: latestJob._id,
           status: latestJob.status,
           phase: latestJob.phase,
           updatedAt: latestJob.updatedAt,
         },
-        nextAction: nextActionFor(latestJob),
+        nextAction: latestJob ? nextActionFor(latestJob) : { kind: "none" },
       });
     }
     out.sort((a, b) => (b.latestJob?.updatedAt ?? 0) - (a.latestJob?.updatedAt ?? 0));
@@ -207,6 +213,10 @@ const historyRunValidator = v.object({
   postsReceived: v.optional(v.number()),
   attempt: v.number(),
   updatedAt: v.number(),
+  // Set when the owner dismissed this run from their feeds. History still
+  // lists it — dismissing hides a run, it never deletes the evidence — so
+  // the UI can mark it and offer to restore it.
+  dismissedAt: v.optional(v.number()),
   receipts: v.array(
     v.object({
       captureId: v.string(),
@@ -243,6 +253,7 @@ export const history = query({
         postsReceived: job.postsReceived,
         attempt: job.attempt,
         updatedAt: job.updatedAt,
+        dismissedAt: job.dismissedAt,
         receipts: receipts.map((r) => ({
           captureId: r.captureId,
           receiptId: r.receiptId,
