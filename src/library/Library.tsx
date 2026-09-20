@@ -57,7 +57,13 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
           necessarily the current state.
         </p>
       )}
-      <OverviewStats summary={summary} health={health} limits={limits} connected={connected} />
+      <OverviewStats
+        summary={summary}
+        health={health}
+        limits={limits}
+        connected={connected}
+        isAuthenticated={isAuthenticated}
+      />
       <AccountLibrary
         isAuthenticated={isAuthenticated}
         connected={connected}
@@ -65,8 +71,8 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
           void ensureSession();
         }}
       />
-      <ActiveQueue rows={allRows} />
-      <RecentActivity rows={allRows} />
+      <ActiveQueue rows={allRows} isAuthenticated={isAuthenticated} />
+      <RecentActivity rows={allRows} isAuthenticated={isAuthenticated} />
     </div>
   );
 }

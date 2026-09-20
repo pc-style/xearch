@@ -20,7 +20,13 @@ const PROVIDERS = ["xmd", "receiver", "search"] as const;
  * panel needs no change once a write path lands; it will start showing real
  * facts the moment `providerThrottleEvents` rows exist.
  */
-export default function ProviderLimits({ limits }: { limits: ProviderLimit[] | undefined }) {
+export default function ProviderLimits({
+  limits,
+  isAuthenticated,
+}: {
+  limits: ProviderLimit[] | undefined;
+  isAuthenticated: boolean;
+}) {
   const throttled = limits?.filter(
     (l): l is Extract<ProviderLimit, { kind: "throttled" }> => l.kind === "throttled",
   );
@@ -31,7 +37,7 @@ export default function ProviderLimits({ limits }: { limits: ProviderLimit[] | u
         {!limits
           ? PROVIDERS.map((provider) => (
               <Badge key={provider} tone="neutral">
-                {PROVIDER_DISPLAY_NAME[provider]}: loading…
+                {PROVIDER_DISPLAY_NAME[provider]}: {isAuthenticated ? "loading…" : "connect to view"}
               </Badge>
             ))
           : limits.map((limit) => (

@@ -24,12 +24,24 @@ type RowWithJob = AccountLibraryRow & {
  * reads — so it needs no new query and cannot show anything beyond what the
  * account library itself already received.
  */
-export default function RecentActivity({ rows }: { rows: AccountLibraryRow[] | undefined }) {
+export default function RecentActivity({
+  rows,
+  isAuthenticated,
+}: {
+  rows: AccountLibraryRow[] | undefined;
+  isAuthenticated: boolean;
+}) {
   if (!rows)
     return (
       <section className="library-section" aria-label="Recent run history">
         <h2>Recent run history</h2>
-        <p className="library-loading">Loading recent activity…</p>
+        {/* Skipped-because-signed-out and still-loading both arrive as
+            `undefined`; they are different states and get different words. */}
+        {isAuthenticated ? (
+          <p className="library-loading">Loading recent activity…</p>
+        ) : (
+          <p className="library-muted">Connect to see your recent runs.</p>
+        )}
       </section>
     );
 
