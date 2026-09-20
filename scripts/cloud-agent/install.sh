@@ -76,10 +76,14 @@ bootstrap_convex() {
   fi
 
   # Wait for the first successful push so _generated + components are ready.
-  for _ in $(seq 1 90); do
-    grep -q "Convex functions ready" "$log_file" 2>/dev/null && break
-    sleep 1
-  done
+  # Only meaningful when this run started the backend; a reused backend is
+  # already pushed and writes to a different log.
+  if [ -n "$pgid" ]; then
+    for _ in $(seq 1 90); do
+      grep -q "Convex functions ready" "$log_file" 2>/dev/null && break
+      sleep 1
+    done
+  fi
 
   # Stop the transient bootstrap backend; its deployment state persists on disk.
   # A running server must not survive install: the per-boot terminals start their
