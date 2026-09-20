@@ -104,7 +104,12 @@ function unknownCount(unit: Count["unit"]): Count {
 async function computeIndexTotals(
   ctx: QueryCtx,
 ): Promise<{ indexedPosts: Count; indexedAccounts: Count }> {
-  const publications = await ctx.db.query("accountPublications").take(MAX_PUBLICATIONS);
+  // take(MAX_PUBLICATIONS + 1) so a full page is distinguishable from a
+  // truncated scan: a partial sum presented as a total is exactly the
+  // "invented number" this file exists to prevent.
+  const scanned = await ctx.db.query("accountPublications").take(MAX_PUBLICATIONS + 1);
+  const truncated = scanned.length > MAX_PUBLICATIONS;
+  const publications = truncated ? scanned.slice(0, MAX_PUBLICATIONS) : scanned;
   let sum = 0;
   let unknown = false;
   let searchableAccounts = 0;
@@ -131,6 +136,11 @@ async function computeIndexTotals(
     // never had a post published for it yet: a true, known zero
     // contribution, not "unknown".
   }
+  if (truncated) {
+    // More accounts exist than this query is allowed to read, so neither
+    // total is knowable here. Say so rather than reporting the partial scan.
+    return { indexedPosts: unknownCount("posts"), indexedAccounts: unknownCount("accounts") };
+  }
   return {
     indexedPosts: unknown ? unknownCount("posts") : knownCount("posts", sum),
     // unit "accounts" — distinct accounts whose CURRENT state is
@@ -151,6 +161,9 @@ async function ownedJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">
   return ctx.db
     .query("jobs")
     .withIndex("by_owner", (q) => q.eq("owner", owner))
+    // Newest first: a bounded read that silently kept the OLDEST jobs would
+    // describe a queue the owner no longer has.
+    .order("desc")
     .take(MAX_OWNED_JOBS);
 }
 

@@ -43,13 +43,16 @@ export const start = mutation({
       throw new ConvexError(
         "The search service is not connected yet. Configure SEARCH_API_URL to use your corpus.",
       );
-    if ((args.cursor?.length ?? 0) > 4000) throw new ConvexError("Invalid cursor.");
+    // An empty or whitespace-only cursor is not a page token; treat it as
+    // "first page" rather than handing the service a blank opaque value.
+    const cursor = args.cursor?.trim() ? args.cursor : undefined;
+    if ((cursor?.length ?? 0) > 4000) throw new ConvexError("Invalid cursor.");
     assertAuthorizedScope(args.scope);
     const id = await ctx.db.insert("sessions", {
       owner,
       raw: args.raw,
       sort: args.sort,
-      cursor: args.cursor,
+      cursor,
       status: "queued",
       rows: [],
       warnings: [],

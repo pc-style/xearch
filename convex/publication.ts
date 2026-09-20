@@ -86,7 +86,13 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): bool
 const REPORTED_STATES = new Set(["indexing", "searchable", "failed"]);
 const PENDING_WORK_UNITS = new Set(["jobs", "captures", "posts"]);
 
-export function parseEnvelope(body: unknown): PublicationUpdateEnvelope | null {
+export // A count of things is a non-negative integer. Applies to uniquePostCount and
+// pendingWork.count only; generation and timestamps stay finite-number checks.
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function parseEnvelope(body: unknown): PublicationUpdateEnvelope | null {
   if (!isRecord(body)) return null;
   if (!hasOnlyKeys(body, ENVELOPE_KEYS)) return null;
   if (body.version !== 1) return null;
@@ -99,7 +105,7 @@ export function parseEnvelope(body: unknown): PublicationUpdateEnvelope | null {
   if (body.providerAccountId !== undefined && typeof body.providerAccountId !== "string")
     return null;
   if (body.runId !== undefined && typeof body.runId !== "string") return null;
-  if (body.uniquePostCount !== undefined && typeof body.uniquePostCount !== "number") return null;
+  if (body.uniquePostCount !== undefined && !isCount(body.uniquePostCount)) return null;
   if (body.uniquePostCountAsOf !== undefined && typeof body.uniquePostCountAsOf !== "number")
     return null;
   if (body.pendingWork !== undefined) {
@@ -107,7 +113,7 @@ export function parseEnvelope(body: unknown): PublicationUpdateEnvelope | null {
     if (!hasOnlyKeys(body.pendingWork, PENDING_WORK_KEYS)) return null;
     if (typeof body.pendingWork.unit !== "string" || !PENDING_WORK_UNITS.has(body.pendingWork.unit))
       return null;
-    if (typeof body.pendingWork.count !== "number") return null;
+    if (!isCount(body.pendingWork.count)) return null;
   }
   if (body.error !== undefined) {
     if (!isRecord(body.error)) return null;
@@ -161,18 +167,22 @@ async function resolveAccountId(
   ctx: MutationCtx,
   args: { providerAccountId?: string; handle: string },
 ): Promise<Id<"accounts"> | undefined> {
+  // Neither accounts.by_user_id nor accounts.by_handle is uniqueness-enforced
+  // by the schema, so `.unique()` would THROW on a duplicated row and turn a
+  // contract-level "rejected_invalid" into a 500. Read at most two and treat
+  // an ambiguous match as no match, so applyUpdate can log and reject it.
   if (args.providerAccountId !== undefined) {
-    const account = await ctx.db
+    const matches = await ctx.db
       .query("accounts")
       .withIndex("by_user_id", (q) => q.eq("userId", args.providerAccountId!))
-      .unique();
-    return account?._id;
+      .take(2);
+    return matches.length === 1 ? matches[0]._id : undefined;
   }
-  const account = await ctx.db
+  const matches = await ctx.db
     .query("accounts")
     .withIndex("by_handle", (q) => q.eq("handle", args.handle))
-    .unique();
-  return account?._id;
+    .take(2);
+  return matches.length === 1 ? matches[0]._id : undefined;
 }
 
 // --- Durable audit log ------------------------------------------------------

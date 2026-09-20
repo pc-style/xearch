@@ -321,6 +321,18 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
     expect(aliceRow).toBeNull();
   });
 
+  it("rejects an ambiguous handle match instead of throwing (two accounts, one handle)", async () => {
+    // accounts.by_handle is not uniqueness-enforced, so `.unique()` here would
+    // throw and surface as a 500 rather than the contract's rejected_invalid.
+    const t = setup();
+    await seedAccount(t, { handle: "twin", userId: "1" });
+    await seedAccount(t, { handle: "twin", userId: "2" });
+    const result = await t.mutation(applyUpdate, envelope({ handle: "twin", generation: 1 }));
+    expect(result.outcome).toBe("rejected_invalid");
+    const rows = await t.run((ctx) => ctx.db.query("accountPublications").collect());
+    expect(rows).toHaveLength(0);
+  });
+
   it("falls back to handle only when the update asserts no provider id at all", async () => {
     const t = setup();
     const accountId = await seedAccount(t, { handle: "alice", userId: "111" });

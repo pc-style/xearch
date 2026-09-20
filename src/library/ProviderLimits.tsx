@@ -1,5 +1,5 @@
 import type { ProviderLimit } from "../../convex/limits";
-import { Badge } from "./format";
+import { Badge, formatRelative } from "./format";
 
 const PROVIDER_DISPLAY_NAME: Record<ProviderLimit["provider"], string> = {
   xmd: "x.md",
@@ -37,7 +37,9 @@ export default function ProviderLimits({ limits }: { limits: ProviderLimit[] | u
           : limits.map((limit) => (
               <Badge key={limit.provider} tone={limit.kind === "throttled" ? "warning" : "neutral"}>
                 {PROVIDER_DISPLAY_NAME[limit.provider]}:{" "}
-                {limit.kind === "none" ? "No throttling reported" : `Throttled on ${limit.operation}`}
+                {limit.kind === "none"
+                  ? "No throttling reported"
+                  : `Throttled on ${limit.operation} — observed ${formatRelative(limit.observedAt)}`}
               </Badge>
             ))}
       </div>

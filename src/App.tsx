@@ -357,7 +357,7 @@ export default function App() {
   // session to preview.
   const emailPreview = useQuery(
     api.email.preview,
-    modal === "email" && sessionId ? { sessionId } : "skip",
+    modal === "email" && sessionId && isAuthenticated ? { sessionId } : "skip",
   );
   const startSearch = useMutation(api.search.start);
   const start = useMutation(api.jobs.start),

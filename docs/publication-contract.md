@@ -98,10 +98,14 @@ This is why `accountPublications` splits "what's happening right now" from "the 
 confirmed good snapshot" into fields that a failed update is never allowed to touch:
 
 - `state` and `lastError` track the latest attempt and can regress to `failed`.
-- `committedGeneration`, `searchablePostCount`, `searchablePostCountAsOf`, and
-  `lastPublishedAt` are written **only** when an accepted update's `reportedState` is
-  `"searchable"`. A later `"failed"` or `"indexing"` update changes `state` and
-  `lastError` and nothing else on this row.
+- `committedGeneration` advances on **every** accepted update, whatever its
+  `reportedState`. It is the idempotency watermark, not a success marker: if an
+  accepted `"indexing"` or `"failed"` update left it behind, a resend of that same
+  generation would be applied a second time instead of recognised as a duplicate.
+- `searchablePostCount`, `searchablePostCountAsOf`, and `lastPublishedAt` are written
+  **only** when an accepted update's `reportedState` is `"searchable"`. A later
+  `"failed"` or `"indexing"` update changes `state`, `lastError` and the watermark,
+  and nothing else on this row.
 
 So: an account that was searchable with 4,000 posts, whose next refresh fails, keeps
 showing 4,000 searchable posts and a `lastPublishedAt` from the earlier success, with
