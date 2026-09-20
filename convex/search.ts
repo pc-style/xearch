@@ -28,13 +28,13 @@ export const start = mutation({
     raw: v.string(),
     sort: sortValidator,
     cursor: v.optional(v.string()),
-    includeStats: v.optional(v.boolean()),
     // Optional and forward-looking: today the only value this app can
     // authorize is "global" (see assertAuthorizedScope in ./lib/search), so
     // this is never persisted on the session — there is nothing narrower to
     // remember yet. A caller that asks for anything else is rejected below
     // rather than silently downgraded.
     scope: v.optional(summaryScopeValidator),
+    includeStats: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const owner = await user(ctx);
