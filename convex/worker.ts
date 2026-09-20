@@ -138,7 +138,14 @@ export const report = action({
       // A throttle report is an observation, never a job state change: it
       // must not move the job's status, and a job that is no longer this
       // attempt should still have its observation recorded.
-      if (args.throttle) await ctx.runMutation(internal.jobs.recordThrottle, { ...base, ...args.throttle });
+      //
+      // A "throttle" event with no payload carries no observation at all.
+      // Silently accepting it would report success for a call that recorded
+      // nothing, which is worse than failing: the sender would never learn
+      // its reports are being dropped.
+      if (!args.throttle)
+        throw new ConvexError("A throttle report must include the provider's own throttle facts.");
+      await ctx.runMutation(internal.jobs.recordThrottle, { ...base, ...args.throttle });
       return;
     }
     if (args.event === "phase")

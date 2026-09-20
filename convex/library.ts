@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
 import { publicationStateValidator, jobStatusValidator } from "./schema";
 import { accountLibraryRowValidator, type AccountLibraryRow, type NextAction } from "./lib/contracts";
+import { canonicalAccountForUserId } from "./jobs";
 
 /**
  * The account-library query that replaces the job wall (to-do.md P0
@@ -64,22 +65,27 @@ async function resolveAccount(
   const cacheKey = providerAccountId !== undefined ? `id:${providerAccountId}` : `handle:${job.input}`;
   const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
-  // `.take(2)` rather than `.unique()`: after a handle reassignment two
-  // `accounts` rows legitimately share one handle, and `.unique()` throws on
-  // that rather than returning. Two matches is "ambiguous", which resolves to
-  // nothing — never to an arbitrary pick, which is how the two identities
-  // would get merged back together on the read side.
-  const matches =
-    providerAccountId !== undefined
-      ? await ctx.db
-          .query("accounts")
-          .withIndex("by_user_id", (q) => q.eq("userId", providerAccountId))
-          .take(2)
-      : await ctx.db
-          .query("accounts")
-          .withIndex("by_handle", (q) => q.eq("handle", job.input))
-          .take(2);
-  const found = matches.length === 1 ? matches[0] : null;
+  // Two different rules, because the two lookups mean different things.
+  //
+  // A provider id IS the identity, so several rows carrying the same id are
+  // duplicates of one account and resolve to the canonical (oldest) row —
+  // the same rule convex/jobs.ts `upsertAccount` writes through. Treating
+  // that as ambiguous would make a legitimately imported account disappear
+  // from the library whenever a legacy duplicate row existed.
+  //
+  // A handle is NOT an identity: two matches there really can be two
+  // different people who held it at different times, so that stays
+  // ambiguous and resolves to nothing rather than an arbitrary pick.
+  let found: Doc<"accounts"> | null;
+  if (providerAccountId !== undefined) {
+    found = await canonicalAccountForUserId(ctx, providerAccountId);
+  } else {
+    const matches = await ctx.db
+      .query("accounts")
+      .withIndex("by_handle", (q) => q.eq("handle", job.input))
+      .take(2);
+    found = matches.length === 1 ? matches[0] : null;
+  }
   cache.set(cacheKey, found);
   return found;
 }

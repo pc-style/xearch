@@ -1,31 +1,54 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { kindValidator, throttleProviderValidator } from "./schema";
 import { user } from "./access";
 import { handle, statusUrl } from "./lib/xmd";
 import { parseQuery } from "./lib/search";
 
-// `take(20)` is applied AFTER the dismissed filter, not before: filtering a
-// page of 20 down to 3 would make dismissing a few runs look like the rest
-// of the feed vanished. Read a larger window, then page it.
-const JOB_FEED_SCAN = 200;
+// Every filter a caller cares about is applied BEFORE the limit, by streaming
+// the owner's jobs newest-first and stopping once enough eligible ones are
+// found. Taking a fixed page and filtering afterwards silently shortens the
+// feed: 20 dismissed runs, or 20 account imports when the caller only wants
+// the other kinds, would hide older rows that should have been shown.
+// `scanned` bounds the read (Convex guidelines: never an unbounded scan);
+// reaching it means the owner has thousands of jobs newer than the next
+// eligible one, which is not a case worth paginating a dashboard feed for.
+const JOB_FEED_SCAN = 2_000;
 const JOB_FEED_LIMIT = 20;
+// Which kinds a caller wants. "account" is the full-history import that owns
+// a library row; "other" is everything else (live search, single post,
+// profile, follower/following lookups) — the split src/Dashboard.tsx's
+// "Other imports" feed and convex/library.ts already draw.
+// Same literal convex/library.ts and convex/summary.ts use: only a full
+// account-history import establishes an account identity.
+const ACCOUNT_JOB_KIND = "bulk" as const;
+const jobScopeValidator = v.union(v.literal("all"), v.literal("account"), v.literal("other"));
 export const list = query({
-  args: { includeDismissed: v.optional(v.boolean()) },
+  args: {
+    includeDismissed: v.optional(v.boolean()),
+    scope: v.optional(jobScopeValidator),
+  },
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    const jobs = await ctx.db
+    const scope = args.scope ?? "all";
+    const out: Doc<"jobs">[] = [];
+    let scanned = 0;
+    for await (const job of ctx.db
       .query("jobs")
       .withIndex("by_owner", (q) => q.eq("owner", owner))
-      .order("desc")
-      .take(JOB_FEED_SCAN);
-    return (args.includeDismissed ? jobs : jobs.filter((job) => job.dismissedAt === undefined)).slice(
-      0,
-      JOB_FEED_LIMIT,
-    );
+      .order("desc")) {
+      if (++scanned > JOB_FEED_SCAN) break;
+      if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
+      const isAccountJob = job.kind === ACCOUNT_JOB_KIND;
+      if (scope === "account" && !isAccountJob) continue;
+      if (scope === "other" && isAccountJob) continue;
+      out.push(job);
+      if (out.length >= JOB_FEED_LIMIT) break;
+    }
+    return out;
   },
 });
 // Local upgrade: recover display statistics from an already-acknowledged capture.
@@ -450,6 +473,36 @@ export const finish = internalMutation({
 
 type Profile = { handle: string; userId: string; name: string; avatar?: string };
 
+// How many same-provider-id rows to consider when picking a canonical one.
+export const MAX_DUPLICATE_ACCOUNT_ROWS = 8;
+
+/**
+ * The canonical `accounts` row for one provider account id.
+ *
+ * A provider id is the identity, so several rows carrying the SAME id are
+ * duplicates of one account — not two identities — and must resolve to a
+ * single row everywhere rather than being treated as ambiguous. Ambiguity
+ * handling is reserved for HANDLE lookups, where two matches really can be
+ * two different people who held the handle at different times.
+ *
+ * "Canonical" is the oldest row (lowest `_creationTime`), which is stable
+ * across calls and independent of read order, so the write path here and the
+ * read paths in convex/library.ts and convex/summary.ts always agree. Without
+ * that agreement a legacy duplicate would let an import succeed while the
+ * account vanished from the library and from the owner's totals.
+ */
+export async function canonicalAccountForUserId(
+  ctx: { db: MutationCtx["db"] | QueryCtx["db"] },
+  userId: string,
+): Promise<Doc<"accounts"> | null> {
+  const matches = await ctx.db
+    .query("accounts")
+    .withIndex("by_user_id", (q) => q.eq("userId", userId))
+    .take(MAX_DUPLICATE_ACCOUNT_ROWS);
+  if (matches.length === 0) return null;
+  return matches.reduce((oldest, row) => (row._creationTime < oldest._creationTime ? row : oldest));
+}
+
 // Account identity is the provider account id, never the handle.
 //
 // This used to look the account up purely `by_handle` and unconditionally
@@ -467,12 +520,8 @@ async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise<Id<"ac
   // would throw on a duplicate rather than letting the import finish. Two
   // rows for ONE provider id is a pre-existing data problem, not the
   // cross-identity merge this function exists to prevent — both rows already
-  // claim the same identity — so patching the first is safe.
-  const byUserId = await ctx.db
-    .query("accounts")
-    .withIndex("by_user_id", (q) => q.eq("userId", profile.userId))
-    .take(2);
-  const existing = byUserId[0];
+  // claim the same identity — so one of them is chosen as canonical.
+  const existing = await canonicalAccountForUserId(ctx, profile.userId);
   let accountId: Id<"accounts">;
   if (existing) {
     // Same provider id: this IS that account, whatever handle it now uses.

@@ -137,16 +137,19 @@ export default function Dashboard({
   const connected = useConvexConnectionState().isWebSocketConnected;
   const config = useQuery(api.integrations.configured, {});
   const [showDismissed, setShowDismissed] = useState(false);
+  // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
+  // out here, after the server had already limited the page, could hide
+  // older non-account runs behind 20 newer account imports.
   const jobs = useQuery(
     api.jobs.list,
-    isAuthenticated ? { includeDismissed: showDismissed } : "skip",
+    isAuthenticated ? { includeDismissed: showDismissed, scope: "other" } : "skip",
   );
   // Account-history ("bulk") jobs are represented per-account in <Library>
   // above (convex/library.ts groups exactly this kind); this feed exists
   // only for the non-account job kinds to-do.md P0 says must stay out of
   // the indexed-people list (live search, single post, profile, followers,
-  // following, archive).
-  const otherJobs = jobs?.filter((job) => job.kind !== "bulk") ?? [];
+  // following, archive). The split is applied server-side via `scope`.
+  const otherJobs = jobs ?? [];
   const start = useMutation(api.jobs.start);
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
     [input, setInput] = useState(""),

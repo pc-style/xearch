@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
+import { canonicalAccountForUserId } from "./jobs";
 import { serviceValidator } from "./schema";
 import {
   dashboardSummaryValidator,
@@ -101,7 +102,15 @@ function unknownCount(unit: Count["unit"]): Count {
 async function computeIndexTotals(
   ctx: QueryCtx,
   accountIds: Id<"accounts">[],
+  truncated: boolean,
 ): Promise<{ indexedPosts: Count; indexedAccounts: Count }> {
+  if (truncated) {
+    // This owner has more account imports than one bounded read can cover,
+    // so neither total can be stated for the scope the contract claims —
+    // every account this caller imported. Say "unknown" rather than present
+    // the part we happened to read as the whole.
+    return { indexedPosts: unknownCount("posts"), indexedAccounts: unknownCount("accounts") };
+  }
   let sum = 0;
   let unknown = false;
   let searchableAccounts = 0;
@@ -166,13 +175,21 @@ async function ownedJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">
 // The owner's account-history jobs, read with the SAME index, kind filter,
 // order and bound convex/library.ts `ownedAccountJobs` uses, so the accounts
 // resolved from this list are the accounts that appear as library rows.
-async function ownedAccountJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">[]> {
-  return ctx.db
+async function ownedAccountJobs(
+  ctx: QueryCtx,
+  owner: Id<"users">,
+): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
+  // One past the cap, so a full page is distinguishable from a truncated
+  // scan. Reporting a partial sum as a complete total is exactly the
+  // invented number this file exists to prevent.
+  const scanned = await ctx.db
     .query("jobs")
     .withIndex("by_owner", (q) => q.eq("owner", owner))
     .filter((q) => q.eq(q.field("kind"), ACCOUNT_JOB_KIND))
     .order("desc")
-    .take(MAX_OWNED_ACCOUNT_JOBS);
+    .take(MAX_OWNED_ACCOUNT_JOBS + 1);
+  const truncated = scanned.length > MAX_OWNED_ACCOUNT_JOBS;
+  return { jobs: truncated ? scanned.slice(0, MAX_OWNED_ACCOUNT_JOBS) : scanned, truncated };
 }
 
 // Resolve one job to the account it belongs to, the same identity rule as
@@ -190,21 +207,21 @@ async function resolveAccountId(
   const cacheKey = providerAccountId !== undefined ? `id:${providerAccountId}` : `handle:${job.input}`;
   const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
-  // `.take(2)` rather than `.unique()`: a handle released on X and claimed by
-  // a different account leaves two `accounts` rows sharing one handle, and
-  // `.unique()` throws on that instead of returning. Two matches means the
-  // identity is genuinely ambiguous, which is "unresolved", not "pick one".
-  const matches =
-    providerAccountId !== undefined
-      ? await ctx.db
-          .query("accounts")
-          .withIndex("by_user_id", (q) => q.eq("userId", providerAccountId))
-          .take(2)
-      : await ctx.db
-          .query("accounts")
-          .withIndex("by_handle", (q) => q.eq("handle", job.input))
-          .take(2);
-  const id = matches.length === 1 ? matches[0]._id : null;
+  // Same two rules convex/library.ts uses, and for the same reason: these
+  // totals must describe exactly the account set that file lists. A provider
+  // id resolves to the canonical (oldest) row, since duplicate rows for one
+  // id are duplicates of one account. A handle stays ambiguous when it
+  // matches more than one row, because two people really can have held it.
+  let id: Id<"accounts"> | null;
+  if (providerAccountId !== undefined) {
+    id = (await canonicalAccountForUserId(ctx, providerAccountId))?._id ?? null;
+  } else {
+    const matches = await ctx.db
+      .query("accounts")
+      .withIndex("by_handle", (q) => q.eq("handle", job.input))
+      .take(2);
+    id = matches.length === 1 ? matches[0]._id : null;
+  }
   cache.set(cacheKey, id);
   return id;
 }
@@ -349,14 +366,19 @@ export const summary = query({
     const accountCache = new Map<string, Id<"accounts"> | null>();
     const accountIds: Id<"accounts">[] = [];
     const seen = new Set<Id<"accounts">>();
-    for (const job of await ownedAccountJobs(ctx, owner)) {
+    const accountJobs = await ownedAccountJobs(ctx, owner);
+    for (const job of accountJobs.jobs) {
       const accountId = await resolveAccountId(ctx, job, accountCache);
       if (accountId && !seen.has(accountId)) {
         seen.add(accountId);
         accountIds.push(accountId);
       }
     }
-    const { indexedPosts, indexedAccounts } = await computeIndexTotals(ctx, accountIds);
+    const { indexedPosts, indexedAccounts } = await computeIndexTotals(
+      ctx,
+      accountIds,
+      accountJobs.truncated,
+    );
     return {
       indexedPosts,
       indexedAccounts,

@@ -78,6 +78,15 @@ export type Connection = {
   purpose: string;
   env?: string;
   note?: string;
+  /**
+   * What `ready` actually proves, in words. Almost every row here reports
+   * whether an environment variable is set — a CONFIGURATION fact — so the
+   * default labels say "Configured"/"Not configured". Only a row whose
+   * `ready` comes from a live signal (the download worker's heartbeat) may
+   * claim connectivity, and it says so by overriding these.
+   */
+  readyLabel?: string;
+  notReadyLabel?: string;
 };
 /**
  * The "stores imported posts" row in the Connections panel means two
@@ -98,6 +107,11 @@ export function receiverConnection(
       ready,
       purpose: "Stores imported posts",
       note: "Connects to this deployment on its own and reconnects automatically — there's nothing to set here.",
+      // `configured.handoff` in outbound mode IS a live heartbeat (a
+      // collector row seen within 45s), so this row can honestly speak about
+      // connectivity where the others cannot.
+      readyLabel: "Connected",
+      notReadyLabel: "Not connected",
     };
   return {
     name: "Raw capture receiver",
@@ -1227,10 +1241,10 @@ export default function App() {
                   ) : c.ready ? (
                     <>
                       <Check size={13} />
-                      Connected
+                      {c.readyLabel ?? "Configured"}
                     </>
                   ) : (
-                    "Not connected"
+                    (c.notReadyLabel ?? "Not configured")
                   )}
                 </span>
               </div>
