@@ -25,6 +25,7 @@ submission, and `DECISIONS.md` records implementation decisions. Tool configs,
 
 - [Application backlog](to-do.md)
 - [Local development and provider configuration](docs/development.md)
+- [Application control plane](docs/control-plane.md) (identity, dashboard, limits, publication loop)
 - [Production operations](docs/production.md)
 - [Application/search integration contract](docs/integration-contract.md)
 - [Product responsibilities](docs/product.md) and [spec adoption](docs/spec-adoption.md)

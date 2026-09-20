@@ -21,9 +21,13 @@ CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx @convex-dev/static-hosting upload --
 
 AgentMail delivery events for the configured sender inbox are registered at `https://utmost-kudu-321.convex.site/agentmail/webhook`. The inbox-scoped API succeeded; the organization-level create route rejected the key. `AGENTMAIL_WEBHOOK_SECRET` is configured in production. Incoming email processing is not registered. No email was sent during setup.
 
-Production imports use an outbound worker. The VM worker unit is installed but was inactive at the September 19 cleanup check; the frontend and capture receiver were active. This does not confirm whether the old Mac worker has stopped. Follow the coordinated cutover steps below before starting the VM worker. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata and receipts return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. `scripts/setup-worker.mjs` configures its production credential without printing it.
+Production imports use an outbound worker. The VM worker unit is installed but was inactive at the September 19 cleanup check; the frontend and capture receiver were active. This does not confirm whether the old Mac worker has stopped. Follow the coordinated cutover steps below before starting the VM worker. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata, receipts, and provider-throttle observations return to Convex. No inbound port or public tunnel is used. `scripts/setup-worker.mjs` configures its production credential without printing it.
 
-Search remains disconnected until the collaborator provides retrieval. Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; the current guest-only login cannot send production email.
+`COLLECTOR_MODE=outbound` means Convex never talks to x.md or the capture receiver. Setting `RAW_CAPTURE_URL` / `RAW_CAPTURE_TOKEN` on the production deployment does nothing; the worker reads those on this machine. The Connections UI labels that row "Download worker". Worker liveness is expiry-driven: each heartbeat writes `collector.online` and schedules a flip to offline 45 seconds later (`convex/worker.ts`). A Convex query does not re-run because time passed, so liveness must not be computed from `Date.now()` inside `integrations.configured`. Details: [control plane](control-plane.md).
+
+The worker is also the only production writer of `providerThrottleEvents`. Without `worker.report` `"throttle"`, the Provider limits panel stays empty while x.md is refusing imports. A 429 is recorded; remaining allowance on a _successful_ call is still invisible.
+
+Search retrieval remains disconnected until `SEARCH_API_URL` serves the app contract. The indexer can now _report_ searchable state to Convex (`POST /publication/update`); that sender is off unless `~/xearch-data/search/publication.env` sets `PUBLICATION_UPDATE_URL` and a token — see [indexer operations](search-indexer.md). A TLS probe (unknown handle → 422, wrong bearer → 401) mutated no account state. No real account has been published. Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; a guest session cannot send production email.
 
 Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. Browser visual checks were unavailable during deployment.
 
@@ -78,10 +82,22 @@ printing credentials:
 systemctl --user status xearch-capture.service
 systemctl --user status xearch-production-worker.service
 systemctl --user status xearch-frontend.service
+systemctl --user status xearch-search-indexer.service
 curl --fail --silent http://127.0.0.1:4319/health
 curl --fail --silent http://127.0.0.1:8080/
 ss -ltnp 'sport = :4319'
 ```
+
+Confirm the indexer picked up publication credentials without reading the env file:
+
+```sh
+journalctl --user -u xearch-search-indexer.service | grep 'indexer resolved'
+```
+
+Expect `publish=enabled` or `publish=disabled`. The credentials file is
+`~/xearch-data/search/publication.env` (mode 0600), loaded by
+`deploy/systemd/xearch-search-indexer.service`. A missing file is not an error;
+publication stays off.
 
 The committed units are specific to the `exedev` checkout path on this VM. If the
 repository or Bun executable moves, update both the committed and installed

@@ -31,15 +31,15 @@
      `accepted`/`rejected` fields today are per-last-import-attempt only, not
      this.
   3. **Delivery direction** — push (indexer calls our `POST
-     /publication/update`), not Convex polling the indexer.
+/publication/update`), not Convex polling the indexer.
   4. **State granularity** — handle collisions and index-reset recovery
      surface to us as ordinary `failed`/fresh-`searchable` updates, not a
      distinct event shape.
   5. **`downloaded` vs. `waiting_for_indexing`** — collapsed into one instant
      on our side until the indexer can report a real pickup/start event.
-  Also unconfirmed: the auth convention (`PUBLICATION_SERVICE_TOKEN` falling
-  back to `DATA_SERVICE_TOKEN`) and the HTTP status mapping
-  (200/401/422) the receiver replies with.
+     Also unconfirmed: the auth convention (`PUBLICATION_SERVICE_TOKEN` falling
+     back to `DATA_SERVICE_TOKEN`) and the HTTP status mapping
+     (200/401/422) the receiver replies with.
 - Known consequence of building ahead of agreement, found while verifying this
   document (2026-09-20): `convex/jobs.ts`'s `finish` upsert resolved accounts
   purely `by_handle` and unconditionally patched whatever row it found,
@@ -68,7 +68,7 @@ handoff. Each one is a judgement call a reviewer should be able to challenge.
   `accounts` rows can then share one `handle`, so `by_handle` is no longer
   even nominally unique. Every read that used `.unique()` on it
   (`library.ts`, `summary.ts`, `jobs.start`) now reads two and treats an
-  ambiguous match as *unresolved* rather than picking one. The alternative —
+  ambiguous match as _unresolved_ rather than picking one. The alternative —
   rewriting the previous holder's handle to free it — was rejected: we do not
   know what that account renamed itself to, and inventing a value to preserve
   an index property would be exactly the kind of fabricated data the rest of
@@ -114,3 +114,6 @@ handoff. Each one is a judgement call a reviewer should be able to challenge.
 - **Oversized pages are split by measured bytes, not by a post count.**
   Retained captures on the VM range from ~2.1 KB to ~6.2 KB per post, so any
   fixed posts-per-capture constant would be wrong at one end of that range.
+
+Developer/operator map of the resulting behavior (identity, dismissal,
+limits, worker liveness, publication loop): `docs/control-plane.md`.
