@@ -11,7 +11,15 @@ on:
 
 jobs:
   production:
-    if: github.event.workflow_run.conclusion == 'success'
+    # Every clause matters. `Check` also runs on pull_request, including from
+    # forks, and workflow_run's `branches:` filter matches the HEAD branch --
+    # so a fork PR from a branch named "main" would otherwise check out its
+    # own code at head_sha and run it with the production deploy key.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-production
