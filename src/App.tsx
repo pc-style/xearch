@@ -53,11 +53,14 @@ const sorts: { value: Sort; label: string }[] = [
   { value: "newest", label: "Newest" },
   { value: "oldest", label: "Oldest" },
 ];
-const fromLocation = () => ({
-  raw: new URLSearchParams(location.search).get("q") ?? "",
-  sort: (sorts.find((s) => s.value === new URLSearchParams(location.search).get("sort"))?.value ??
-    "relevance") as Sort,
-});
+const fromLocation = () => {
+  const params = new URLSearchParams(location.search);
+  return {
+    raw: params.get("q") ?? "",
+    sort: (sorts.find((s) => s.value === params.get("sort"))?.value ?? "relevance") as Sort,
+    includeStats: params.get("stats") === "1",
+  };
+};
 const compactNumber = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -68,6 +71,7 @@ const postDate = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
 });
 const compact = (n: number) => compactNumber.format(n);
+const formatDuration = (microseconds: number) => `${(microseconds / 1000).toFixed(2)} ms`;
 const safeHostname = (url: string) => {
   try {
     return new URL(url).hostname;
@@ -264,8 +268,15 @@ export default function App() {
   const [draft, setDraft] = useState(initial.raw),
     [raw, setRaw] = useState(initial.raw),
     [sort, setSort] = useState<Sort>(initial.sort),
-    [searchRequest, setSearchRequest] = useState<{ raw: string; sort: Sort } | null>(() =>
-      initial.raw.trim() ? { raw: initial.raw, sort: initial.sort } : null,
+    [statsForNerds, setStatsForNerds] = useState(initial.includeStats),
+    [searchRequest, setSearchRequest] = useState<{
+      raw: string;
+      sort: Sort;
+      includeStats: boolean;
+    } | null>(() =>
+      initial.raw.trim()
+        ? { raw: initial.raw, sort: initial.sort, includeStats: initial.includeStats }
+        : null,
     );
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(null);
   const [view, setView] = useState<"search" | "bookmarks">("search"),
@@ -385,13 +396,15 @@ export default function App() {
     setDraft(query.trim());
     setSort(nextSort);
     setSessionId(null);
-    setSearchRequest({ raw: query.trim(), sort: nextSort });
+    setSearchRequest({ raw: query.trim(), sort: nextSort, includeStats: statsForNerds });
     setView("search");
     setProposal(null);
     const url = new URL(location.href);
     if (query.trim()) url.searchParams.set("q", query.trim());
     else url.searchParams.delete("q");
     url.searchParams.set("sort", nextSort);
+    if (statsForNerds) url.searchParams.set("stats", "1");
+    else url.searchParams.delete("stats");
     history.pushState(null, "", url);
   };
   useEffect(() => {
@@ -400,8 +413,13 @@ export default function App() {
       setRaw(state.raw);
       setDraft(state.raw);
       setSort(state.sort);
+      setStatsForNerds(state.includeStats);
       setSessionId(null);
-      setSearchRequest(state.raw.trim() ? { raw: state.raw, sort: state.sort } : null);
+      setSearchRequest(
+        state.raw.trim()
+          ? { raw: state.raw, sort: state.sort, includeStats: state.includeStats }
+          : null,
+      );
       setView("search");
     };
     addEventListener("popstate", pop);
@@ -409,7 +427,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!searchRequest || queryError || !configured?.search) return;
-    const { raw: query, sort: requestedSort } = searchRequest;
+    const { raw: query, sort: requestedSort, includeStats } = searchRequest;
     let active = true;
     // Every setState here runs after an await, never synchronously in the effect body.
     void (async () => {
@@ -418,7 +436,11 @@ export default function App() {
       setBusy(true);
       setNotice("");
       try {
-        const id = await startSearch({ raw: query, sort: requestedSort });
+        const id = await startSearch({
+          raw: query,
+          sort: requestedSort,
+          includeStats,
+        });
         if (active) setSessionId(id);
       } catch (e) {
         if (active) setNotice(describeError(e));
@@ -651,6 +673,14 @@ export default function App() {
               <span>
                 Search everything, select a creator, or start with <b>@</b> to filter by account.
               </span>
+              <label className="stats-toggle">
+                <input
+                  type="checkbox"
+                  checked={statsForNerds}
+                  onChange={(event) => setStatsForNerds(event.target.checked)}
+                />
+                Stats for nerds
+              </label>
               {configured?.openai && (
                 <button
                   type="button"
@@ -809,7 +839,11 @@ export default function App() {
               <div className="empty">
                 <h2>Search could not complete</h2>
                 <p>{result.error}</p>
-                <button onClick={() => setSearchRequest({ raw, sort })}>Retry search</button>
+                <button
+                  onClick={() => setSearchRequest({ raw, sort, includeStats: statsForNerds })}
+                >
+                  Retry search
+                </button>
               </div>
             ) : view === "search" && (!result || result.status !== "complete") ? (
               <div className="empty" role="status">
@@ -841,6 +875,57 @@ export default function App() {
                   Results and ordering come from your search service. Engagement reflects the source
                   snapshot.
                 </p>
+                {result?.stats && (
+                  <details className="stats-panel">
+                    <summary>
+                      Stats for nerds —{" "}
+                      {formatDuration(result.stats.api?.totalUs ?? result.stats.backend.totalUs)}
+                    </summary>
+                    <div className="stats-grid">
+                      <strong>Backend</strong>
+                      <span>Total</span>
+                      <span>{formatDuration(result.stats.backend.totalUs)}</span>
+                      <span>Reload index</span>
+                      <span>{formatDuration(result.stats.backend.reloadUs)}</span>
+                      <span>Fingerprint</span>
+                      <span>{formatDuration(result.stats.backend.fingerprintUs)}</span>
+                      <span>Compile query</span>
+                      <span>{formatDuration(result.stats.backend.compileUs)}</span>
+                      <span>Retrieve</span>
+                      <span>{formatDuration(result.stats.backend.retrieveUs)}</span>
+                      <span>Retrieve + rank candidates</span>
+                      <span>{result.stats.backend.rankingCalls} calls</span>
+                      <span>Materialize rows</span>
+                      <span>{formatDuration(result.stats.backend.materializeUs)}</span>
+                      <span>Hits / returned</span>
+                      <span>
+                        {result.stats.backend.candidateHits} / {result.stats.backend.returnedRows}
+                      </span>
+                      <span>Index</span>
+                      <span>
+                        {result.stats.backend.indexDocs} docs / {result.stats.backend.segments}{" "}
+                        segments
+                      </span>
+                      {result.stats.api && (
+                        <>
+                          <strong>API</strong>
+                          <span>Auth</span>
+                          <span>{formatDuration(result.stats.api.authUs)}</span>
+                          <span>Parse</span>
+                          <span>{formatDuration(result.stats.api.parseUs)}</span>
+                          <span>Queue</span>
+                          <span>{formatDuration(result.stats.api.queueUs)}</span>
+                          <span>Engine wall</span>
+                          <span>{formatDuration(result.stats.api.engineUs)}</span>
+                          <span>Post-process</span>
+                          <span>{formatDuration(result.stats.api.postprocessUs)}</span>
+                          <span>API total</span>
+                          <span>{formatDuration(result.stats.api.totalUs)}</span>
+                        </>
+                      )}
+                    </div>
+                  </details>
+                )}
                 {result?.warnings.map((warning) => (
                   <p className="scope-note" key={warning}>
                     {warning}
@@ -884,6 +969,7 @@ export default function App() {
                           raw,
                           sort,
                           cursor: result.nextCursor,
+                          includeStats: result.includeStats === true,
                         });
                         setSessionId(id);
                         window.scrollTo({ top: 0 });
@@ -1041,9 +1127,7 @@ export default function App() {
               </p>
               <EmailSignIn
                 className="stack-form"
-                onSignedIn={() =>
-                  setNotice("Signed in. You can now preview and send this digest.")
-                }
+                onSignedIn={() => setNotice("Signed in. You can now preview and send this digest.")}
               />
             </>
           ) : (
@@ -1094,8 +1178,8 @@ export default function App() {
             {!verifiedEmail && (
               <>
                 <p>
-                  Sign in with a verified email to send digest emails to yourself. Search and
-                  every other feature stay available as a guest.
+                  Sign in with a verified email to send digest emails to yourself. Search and every
+                  other feature stay available as a guest.
                 </p>
                 <EmailSignIn
                   className="stack-form"

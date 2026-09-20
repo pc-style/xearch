@@ -13,6 +13,49 @@ describe("Effect search response contract", () => {
   it("decodes an empty page and defaults omitted warnings", () => {
     expect(decodeSearchResponse({ rows: [] })).toEqual({ rows: [], warnings: [] });
   });
+  it("accepts opt-in backend and API diagnostics", () => {
+    const stats = {
+      backend: {
+        totalUs: 10,
+        reloadUs: 1,
+        fingerprintUs: 1,
+        cursorUs: 1,
+        compileUs: 1,
+        retrieveUs: 3,
+        rankingCalls: 2,
+        materializeUs: 1,
+        candidateHits: 3,
+        returnedRows: 2,
+        indexDocs: 100,
+        segments: 1,
+      },
+      api: {
+        totalUs: 20,
+        authUs: 1,
+        validateUs: 1,
+        cursorVerifyUs: 1,
+        parseUs: 1,
+        permitUs: 1,
+        queueUs: 1,
+        engineUs: 11,
+        postprocessUs: 1,
+        cursorSignUs: 1,
+      },
+    };
+    expect(decodeSearchResponse({ rows: [], stats })).toEqual({ rows: [], stats, warnings: [] });
+    expect(() =>
+      decodeSearchResponse({
+        rows: [],
+        stats: { ...stats, backend: { ...stats.backend, rankingCalls: -1 } },
+      }),
+    ).toThrow(Error);
+    expect(() =>
+      decodeSearchResponse({
+        rows: [],
+        stats: { ...stats, backend: { ...stats.backend, totalUs: 1.5 } },
+      }),
+    ).toThrow(Error);
+  });
   it("preserves supported optional fields and strips unknown provider fields", () => {
     const row = {
       ...post,

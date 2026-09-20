@@ -103,7 +103,7 @@ async fn cursors_are_signed_and_forgery_is_rejected() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let paged: SearchResponse = serde_json::from_value(second).unwrap();
-    assert!(!paged.rows.is_empty());
+    assert_ne!(paged.rows.len(), 0);
 
     // Rewrap the payload with a forged deep offset, keeping the signature.
     let signed: search_api::Signed = serde_json::from_str(&cursor).unwrap();
@@ -130,6 +130,43 @@ async fn cursors_are_signed_and_forgery_is_rejected() {
         StatusCode::OK,
         "a forged cursor must be rejected outright, body said: {error}"
     );
+}
+
+#[tokio::test]
+async fn stats_are_opt_in_and_include_backend_and_api_stages() {
+    let (router, _dir) = router();
+    let bearer = "b".repeat(64);
+    let (status, diagnostic) = post_json(
+        &router,
+        "/search",
+        serde_json::to_string(&json!({
+            "version": 1,
+            "query": "shared",
+            "sort": "relevance",
+            "limit": 2,
+            "includeStats": true
+        }))
+        .unwrap(),
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{diagnostic}");
+    assert!(diagnostic["stats"]["backend"]["retrieveUs"].is_number());
+    assert!(diagnostic["stats"]["backend"]["rankingCalls"].is_number());
+    assert!(diagnostic["stats"]["api"]["engineUs"].is_number());
+
+    let (status, ordinary) = post_json(
+        &router,
+        "/search",
+        serde_json::to_string(&json!({
+            "version": 1, "query": "shared", "sort": "relevance", "limit": 2
+        }))
+        .unwrap(),
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(ordinary.get("stats").is_none());
 }
 
 #[tokio::test]

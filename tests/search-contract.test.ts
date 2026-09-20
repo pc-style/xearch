@@ -38,6 +38,7 @@ const DOC_SEARCH_REQUEST = {
   sort: "relevance",
   limit: 20,
   cursor: "optional-opaque-cursor",
+  includeStats: true,
 };
 
 const DOC_SEARCH_RESPONSE = {
@@ -58,6 +59,34 @@ const DOC_SEARCH_RESPONSE = {
   ],
   nextCursor: "optional",
   warnings: [],
+  stats: {
+    backend: {
+      totalUs: 1200,
+      reloadUs: 40,
+      fingerprintUs: 12,
+      cursorUs: 2,
+      compileUs: 18,
+      retrieveUs: 980,
+      rankingCalls: 240,
+      materializeUs: 90,
+      candidateHits: 21,
+      returnedRows: 20,
+      indexDocs: 100000,
+      segments: 8,
+    },
+    api: {
+      totalUs: 1500,
+      authUs: 8,
+      validateUs: 1,
+      cursorVerifyUs: 3,
+      parseUs: 7,
+      permitUs: 1,
+      queueUs: 15,
+      engineUs: 1210,
+      postprocessUs: 20,
+      cursorSignUs: 9,
+    },
+  },
 };
 
 describe("search request/response fixtures (docs/integration-contract.md)", () => {
@@ -72,6 +101,7 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
         raw: "@theo local first",
         sort: "relevance",
         cursor: "optional-opaque-cursor",
+        includeStats: true,
         status: "queued",
         rows: [],
         warnings: [],
@@ -81,6 +111,7 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
     expect(fetcher).toHaveBeenCalledOnce();
     const body = JSON.parse(fetcher.mock.calls[0][1]?.body as string);
     expect(body).toEqual(DOC_SEARCH_REQUEST);
+    expect((await t.run((ctx) => ctx.db.get(sessionId)))?.stats).toEqual(DOC_SEARCH_RESPONSE.stats);
     // The documented wire contract has no scope field. search.start accepts
     // an authorized-scope argument (see the describe block below), but
     // enforcement stays entirely on this app's side — it must never leak
@@ -130,7 +161,10 @@ describe("stale search cursor — restart search, not a generic failure", () => 
   it("surfaces a 410 on a request that carried a cursor as 'restart your search'", async () => {
     const { t, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response(null, { status: 410 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 410 })),
+    );
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -152,7 +186,10 @@ describe("stale search cursor — restart search, not a generic failure", () => 
   it("does not call a first-page 410 (no cursor sent) a stale cursor", async () => {
     const { t, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response(null, { status: 410 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 410 })),
+    );
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,

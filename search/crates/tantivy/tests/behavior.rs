@@ -26,7 +26,6 @@ fn phrases_filters_sorting_updates_and_restart() {
         let mut writer = engine.writer().unwrap();
         let mut bob = post(3, "to be or not to be rust");
         bob.author = "bob".into();
-        bob.author_id = "200".into();
         for post in [
             post(1, "to be or not to be"),
             post(2, "to not be or to be"),
@@ -42,7 +41,7 @@ fn phrases_filters_sorting_updates_and_restart() {
         all(&engine, request("\"to be or not to be\" from:alice"))
             .unwrap()
             .iter()
-            .map(|p| p.tweet_id.as_str())
+            .map(|p| p.tweet_id.to_string())
             .collect::<Vec<_>>(),
         ["1"]
     );
@@ -73,7 +72,7 @@ fn phrases_filters_sorting_updates_and_restart() {
             all(&engine, req)
                 .unwrap()
                 .iter()
-                .map(|p| p.tweet_id.as_str())
+                .map(|p| p.tweet_id.to_string())
                 .collect::<Vec<_>>(),
             expected
         );
@@ -89,10 +88,11 @@ fn phrases_filters_sorting_updates_and_restart() {
         engine.search(&expression, &req, 100),
         Err(Error::StaleCursor)
     ));
-    assert!(
+    assert_eq!(
         all(&engine, request("\"to be or not to be\" from:alice"))
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
     assert_eq!(all(&engine, request("from:alice")).unwrap().len(), 3);
 }
@@ -118,7 +118,6 @@ fn seeded_random_queries_match_an_independent_scan_oracle() {
         let mut p = post(id, &text);
         if id % 2 == 0 {
             p.author = "bob".into();
-            p.author_id = "200".into();
         }
         writer.upsert(&p).unwrap();
         corpus.push(p);
@@ -142,13 +141,10 @@ fn seeded_random_queries_match_an_independent_scan_oracle() {
                             tokens.contains(&a) && tokens.contains(&b)
                         }
                 })
-                .map(|p| p.tweet_id.clone())
+                .map(|p| p.tweet_id)
                 .collect::<BTreeSet<_>>();
             let results = all(&engine, request(&raw)).unwrap();
-            let actual = results
-                .iter()
-                .map(|p| p.tweet_id.clone())
-                .collect::<BTreeSet<_>>();
+            let actual = results.iter().map(|p| p.tweet_id).collect::<BTreeSet<_>>();
             assert_eq!(actual.len(), results.len(), "duplicate pagination: {raw}");
             assert_eq!(actual, expected, "oracle mismatch: {raw}");
         }
@@ -176,7 +172,7 @@ fn absent_metrics_sort_last_and_popularity_never_relaxes_matching() {
             all(&engine, req)
                 .unwrap()
                 .iter()
-                .map(|p| p.tweet_id.as_str())
+                .map(|p| p.tweet_id.to_string())
                 .collect::<Vec<_>>(),
             ["3", "1"]
         );
@@ -215,5 +211,5 @@ fn pagination_window_capping_and_warning() {
     assert_eq!(resp.rows.len(), 0);
     assert_eq!(resp.next_cursor, None);
     // Crucially: no false warning that window was capped when results simply ended.
-    assert!(resp.warnings.is_empty());
+    assert_eq!(resp.warnings.len(), 0);
 }

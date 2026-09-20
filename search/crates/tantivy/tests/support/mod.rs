@@ -1,10 +1,9 @@
-use search_model::{Post, SearchRequest, Sort};
+use search_model::{Post, SearchRequest, Sort, TweetId};
 
 pub fn post(id: u32, text: &str) -> Post {
     Post {
-        tweet_id: id.to_string(),
+        tweet_id: TweetId(u64::from(id)),
         author: "alice".into(),
-        author_id: "100".into(),
         text: text.into(),
         url: format!("https://x.com/alice/status/{id}"),
         created_at: Some(i64::from(id).saturating_mul(1000)),
@@ -26,5 +25,6 @@ pub fn request(query: &str) -> SearchRequest {
         sort: Sort::Relevance,
         limit: 20,
         cursor: None,
+        include_stats: false,
     }
 }

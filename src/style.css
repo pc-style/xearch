@@ -204,6 +204,17 @@ main {
   color: var(--accent);
   font-weight: 500;
 }
+.stats-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #c8c3bc;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.stats-toggle input {
+  accent-color: var(--accent);
+}
 .text-button {
   border: 0;
   padding: 0;
@@ -381,6 +392,34 @@ main {
   font-size: 11px;
   color: #72706b;
   margin: 14px 0 12px;
+}
+.stats-panel {
+  margin: 14px 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.stats-panel summary {
+  padding: 9px 11px;
+  color: #c8c3bc;
+  cursor: pointer;
+}
+.stats-grid {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) auto;
+  gap: 5px 14px;
+  padding: 0 11px 11px;
+}
+.stats-grid strong {
+  grid-column: 1 / -1;
+  margin-top: 5px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.stats-grid span:nth-of-type(even) {
+  text-align: right;
+  color: #d7d1ca;
 }
 .post {
   padding: 26px 0;

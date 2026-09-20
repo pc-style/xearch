@@ -76,7 +76,8 @@ Set `SEARCH_API_URL` to the exact retrieval endpoint and `SEARCH_SERVICE_TOKEN` 
   "author": "theo",
   "sort": "relevance",
   "limit": 20,
-  "cursor": "optional-opaque-cursor"
+  "cursor": "optional-opaque-cursor",
+  "includeStats": true
 }
 ```
 
@@ -100,11 +101,42 @@ Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. Omitted aut
     }
   ],
   "nextCursor": "optional",
-  "warnings": []
+  "warnings": [],
+  "stats": {
+    "backend": {
+      "totalUs": 1200,
+      "reloadUs": 40,
+      "fingerprintUs": 12,
+      "cursorUs": 2,
+      "compileUs": 18,
+      "retrieveUs": 980,
+      "rankingCalls": 240,
+
+      "materializeUs": 90,
+      "candidateHits": 21,
+      "returnedRows": 20,
+      "indexDocs": 100000,
+      "segments": 8
+    },
+    "api": {
+      "totalUs": 1500,
+      "authUs": 8,
+      "validateUs": 1,
+      "cursorVerifyUs": 3,
+      "parseUs": 7,
+      "permitUs": 1,
+      "queueUs": 15,
+      "engineUs": 1210,
+      "postprocessUs": 20,
+      "cursorSignUs": 9
+    }
+  }
 }
 ```
 
-Up to 20 rows per page; dates in epoch milliseconds. Only tweetId, author, text, url, and links are required. Missing metrics stay absent. All rendered URLs must be HTTPS. Use warnings for truncated excerpts, incomplete coverage, or approximate ranking. The app validates this display contract, saves a short-lived search session, and renders it reactively. It does not normalize raw X content into this shape or rerank results.
+`includeStats` is optional and defaults to false. Timings are integer microseconds. `backend.retrieveUs` includes Tantivy retrieval, collection, and ranking; `rankingCalls` reports the number of candidates presented to the ranking collector. `api.totalUs` includes authentication and the API stages up to the framework's final JSON encoding; `authUs` is reported separately. Sample values are illustrative, not a performance guarantee.
+
+Up to 20 rows per page; dates in epoch milliseconds. Only tweetId, author, text, url, and links are required. Missing metrics stay absent. Tweet IDs remain decimal strings on the wire while Rust stores them as compact u64 values. All rendered URLs must be HTTPS. Use warnings for truncated excerpts, incomplete coverage, or approximate ranking. The app validates this display contract, saves a short-lived search session, and renders it reactively. It does not normalize raw X content into this shape or rerank results.
 
 ## x.md configuration
 

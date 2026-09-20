@@ -26,9 +26,45 @@ export const resultPost = Schema.Struct({
   displayName: Schema.optional(Schema.String.check(Schema.isMaxLength(100))),
 });
 export type ResultPost = typeof resultPost.Type;
+const stat = Schema.Finite.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+);
+const backendStats = Schema.Struct({
+  totalUs: stat,
+  reloadUs: stat,
+  fingerprintUs: stat,
+  cursorUs: stat,
+  compileUs: stat,
+  retrieveUs: stat,
+  rankingCalls: stat,
+  materializeUs: stat,
+  candidateHits: stat,
+  returnedRows: stat,
+  indexDocs: stat,
+  segments: stat,
+});
+const apiStats = Schema.Struct({
+  totalUs: stat,
+  authUs: stat,
+  validateUs: stat,
+  cursorVerifyUs: stat,
+  parseUs: stat,
+  permitUs: stat,
+  queueUs: stat,
+  engineUs: stat,
+  postprocessUs: stat,
+  cursorSignUs: stat,
+});
+export const searchStats = Schema.Struct({
+  backend: backendStats,
+  api: Schema.optional(apiStats),
+});
 export const searchResponse = Schema.Struct({
   rows: Schema.Array(resultPost).pipe(Schema.mutable).check(Schema.isMaxLength(20)),
   nextCursor: Schema.optional(Schema.String.check(Schema.isMaxLength(4000))),
+  stats: Schema.optional(searchStats),
   warnings: Schema.optional(
     Schema.Array(Schema.String.check(Schema.isMaxLength(500)))
       .pipe(Schema.mutable)

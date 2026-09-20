@@ -77,18 +77,18 @@ Every intake account is one record, keyed by normalized handle
 
 Status machine, applied by every pass:
 
-| Situation | Result |
-|---|---|
-| New file seen | record starts `incomplete` |
-| Import accepts ≥1 post | `complete` with receipt facts |
-| Import accepts 0 posts (or all quarantined) | `error` — "No posts accepted; N quarantined" |
-| Import fails (malformed/IO) | `error` with reason, attempts+1 |
-| `error`/`incomplete` user | retried on every subsequent pass |
-| `complete` user, unchanged bytes | skipped (content-hash signature) |
-| File bytes changed | reimported even if `complete` |
-| Two files map to one handle | the second file is skipped with a warning while the recorded file exists; removing or renaming the recorded file lets the survivor take over |
-| Index empty but registry non-empty | recorded users and capture batches are reimported (index reset recovery, logged loudly) |
-| Registry file corrupt or unreadable | quarantined as `users.json.bad-<unix-ms>` and recreated empty; ingestion continues |
+| Situation                                   | Result                                                                                                                                       |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| New file seen                               | record starts `incomplete`                                                                                                                   |
+| Import accepts ≥1 post                      | `complete` with receipt facts                                                                                                                |
+| Import accepts 0 posts (or all quarantined) | `error` — "No posts accepted; N quarantined"                                                                                                 |
+| Import fails (malformed/IO)                 | `error` with reason, attempts+1                                                                                                              |
+| `error`/`incomplete` user                   | retried on every subsequent pass                                                                                                             |
+| `complete` user, unchanged bytes            | skipped (content-hash signature)                                                                                                             |
+| File bytes changed                          | reimported even if `complete`                                                                                                                |
+| Two files map to one handle                 | the second file is skipped with a warning while the recorded file exists; removing or renaming the recorded file lets the survivor take over |
+| Index empty but registry non-empty          | recorded users and capture batches are reimported (index reset recovery, logged loudly)                                                      |
+| Registry file corrupt or unreadable         | quarantined as `users.json.bad-<unix-ms>` and recreated empty; ingestion continues                                                           |
 
 Safety properties:
 
@@ -134,7 +134,7 @@ dumps, batches are content-addressed and immutable, so deleting the index
 reimports every recorded batch from the still-present files (see below).
 
 Batch semantics: each capture is imported exactly once per content hash, in
-filename order. Re-dropping an *older* per-user dump after a newer one is
+filename order. Re-dropping an _older_ per-user dump after a newer one is
 last-writer-wins (upserts replace by tweet ID), so re-import the newest file
 if a restore ever moves backwards.
 
@@ -212,7 +212,7 @@ whole configuration.
 | ------------------------------------------------------ | --------------------------------------------------------- |
 | `--index`/`SEARCH_INDEX`                               | overrides `"$BASE/index"`                                 |
 | `import --input --archive`                             | one-shot retained import                                  |
-| `query <q> [--sort …]`                                 | prints version-1 response JSON                            |
+| `query <q> [--sort …] [--stats]`                       | prints version-1 response JSON; `--stats` adds timings    |
 | `serve [--listen 127.0.0.1:4320]`                      | needs `SEARCH_LOCAL_SIGNING_KEY` + `SEARCH_SERVICE_TOKEN` |
 | `watch [--archive --drop-dir --state-dir --poll-secs]` | background indexer; resolves and logs its dirs at startup |
 | `users list [--status …]` / `users mark …`             | registry ops                                              |
@@ -220,7 +220,9 @@ whole configuration.
 ## Serving the app contract
 
 `serve` exposes `/health` (open), `/search` (bearer) and `/ticket-search`
-(HMAC ticket, 60 s max TTL) on loopback. Continuing cursors are
+(HMAC ticket, 60 s max TTL) on loopback. Send `includeStats: true` when
+backend/API timings are needed; ordinary responses omit the stats object.
+Continuing cursors are
 **HMAC-signed with the server key** before leaving the API, so page depth
 and TTL can only be advanced by the server: a tampered cursor is rejected.
 `/ticket-search` returns a signed receipt binding session, owner, expiry

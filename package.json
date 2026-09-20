@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
-    "lint": "oxlint",
+    "lint": "oxlint && npx react-doctor@latest",
     "lint:fix": "oxlint --fix",
     "doctor": "react-compiler-healthcheck",
     "fmt": "oxfmt",
@@ -20,7 +20,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "deploy": "bunx @convex-dev/static-hosting deploy",
-    "deploy:prod": "CONVEX_DEPLOYMENT=prod:utmost-kudu-321 NODE_OPTIONS=--max-old-space-size=3072 bunx @convex-dev/static-hosting deploy --build-command 'bun run build'"
+    "deploy:prod": "CONVEX_DEPLOYMENT=prod:utmost-kudu-321 NODE_OPTIONS=--max-old-space-size=3072 bunx @convex-dev/static-hosting deploy --build-command 'bun run build'",
+    "react-doctor": "npx react-doctor@latest"
   },
   "dependencies": {
     "@agentmail/convex": "latest",
