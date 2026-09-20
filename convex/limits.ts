@@ -22,12 +22,15 @@ import { throttleProviderValidator } from "./schema";
  * this file can ever report is one the provider itself supplied; nothing
  * here reintroduces a self-imposed cap.
  *
- * Nothing writes to `providerThrottleEvents` yet — that is acquisition-side
- * implementation (convex/importer.ts / convex/lib/xmd.ts), out of scope for
- * this file per docs/publication-contract.md ("This table only records
- * observations; nothing in this task adds the code that writes to it").
- * Until something does, every query below honestly returns `{ kind: "none" }`
- * for every provider.
+ * The write path now exists. `convex/lib/xmd.ts` reads the provider's own
+ * `RateLimit-*` / `Retry-After` headers and problem body into a structured
+ * fact on `ProviderError`; `convex/importer.ts` and — in production, where
+ * COLLECTOR_MODE is outbound and the VM worker is the only thing that talks
+ * to x.md — `scripts/production-worker.ts` via `worker.report`'s "throttle"
+ * event both record it through `convex/jobs.recordThrottle`. Facts are
+ * captured on ERROR responses only, so a successful call's remaining
+ * allowance is still not visible here; `{ kind: "none" }` therefore still
+ * means "nothing has been observed", never "not throttled".
  *
  * Scope note — to-do.md P0 "Provider limits" is four separate bullets. This
  * file plus the dashboard wiring in src/library/ close two of them:
@@ -41,21 +44,16 @@ import { throttleProviderValidator } from "./schema";
  *     mounted into the dashboard via `src/library/Library.tsx` ->
  *     `OverviewStats.tsx`, so a signed-in user can see this panel. It has
  *     nothing to show yet in production, though — see the next two bullets.
- *   - NOT CLOSED: "Respect provider Retry-After/retryAfter." `nextRetryAt`
- *     is computed correctly from `retryAfterMs` when a row has one, but no
- *     row is ever written in production yet (see the paragraph above), so
- *     this is only true of hypothetical rows a test inserts, not of running
- *     code. Closing it needs the write path in convex/importer.ts /
- *     convex/lib/xmd.ts, which is out of scope for this file.
- *   - NOT CLOSED (only trivially, today): "Separate current provider
- *     throttling from historical 'today's import limit' errors." True right
- *     now only because nothing is ever shown (empty table). Once the write
- *     path above exists, add a test that exercises this against data the
- *     acquisition path actually produced, not only synthetic rows a test
- *     inserts directly.
- * Do not report the remaining two bullets as closed until the write path
- * above exists and is tested end-to-end against data acquisition actually
- * produced, not only synthetic rows a test inserts directly.
+ *   - CLOSED: "Respect provider Retry-After/retryAfter." `nextRetryAt` is
+ *     computed from `retryAfterMs`, which now reaches this table from real
+ *     acquisition. tests/provider-limits-writepath.test.ts drives
+ *     convex/importer.ts with a stubbed transport returning the exact 429
+ *     body production retained on disk, and asserts the resulting reading —
+ *     rather than inserting a synthetic row.
+ *   - CLOSED: "Separate current provider throttling from historical 'today's
+ *     import limit' errors." Same test file asserts that a stale, pre-PR#12
+ *     application-cap string sitting in `jobs.error` still produces
+ *     `{ kind: "none" }` here, because this file reads only observations.
  */
 
 // Bounded read (Convex query guidelines: no unbounded `.collect()`).

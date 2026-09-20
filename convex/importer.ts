@@ -85,6 +85,28 @@ export const run = internalAction({
             : undefined,
       });
     } catch (error) {
+      // Record what the provider told us BEFORE finishing the job, so the
+      // observation survives even if `finish` decides this attempt is stale.
+      // This is a record of what x.md (or the capture receiver) said, shown
+      // to a person — nothing reads it back to decide whether to call out,
+      // and it must never grow into an application-side quota (AGENTS.md).
+      if (error instanceof ProviderError && error.throttle) {
+        const throttle = error.throttle;
+        await ctx.runMutation(internal.jobs.recordThrottle, {
+          jobId,
+          attempt: job.attempt,
+          provider: throttle.provider,
+          operation: throttle.operation,
+          // The schema requires a reason; the provider does not always send
+          // one. Fall back to the error text we already show a person rather
+          // than inventing a reason or dropping the whole observation.
+          reason: throttle.reason ?? error.message,
+          remaining: throttle.remaining,
+          resetAt: throttle.resetAt,
+          retryAfterMs: throttle.retryAfterMs,
+          observedAt: throttle.observedAt,
+        });
+      }
       await ctx.runMutation(internal.jobs.finish, {
         jobId,
         attempt: job.attempt,

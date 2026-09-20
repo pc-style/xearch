@@ -1,6 +1,7 @@
 import { action, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
+import { throttleProviderValidator } from "./schema";
 import type { Doc } from "./_generated/dataModel";
 
 function authorize(token: string) {
@@ -94,6 +95,13 @@ export const report = action({
       v.literal("identity"),
       v.literal("receipt"),
       v.literal("finish"),
+      // Production runs COLLECTOR_MODE=outbound, so the VM worker — not
+      // convex/importer.ts — is what actually talks to x.md and therefore
+      // the only thing that ever sees a provider asking us to slow down.
+      // Without this event that observation dies on the worker and the
+      // dashboard's provider-limits panel stays empty in the one deployment
+      // that matters.
+      v.literal("throttle"),
     ),
     phase: v.optional(v.string()),
     userId: v.optional(v.string()),
@@ -109,10 +117,30 @@ export const report = action({
     nextUntil: v.optional(v.string()),
     nextCursor: v.optional(v.string()),
     expectedUserId: v.optional(v.string()),
+    // Only read for the "throttle" event. Every field is the provider's own
+    // report, forwarded verbatim; the worker never estimates one.
+    throttle: v.optional(
+      v.object({
+        provider: throttleProviderValidator,
+        operation: v.string(),
+        reason: v.string(),
+        remaining: v.optional(v.number()),
+        resetAt: v.optional(v.number()),
+        retryAfterMs: v.optional(v.number()),
+        observedAt: v.optional(v.number()),
+      }),
+    ),
   },
   handler: async (ctx, args): Promise<void> => {
     authorize(args.token);
     const base = { jobId: args.jobId, attempt: args.attempt };
+    if (args.event === "throttle") {
+      // A throttle report is an observation, never a job state change: it
+      // must not move the job's status, and a job that is no longer this
+      // attempt should still have its observation recorded.
+      if (args.throttle) await ctx.runMutation(internal.jobs.recordThrottle, { ...base, ...args.throttle });
+      return;
+    }
     if (args.event === "phase")
       await ctx.runMutation(internal.jobs.progress, {
         ...base,
