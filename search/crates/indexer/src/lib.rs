@@ -23,6 +23,7 @@
 //! All directories come from the caller (CLI flags or `SEARCH_*`
 //! environment); nothing here assumes which machine it runs on.
 
+pub mod publish;
 pub mod users;
 
 use search_model::{Error, Result};
@@ -55,6 +56,10 @@ pub struct Config {
     pub state_dir: PathBuf,
     /// Delay between passes.
     pub poll_interval: Duration,
+    /// Convex `/publication/update` sender configuration. `None` disables
+    /// the sender entirely — `run_once` then behaves exactly as it did
+    /// before this feature existed. See [`publish::PublishConfig::from_env`].
+    pub publish: Option<publish::PublishConfig>,
 }
 
 impl Config {
@@ -276,34 +281,91 @@ fn author_handle(value: &serde_json::Value) -> Option<String> {
     search_query::normalize_author(name).ok()
 }
 
-/// Derive the reporting handle for a capture batch from its payload: the
-/// first post's author, else the request input when it is a handle.
-fn capture_handle(file: &Path) -> Option<String> {
-    let bytes = std::fs::read(file).ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+fn author_provider_id(value: &serde_json::Value) -> Option<String> {
+    value.get("author")?.get("id")?.as_str().map(str::to_owned)
+}
+
+/// Identity signals a capture batch's own content can carry for a
+/// publication update: the reporting handle (unchanged behavior, formerly
+/// `capture_handle`'s return value), the provider (x.md) numeric account
+/// id, and the acquisition run id. Every field is `None` when the batch
+/// genuinely does not say — never guessed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CaptureIdentity {
+    pub handle: Option<String>,
+    pub provider_account_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
+/// Derive publication identity for a capture batch from its own payload:
+/// per `docs/publication-contract.md`'s "one thing to agree first", the
+/// provider account id is visible inside each capture's embedded `profile`
+/// object (and on individual posts' `author.id`) whenever a `records[]`
+/// entry has one. The handle falls back to the request input when no
+/// record carries an author, matching the pre-existing `capture_handle`
+/// behavior this replaces.
+fn capture_identity(file: &Path) -> CaptureIdentity {
+    let Some(bytes) = std::fs::read(file).ok() else {
+        return CaptureIdentity::default();
+    };
+    let Some(value) = serde_json::from_slice::<serde_json::Value>(&bytes).ok() else {
+        return CaptureIdentity::default();
+    };
+    let mut identity = CaptureIdentity {
+        run_id: value
+            .get("runId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        ..CaptureIdentity::default()
+    };
     if let Some(records) = value.get("records").and_then(serde_json::Value::as_array) {
         for record in records {
             let Some(payload) = record.get("payload") else {
                 continue;
             };
-            if let Some(handle) = payload
+            // A profile record is the most authoritative source for both
+            // signals, and the only one present before any post has been
+            // captured yet for a brand-new account.
+            if let Some(profile) = payload.get("profile") {
+                identity.handle = identity.handle.or_else(|| {
+                    profile
+                        .get("screen_name")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|name| search_query::normalize_author(name).ok())
+                });
+                identity.provider_account_id = identity.provider_account_id.or_else(|| {
+                    profile
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                });
+            }
+            let first_post = payload
                 .get("posts")
                 .and_then(serde_json::Value::as_array)
-                .and_then(|posts| posts.first())
-                .and_then(author_handle)
+                .and_then(|posts| posts.first());
+            for candidate in [first_post, payload.get("post"), Some(payload)]
+                .into_iter()
+                .flatten()
             {
-                return Some(handle);
+                identity.handle = identity.handle.or_else(|| author_handle(candidate));
+                identity.provider_account_id = identity
+                    .provider_account_id
+                    .or_else(|| author_provider_id(candidate));
             }
-            if let Some(handle) = payload.get("post").and_then(author_handle) {
-                return Some(handle);
-            }
-            if let Some(handle) = author_handle(payload) {
-                return Some(handle);
+            if identity.handle.is_some() && identity.provider_account_id.is_some() {
+                break;
             }
         }
     }
-    let input = value.get("request")?.get("input")?.as_str()?;
-    search_query::normalize_author(input).ok()
+    if identity.handle.is_none() {
+        identity.handle = value
+            .get("request")
+            .and_then(|request| request.get("input"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|input| search_query::normalize_author(input).ok());
+    }
+    identity
 }
 
 fn too_large(file: &Path) -> bool {
@@ -372,12 +434,27 @@ fn run_capture(
     sha: &str,
     index_empty: bool,
 ) {
-    // Skip only when the batch is recorded AND the index still has content.
-    // After an index reset the recorded hash must be reimported from drop.
-    if !index_empty && registry.captures.contains_key(sha) {
+    // A capture whose publish attempt never got a response is retried on a
+    // later pass without waiting for new bytes to show up — read from the
+    // already-recorded handle (see CaptureRecord) so the common steady
+    // state (recorded, no retry owed) never has to reparse the file.
+    let recorded_handle = registry
+        .captures
+        .get(sha)
+        .and_then(|record| record.handle.clone());
+    let publish_retry_pending = recorded_handle.as_deref().is_some_and(|handle| {
+        registry
+            .publications
+            .get(handle)
+            .is_some_and(|p| p.transport_retry_pending)
+    });
+    // Skip only when the batch is recorded AND the index still has content
+    // AND no publish attempt for it is still owed a retry. After an index
+    // reset the recorded hash must be reimported from drop regardless.
+    if !index_empty && registry.captures.contains_key(sha) && !publish_retry_pending {
         return;
     }
-    let handle = capture_handle(file);
+    let identity = capture_identity(file);
     let writer = match engine.writer() {
         Ok(writer) => writer,
         Err(error) => {
@@ -387,15 +464,48 @@ fn run_capture(
     };
     match search_ingest::import(file, &config.archive, writer) {
         Ok(receipt) => {
-            registry.mark_capture(sha, handle.as_deref(), &receipt);
+            registry.mark_capture(sha, identity.handle.as_deref(), &receipt);
             eprintln!(
                 "indexer ok capture={sha} user={} accepted={} rejected={}",
-                handle.as_deref().unwrap_or("unknown"),
+                identity.handle.as_deref().unwrap_or("unknown"),
                 receipt.accepted,
                 receipt.rejected
             );
+            if let Some(handle) = identity.handle.as_deref() {
+                publish::report_after_import(
+                    config.publish.as_ref(),
+                    engine,
+                    registry,
+                    &publish::ImportReport {
+                        handle,
+                        outcome: publish::ImportOutcome::Succeeded,
+                        provider_account_id: identity.provider_account_id.as_deref(),
+                        run_id: identity.run_id.as_deref(),
+                        capture_ids: vec![sha.to_owned()],
+                    },
+                );
+            } else {
+                eprintln!("indexer publish: capture={sha} has no derivable handle; no update sent");
+            }
         }
-        Err(error) => eprintln!("indexer err capture={sha} {error}"),
+        Err(error) => {
+            eprintln!("indexer err capture={sha} {error}");
+            if let Some(handle) = identity.handle.as_deref() {
+                let message = error.to_string();
+                publish::report_after_import(
+                    config.publish.as_ref(),
+                    engine,
+                    registry,
+                    &publish::ImportReport {
+                        handle,
+                        outcome: publish::ImportOutcome::Failed(&message),
+                        provider_account_id: identity.provider_account_id.as_deref(),
+                        run_id: identity.run_id.as_deref(),
+                        capture_ids: vec![sha.to_owned()],
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -440,7 +550,10 @@ fn run_user(
             || rebound
             || record.status != users::UserStatus::Complete
             || record.file_sig.as_deref() != Some(&sig)
-    };
+    } || registry
+        .publications
+        .get(&handle)
+        .is_some_and(|publication| publication.transport_retry_pending);
     if !due {
         return;
     }
@@ -459,10 +572,37 @@ fn run_user(
                 "indexer ok user={handle} accepted={} rejected={}",
                 receipt.accepted, receipt.rejected
             );
+            // Per-handle dumps carry no runId/captureId/provider profile id
+            // (docs/publication-contract.md): send handle-only.
+            publish::report_after_import(
+                config.publish.as_ref(),
+                engine,
+                registry,
+                &publish::ImportReport {
+                    handle: &handle,
+                    outcome: publish::ImportOutcome::Succeeded,
+                    provider_account_id: None,
+                    run_id: None,
+                    capture_ids: Vec::new(),
+                },
+            );
         }
         Err(error) => {
             registry.mark_error(&handle, &error.to_string(), Some(file_name));
             eprintln!("indexer err user={handle} {error}");
+            let message = error.to_string();
+            publish::report_after_import(
+                config.publish.as_ref(),
+                engine,
+                registry,
+                &publish::ImportReport {
+                    handle: &handle,
+                    outcome: publish::ImportOutcome::Failed(&message),
+                    provider_account_id: None,
+                    run_id: None,
+                    capture_ids: Vec::new(),
+                },
+            );
         }
     }
 }
@@ -534,6 +674,7 @@ mod tests {
             drop_dir: dir.join("drop"),
             state_dir: dir.join("state"),
             poll_interval: Duration::from_secs(1),
+            publish: None,
         };
         std::fs::create_dir_all(&config.drop_dir).expect("drop dir");
         config
@@ -560,6 +701,7 @@ mod tests {
             drop_dir: PathBuf::from("d"),
             state_dir: PathBuf::from("s"),
             poll_interval: Duration::ZERO,
+            publish: None,
         };
         assert!(config.validate().is_err());
     }

@@ -136,6 +136,50 @@ impl UserRecord {
     }
 }
 
+/// Durable per-account publication state sent to Convex's
+/// `POST /publication/update` (`docs/publication-contract.md`).
+///
+/// Keyed by the same normalized handle as `users`/`captures`.
+/// `#[serde(default)]` on every field (and the map itself, on [`Registry`])
+/// so a `users.json` written before this feature existed — no
+/// `publications` key at all — loads unchanged instead of being
+/// quarantined.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicationRecord {
+    /// Generation of the last update actually delivered: an HTTP response,
+    /// of any status, was received for it. Zero means nothing has ever been
+    /// sent for this account. The publication contract requires this to
+    /// increase by exactly one per delivered send and never be reused, so
+    /// it is bumped only when [`Registry::record_publish_delivered`] runs —
+    /// never spent on a send whose request never got a response.
+    #[serde(default)]
+    pub generation: u64,
+    /// `uniquePostCount` from the last successfully applied `searchable`
+    /// send (HTTP 200). Left alone by later `failed` sends or non-200
+    /// responses, mirroring `accountPublications.searchablePostCount`'s own
+    /// non-regression rule on the Convex side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_unique_post_count: Option<u64>,
+    /// `observedAt` (epoch ms) of that same last applied `searchable` send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_published_at_ms: Option<i64>,
+    /// The most recent publish-side problem: a transport failure (no
+    /// response ever received — DNS/connect/TLS/timeout) or a permanent
+    /// rejection (401/422/400) from the last delivered send. Cleared the
+    /// next time a send is delivered with a 200 response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_publish_error: Option<String>,
+    /// Set when the most recent send attempt never received an HTTP
+    /// response, so this account is owed a resend on a later pass. Cleared
+    /// by any delivered response (success or permanent rejection alike).
+    /// Never set for a permanent rejection — those are logged and left
+    /// alone rather than retried, per `AGENTS.md`'s "no self-imposed retry
+    /// spinning".
+    #[serde(default)]
+    pub transport_retry_pending: bool,
+}
+
 /// The registry file: versioned map of handle to record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Registry {
@@ -146,6 +190,11 @@ pub struct Registry {
     /// Imported capture files keyed by their content hash (filename stem).
     #[serde(default)]
     pub captures: HashMap<String, CaptureRecord>,
+    /// Publication state per account handle. Absent from any `users.json`
+    /// written before this feature existed; `#[serde(default)]` loads that
+    /// as an empty map rather than quarantining the file.
+    #[serde(default)]
+    pub publications: HashMap<String, PublicationRecord>,
 }
 
 const fn default_version() -> u8 {
@@ -158,11 +207,12 @@ impl Default for Registry {
             version: 1,
             users: HashMap::new(),
             captures: HashMap::new(),
+            publications: HashMap::new(),
         }
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -265,6 +315,44 @@ impl Registry {
         self.users
             .entry(handle.to_owned())
             .or_insert_with(|| UserRecord::fresh(now_ms()))
+    }
+
+    /// Fetch the publication record for a handle, inserting a fresh
+    /// (never-sent) one.
+    pub fn publication(&mut self, handle: &str) -> &mut PublicationRecord {
+        self.publications.entry(handle.to_owned()).or_default()
+    }
+
+    /// Record a delivered send (any HTTP response, whatever its status) at
+    /// `generation`: advance the watermark and clear the retry flag.
+    /// `applied_searchable` carries `(uniquePostCount, observedAt)` only
+    /// when the delivered response was a successfully applied `searchable`
+    /// update; passing `None` leaves the previous sticky snapshot alone,
+    /// matching the non-regression rule this mirrors from the Convex side.
+    pub fn record_publish_delivered(
+        &mut self,
+        handle: &str,
+        generation: u64,
+        applied_searchable: Option<(u64, i64)>,
+        last_publish_error: Option<String>,
+    ) {
+        let record = self.publication(handle);
+        record.generation = generation;
+        record.transport_retry_pending = false;
+        if let Some((count, observed_at)) = applied_searchable {
+            record.last_unique_post_count = Some(count);
+            record.last_published_at_ms = Some(observed_at);
+        }
+        record.last_publish_error = last_publish_error;
+    }
+
+    /// Record that a send never received an HTTP response. The generation
+    /// watermark is left untouched so the same number is reused on the
+    /// next attempt — nothing was ever delivered at it.
+    pub fn record_publish_transport_failure(&mut self, handle: &str, error: &str) {
+        let record = self.publication(handle);
+        record.transport_retry_pending = true;
+        record.last_publish_error = Some(error.to_owned());
     }
 
     /// Mark a successful import. Zero accepted posts is an error, not a

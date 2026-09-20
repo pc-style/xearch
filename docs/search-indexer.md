@@ -15,9 +15,9 @@ imports only read local dump files.
 | `search-backend` | Traits only: `SearchBackend` (search) and `IndexSink` (upsert+commit)  |
 | `search-tantivy` | The index. mmap Tantivy store, cursors, five sorts                     |
 | `search-ingest`  | Retain-import: archive, quarantine, receipt, idempotent upserts        |
-| `search-indexer` | Drop-dir watcher + per-user retry registry (`users.json`)              |
+| `search-indexer` | Drop-dir watcher, per-user retry registry (`users.json`), publication sender to Convex |
 | `search-api`     | Loopback HTTP: bearer `/search`, HMAC `/ticket-search`, signed cursors |
-| `xearch-search`  | The binary: `import`, `query`, `serve`, `watch`, `users`               |
+| `xearch-search`  | The binary: `import`, `query`, `serve`, `watch`, `users`, `publish`    |
 
 ## Where postings actually live
 
@@ -71,9 +71,21 @@ Every intake account is one record, keyed by normalized handle
       "rejected": 0,
       "updatedAtMs": 1789826880797
     }
+  },
+  "publications": {
+    "hero": {
+      "generation": 3,
+      "lastUniquePostCount": 42,
+      "lastPublishedAtMs": 1789826880797,
+      "transportRetryPending": false
+    }
   }
 }
 ```
+
+`publications` is new (see "Publishing to Convex" below) and absent from any
+`users.json` written before that feature existed; it loads as an empty map
+either way, so an old registry file is never quarantined for lacking it.
 
 Status machine, applied by every pass:
 
@@ -137,6 +149,88 @@ Batch semantics: each capture is imported exactly once per content hash, in
 filename order. Re-dropping an _older_ per-user dump after a newer one is
 last-writer-wins (upserts replace by tweet ID), so re-import the newest file
 if a restore ever moves backwards.
+
+## Publishing to Convex (`/publication/update`)
+
+The indexer can tell the app when an account's posts are actually
+searchable, closing the loop described in `docs/publication-contract.md`.
+This is what makes `accountPublications`, the dashboard's "Indexed
+posts"/"Indexed people", and an account's "waiting for indexing" state ever
+move past zero — before this, nothing called that route at all.
+
+**Disabled by default.** Set both env vars to turn it on; either being
+absent leaves `run_once` behaving exactly as it always has:
+
+| Env var | Meaning |
+| --- | --- |
+| `PUBLICATION_UPDATE_URL` | Full URL of Convex's `POST /publication/update` route. |
+| `PUBLICATION_SERVICE_TOKEN` | Bearer token; falls back to `DATA_SERVICE_TOKEN` if unset (same convention as `convex/publication.ts`). |
+
+When enabled, every import attempt (per-user dump or capture batch) is
+followed by one publish attempt for that handle:
+
+- **On success**, `search_tantivy::Engine::count_author` is reloaded and
+  counted fresh — the live, deduplicated document count for that author —
+  and sent as `reportedState: "searchable"` with `uniquePostCount` and
+  `uniquePostCountAsOf`. This is the only count used; the registry's own
+  `accepted`/`rejected` fields (per-last-import-only, not deduplicated) are
+  never sent, per `docs/publication-contract.md` "What unique means".
+- **On failure**, `reportedState: "failed"` is sent with the import's
+  verbatim error message and no count at all — never a guessed or stale
+  number.
+- A capture batch also carries `captureIds: [<sha>]`, and `providerAccountId`
+  / `runId` when the capture's own payload carries a `profile` record or a
+  post's `author.id`, and a top-level `runId`, respectively (extending the
+  existing capture-handle walker rather than adding a second one). A
+  per-handle `<handle>.json` dump has none of these — the contract's own
+  words are "no runId/captureId/profile id; send handle-only" — so it sends
+  only `handle`.
+- A publish problem of any kind — transport failure or an outright
+  rejection — is only ever logged and recorded in `publications.<handle>`;
+  it never fails or rolls back the import. The posts are already in the
+  index; publication is just reporting that fact.
+- `generation` is a durable, monotonically increasing per-account counter
+  (`publications.<handle>.generation` in `users.json`) that only advances
+  when an HTTP response — of any status — was actually received. A
+  transport failure (no response at all) leaves it untouched and sets
+  `transportRetryPending: true`, so the same account is retried on a later
+  poll pass without waiting for new bytes to show up in the drop directory.
+  A permanent rejection (401/422/400) still advances the generation (a
+  request *was* delivered) but is not retried automatically — that would
+  spin on identical content, which `AGENTS.md` rules out.
+
+**Transport and verification.** Delivery goes over
+[`ureq`](https://docs.rs/ureq) with its `rustls` TLS backend
+(`search/Cargo.toml`'s `ureq = { features = ["rustls"] }`), so both
+`http://` (this crate's own loopback tests,
+`search/crates/indexer/tests/publication.rs` and
+`search/crates/indexer/src/publish/transport.rs`) and `https://` work. This
+has been confirmed end to end against the real production deployment's
+HTTP-actions host — **`https://utmost-kudu-321.convex.site`, not
+`.convex.cloud`** — through this exact sender code, sending only a
+deliberately nonexistent handle so nothing could ever apply:
+
+- Correct token, nonexistent handle → HTTP 422
+  `{"outcome":"rejected_invalid","rejectionReason":"No known account
+  matches this update's providerAccountId/handle."}`
+- Deliberately wrong bearer token, same handle → HTTP 401
+  `{"outcome":"rejected_unauthorized"}`
+
+That proves TLS, auth, envelope shape, routing, and the receiver's own
+contract logic all work over the real network path, with zero state
+mutated (no account was ever resolved, so nothing was written to
+`accountPublications`). See this repository's task history for the exact
+probe; no token or other secret is written anywhere in this repository or
+logged by this sender.
+
+Inspect or replay this by hand:
+
+```sh
+# See generation/count/error per account alongside the usual ingestion state
+xearch-search --base-dir "$BASE" users list
+# Republish one handle's current live count without reimporting anything
+xearch-search --base-dir "$BASE" publish <handle>
+```
 
 ## Index corruption recovery
 
@@ -215,7 +309,8 @@ whole configuration.
 | `query <q> [--sort …] [--stats]`                       | prints version-1 response JSON; `--stats` adds timings    |
 | `serve [--listen 127.0.0.1:4320]`                      | needs `SEARCH_LOCAL_SIGNING_KEY` + `SEARCH_SERVICE_TOKEN` |
 | `watch [--archive --drop-dir --state-dir --poll-secs]` | background indexer; resolves and logs its dirs at startup |
-| `users list [--status …]` / `users mark …`             | registry ops                                              |
+| `users list [--status …]` / `users mark …`             | registry ops; `list` now also shows each account's publication state |
+| `publish <handle>`                                     | republish one handle's current live count by hand; needs `PUBLICATION_UPDATE_URL` + `PUBLICATION_SERVICE_TOKEN`/`DATA_SERVICE_TOKEN` |
 
 ## Serving the app contract
 
