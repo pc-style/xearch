@@ -19,31 +19,36 @@ export const configured = query({
           .withIndex("by_name", (q) => q.eq("name", "desktop"))
           .unique()
       : null;
-    // `saving` answers two different questions depending on the mode, and
-    // the answer means different things to a person: in receiver mode it is
-    // whether an env var is set (configuration), in outbound mode it is
-    // whether the download worker recently checked in (liveness). Returning
-    // one bare boolean forced every consumer to remember that, and the UI
-    // ended up labelling a configuration fact "Connected".
-    const saving = outbound
-      ? !!worker?.online && Date.now() - worker.lastSeen < 45_000
-      : !!process.env.RAW_CAPTURE_URL;
+    // No wall clock in here. A Convex query re-runs when a document it read
+    // changes, never because time passed, so `Date.now() - lastSeen < 45s`
+    // decided in this handler froze at the last write: a worker that stopped
+    // heartbeating kept reading as live, and the UI kept offering imports it
+    // could not run. `worker.online` is expiry-driven instead —
+    // convex/worker.ts schedules `expire` 45s after every heartbeat, and
+    // that write is what re-runs this query. Liveness now decays through the
+    // database rather than through a clock nobody is watching.
+    //
+    // `saving` still answers two different questions by mode: in receiver
+    // mode whether an env var is set (configuration), in outbound mode
+    // whether the worker is up (liveness). The discriminant below travels
+    // with the value so a consumer cannot mistake one for the other.
+    const saving = outbound ? !!worker?.online : !!process.env.RAW_CAPTURE_URL;
+    // `lastSeenAt` is worker infrastructure timing, and this query is part
+    // of the public bootstrap — it must stay callable before a session
+    // exists. Signed-out callers get the same configuration flags they
+    // always got and nothing more; the timestamp is disclosed only to a
+    // caller who has actually signed in.
+    const signedIn = (await ctx.auth.getUserIdentity()) !== null;
     return {
       xmd: !!process.env.X_MD_API_KEY,
       indexing: !!process.env.X_MD_API_KEY && saving,
       search: !!process.env.SEARCH_API_URL,
       handoff: saving,
-      // The discriminant travels with the value so a consumer cannot mistake
-      // one for the other. The live case deliberately reports `lastSeenAt`
-      // rather than a pre-judged boolean: a Convex query re-runs when a
-      // document it read changes, never because time passed, so freshness
-      // computed in here freezes at the last write. If the worker stops
-      // heartbeating, a `true` decided server-side would stay `true` until
-      // something else touched the row. The client owns its own clock and
-      // decides. (`handoff` above has the same weakness and predates this;
-      // it is left alone rather than changed underneath its callers.)
       handoffState: outbound
-        ? { kind: "live" as const, lastSeenAt: worker?.online ? worker.lastSeen : null }
+        ? {
+            kind: "live" as const,
+            lastSeenAt: signedIn && worker?.online ? worker.lastSeen : undefined,
+          }
         : { kind: "configured" as const, ok: saving },
       collectorMode: outbound ? ("outbound" as const) : ("receiver" as const),
       firecrawl: !!process.env.FIRECRAWL_API_KEY,

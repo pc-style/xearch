@@ -57,11 +57,22 @@ export const WORKER_LIVE_WINDOW_MS = 45_000;
 
 export type HandoffState =
   | { kind: "configured"; ok: boolean }
-  | { kind: "live"; lastSeenAt: number | null };
+  /**
+   * `lastSeenAt` is absent for a signed-out caller — worker timing is not
+   * part of the public bootstrap response — and null when the worker is
+   * known to be down. Absent means "not disclosed", which is not the same
+   * claim as "down", so it resolves to undefined and the caller falls back
+   * to the public flag rather than asserting something it was not told.
+   */
+  | { kind: "live"; lastSeenAt?: number | null };
 
-/** Whether the capture handoff is currently usable, as of `now`. */
+/**
+ * Whether the capture handoff is currently usable, as of `now`.
+ * `undefined` means "not knowable from what we were given" — never "no".
+ */
 export function handoffReady(state: HandoffState | undefined, now: number): boolean | undefined {
   if (!state) return undefined;
   if (state.kind === "configured") return state.ok;
+  if (state.lastSeenAt === undefined) return undefined;
   return state.lastSeenAt !== null && now - state.lastSeenAt < WORKER_LIVE_WINDOW_MS;
 }

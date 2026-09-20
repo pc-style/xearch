@@ -31,6 +31,12 @@ const applyUpdate = anyApi.publication.applyUpdate as unknown as FunctionReferen
   },
   { outcome: string; rejectionReason?: string }
 >;
+const libraryHistory = anyApi.library.history as unknown as FunctionReference<
+  "query",
+  "public",
+  { accountId: Id<"accounts"> },
+  { jobId: Id<"jobs">; dismissedAt?: number }[]
+>;
 const libraryRows = anyApi.library.rows as unknown as FunctionReference<
   "query",
   "public",
@@ -209,6 +215,46 @@ describe("bounded reads never pass as complete data", () => {
 
     const capped = await a.query(libraryRows, {});
     expect(capped.truncated).toBe(true);
+  });
+});
+
+describe("an owner is never refused their own account", () => {
+  it("serves history for an account older than the bounded library page", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "oldest", userId: "9001", name: "Oldest" }),
+    );
+    // The account's own run goes in FIRST, so 600 newer imports push it well
+    // outside the 500-job page the library lists.
+    const ownRun = await job(t, alice, {
+      input: "oldest",
+      kind: "bulk",
+      expectedUserId: "9001",
+      status: "failed",
+    });
+    for (let i = 0; i < 600; i++)
+      await job(t, alice, { input: `later${i}`, kind: "bulk", expectedUserId: `${i}` });
+
+    // It is genuinely outside the page the library returns...
+    const library = await a.query(libraryRows, {});
+    expect(library.truncated).toBe(true);
+    expect(library.rows.some((row) => String(row.accountId) === String(accountId))).toBe(false);
+
+    // ...but it is still the owner's account, so its history must open.
+    const runs = await a.query(libraryHistory, { accountId });
+    expect(runs).toHaveLength(1);
+    expect(String(runs[0].jobId)).toBe(String(ownRun));
+  });
+
+  it("still refuses an account that is not the caller's", async () => {
+    const { t, alice } = await setup();
+    const bob = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const b = t.withIdentity({ subject: `${bob}|session` });
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "alices", userId: "4242", name: "Alice's" }),
+    );
+    await job(t, alice, { input: "alices", kind: "bulk", expectedUserId: "4242" });
+    await expect(b.query(libraryHistory, { accountId })).rejects.toThrow("Account not found.");
   });
 });
 

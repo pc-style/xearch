@@ -32,6 +32,15 @@ describe("download-worker liveness is judged client-side", () => {
     expect(handoffReady({ kind: "live", lastSeenAt: null }, now)).toBe(false);
   });
 
+  it("does not claim the worker is down when the timestamp was simply not disclosed", () => {
+    // Signed-out callers are not given worker timing — it is infrastructure
+    // detail on a public bootstrap response. Absent must read as "cannot
+    // say", never as "down", so the caller falls back to the public flag
+    // rather than asserting something it was never told.
+    expect(handoffReady({ kind: "live" }, now)).toBeUndefined();
+    expect(handoffReady({ kind: "live", lastSeenAt: undefined }, now)).toBeUndefined();
+  });
+
   it("passes a configuration fact straight through, with no clock involved", () => {
     expect(handoffReady({ kind: "configured", ok: true }, now)).toBe(true);
     expect(handoffReady({ kind: "configured", ok: false }, now)).toBe(false);

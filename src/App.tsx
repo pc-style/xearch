@@ -538,7 +538,13 @@ export default function App() {
       env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
       purpose: "Finds posts in your library",
     },
-    receiverConnection(configured?.collectorMode, handoffReady(configured?.handoffState, now)),
+    // Falls back to the public flag when the timestamp was not disclosed
+    // (signed out), so a visitor sees exactly what they saw before worker
+    // timing was ever returned, rather than a permanent "Checking…".
+    receiverConnection(
+      configured?.collectorMode,
+      handoffReady(configured?.handoffState, now) ?? configured?.handoff,
+    ),
     {
       name: "x.md",
       ready: configured?.xmd,

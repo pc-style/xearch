@@ -5,7 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
 import { publicationStateValidator, jobStatusValidator } from "./schema";
 import { accountLibraryRowValidator, type AccountLibraryRow, type NextAction } from "./lib/contracts";
-import { ownedAccountJobs, resolveJobAccount } from "./lib/accounts";
+import { ownedAccountJobs, ownerJobsForAccount, resolveJobAccount } from "./lib/accounts";
 
 /**
  * The account-library query that replaces the job wall (to-do.md P0
@@ -178,16 +178,15 @@ export const history = query({
   returns: v.array(historyRunValidator),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    // Truncation is irrelevant here: this query answers about ONE account the
-    // caller named. If that account fell outside the bounded page, the lookup
-    // below simply does not find it and reports "not found", which is the
-    // same answer as any other account that is not theirs.
-    const { byAccount } = await groupOwnedJobsByAccount(ctx, owner);
-    const bucket = byAccount.get(args.accountId);
+    // A targeted ownership lookup, NOT the bounded library page. Deriving
+    // this from the page meant an owner with more imports than it holds was
+    // told "not found" for an account they genuinely own, and lost both its
+    // run history and the evidence behind a dismissed run.
+    const jobs = await ownerJobsForAccount(ctx.db, owner, args.accountId, MAX_HISTORY_JOBS);
     // Same "not found" message whether the account does not exist or simply
     // is not this owner's — never confirm another user's account exists.
-    if (!bucket || bucket.jobs.length === 0) throw new ConvexError("Account not found.");
-    const sorted = [...bucket.jobs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_HISTORY_JOBS);
+    if (jobs.length === 0) throw new ConvexError("Account not found.");
+    const sorted = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt);
     const out: Infer<typeof historyRunValidator>[] = [];
     for (const job of sorted) {
       const receipts = await ctx.db

@@ -124,3 +124,41 @@ export async function ownedAccountJobs(
   const truncated = scanned.length > MAX_OWNED_ACCOUNT_JOBS;
   return { jobs: truncated ? scanned.slice(0, MAX_OWNED_ACCOUNT_JOBS) : scanned, truncated };
 }
+
+// How far a targeted lookup will walk an owner's account imports to decide
+// whether one specific account is theirs. Much larger than the page the
+// library lists, because this answers a yes/no ownership question about one
+// named account rather than building a list — and an owner must not be
+// refused their own account's history merely for having imported a lot.
+const MAX_OWNERSHIP_SCAN = 20_000;
+
+/**
+ * Every job this owner ran for ONE account, newest first.
+ *
+ * Deliberately not derived from the bounded library page: an owner with more
+ * imports than that page holds would be told "not found" for an account they
+ * genuinely own, losing its run history and its dismissal evidence. Streams
+ * the owner's account jobs and keeps only the ones resolving to this
+ * account, stopping as soon as it has enough to answer with.
+ */
+export async function ownerJobsForAccount(
+  db: Db,
+  owner: Id<"users">,
+  accountId: Id<"accounts">,
+  limit: number,
+): Promise<Doc<"jobs">[]> {
+  const cache = new Map<string, Doc<"accounts"> | null>();
+  const out: Doc<"jobs">[] = [];
+  let scanned = 0;
+  for await (const job of db
+    .query("jobs")
+    .withIndex("by_owner_and_kind", (q) => q.eq("owner", owner).eq("kind", ACCOUNT_JOB_KIND))
+    .order("desc")) {
+    if (++scanned > MAX_OWNERSHIP_SCAN) break;
+    const account = await resolveJobAccount(db, job, cache);
+    if (account?._id !== accountId) continue;
+    out.push(job);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
