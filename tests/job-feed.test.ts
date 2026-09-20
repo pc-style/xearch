@@ -5,7 +5,7 @@ import type { FunctionReference } from "convex/server";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
-import type { DashboardSummary } from "../convex/lib/contracts";
+import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contracts";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -14,6 +14,18 @@ const summaryQuery = anyApi.summary.summary as unknown as FunctionReference<
   "public",
   { now: number },
   DashboardSummary
+>;
+const libraryRows = anyApi.library.rows as unknown as FunctionReference<
+  "query",
+  "public",
+  Record<string, never>,
+  AccountLibraryRow[]
+>;
+const libraryHistory = anyApi.library.history as unknown as FunctionReference<
+  "query",
+  "public",
+  { accountId: Id<"accounts"> },
+  { jobId: Id<"jobs">; dismissedAt?: number }[]
 >;
 
 async function setup() {
@@ -131,6 +143,55 @@ describe("clearing finished runs", () => {
     // The retryable counter, which is about work to do rather than data on
     // disk, does drop.
     expect(after.queue.failedRetryable).toEqual({ kind: "known", unit: "jobs", value: 0 });
+  });
+});
+
+describe("an account whose every run was cleared", () => {
+  it("keeps its library row and its published counts, and simply reports no latest run", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "someone", userId: "77", name: "Someone" }),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("accountPublications", {
+        accountId,
+        state: "searchable",
+        committedGeneration: 4,
+        searchablePostCount: 950,
+        updatedAt: Date.now(),
+      }),
+    );
+    const job = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner: alice,
+        kind: "bulk",
+        input: "someone",
+        expectedUserId: "77",
+        refresh: false,
+        status: "failed",
+        count: 0,
+        attempt: 1,
+        warnings: [],
+        updatedAt: Date.now(),
+      }),
+    );
+
+    await a.mutation(api.jobs.dismiss, { jobId: job });
+
+    const library = await a.query(libraryRows, {});
+    expect(library).toHaveLength(1);
+    expect(library[0].handle).toBe("someone");
+    // Clearing the failed run must not erase what is actually searchable.
+    expect(library[0].publicationState).toBe("searchable");
+    expect(library[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 950 });
+    // ...but the row stops advertising the run that was cleared.
+    expect(library[0].latestJob).toBeUndefined();
+    expect(library[0].nextAction).toEqual({ kind: "none" });
+
+    // The history trail still has it, flagged, so it can be brought back.
+    const runs = await a.query(libraryHistory, { accountId });
+    expect(runs).toHaveLength(1);
+    expect(runs[0].dismissedAt).toBeTypeOf("number");
   });
 });
 
