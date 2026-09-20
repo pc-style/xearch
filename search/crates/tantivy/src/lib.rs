@@ -105,6 +105,16 @@ impl Engine {
         self.index.schema().get_field(name).map_err(storage)
     }
 
+    /// Live document count, reloaded from disk. Used to detect a registry
+    /// that believes it is complete while the index is actually empty.
+    ///
+    /// # Errors
+    /// Returns storage errors when the index cannot be read.
+    pub fn num_docs(&self) -> Result<u64> {
+        self.reader.reload().map_err(storage)?;
+        Ok(self.reader.searcher().num_docs())
+    }
+
     fn compile(&self, expression: &Expr) -> Result<Box<dyn Query>> {
         match expression {
             Expr::Term(text) | Expr::Phrase(text) => {
@@ -271,17 +281,18 @@ impl SearchBackend for Engine {
             (0, now)
         };
         let query = self.compile(expression)?;
-        let collector = TopDocs::with_limit(request.limit.saturating_add(1))
+        let page_limit = request.limit.min(MAX_WINDOW.saturating_sub(offset));
+        let collector = TopDocs::with_limit(page_limit.saturating_add(1))
             .and_offset(offset)
             .order_by(scoring::Ranking {
                 sort: request.sort,
                 now,
             });
         let hits = searcher.search(&query, &collector).map_err(storage)?;
-        let more = hits.len() > request.limit;
+        let more = hits.len() > page_limit;
         let rows = hits
             .into_iter()
-            .take(request.limit)
+            .take(page_limit)
             .map(|(_, address)| {
                 let document = searcher.doc::<TantivyDocument>(address).map_err(storage)?;
                 let raw = document

@@ -1,0 +1,52 @@
+# Xearch background search indexer (Rust drop-dir watcher).
+#
+# How it works:
+#   The Rust binary `xearch-search watch` polls $SEARCH_DROP_DIR for
+#   <handle>.json dumps or <sha256>.json capture batches and imports each
+#   due input into the
+#   Tantivy index under $SEARCH_BASE_DIR/index, keeping a per-user
+#   complete/incomplete/error registry in $SEARCH_BASE_DIR/state/users.json.
+#   Imports are content-addressed and replays are idempotent, so restarts
+#   and crashes are safe by construction.
+#
+# This unit is portable: it contains no checkout path. Install the binary
+# to the standard user bin, then install the unit:
+#
+#   scripts/search-index-ctl.sh install          # builds release + ~/.local/bin
+#   cp deploy/systemd/xearch-search-indexer.service ~/.config/systemd/user/
+#   BASE="${SEARCH_BASE_DIR:-$HOME/xearch-search}"
+#   mkdir -p "$BASE"/{index,archive,drop,state}
+#   systemctl --user daemon-reload
+#
+# Data root defaults to ~/xearch-search; override with
+# `systemctl --user edit xearch-search-indexer.service` (set
+# SEARCH_BASE_DIR) or by editing Environment below.
+#
+# Do NOT enable/start without approval from the operator of the machine.
+#
+# Status and control (prefer scripts/search-index-ctl.sh):
+#   systemctl --user status xearch-search-indexer.service
+#   journalctl --user -fu xearch-search-indexer.service
+#   xearch-search --base-dir "$SEARCH_BASE_DIR" users list
+#
+# systemd expands ${VAR} in arguments but not in the ExecStart executable
+# position, so the executable uses the %h specifier below.
+[Unit]
+Description=Xearch background search indexer (Rust drop-dir watcher)
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+Environment=SEARCH_BASE_DIR=%h/xearch-search
+ExecStart=%h/.local/bin/xearch-search --base-dir ${SEARCH_BASE_DIR} watch
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

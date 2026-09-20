@@ -1329,6 +1329,7 @@ dependencies = [
  "hmac",
  "jiff",
  "search-backend",
+ "search-ingest",
  "search-model",
  "search-query",
  "search-tantivy",
@@ -1346,6 +1347,22 @@ version = "0.1.0"
 dependencies = [
  "search-model",
  "search-query",
+]
+
+[[package]]
+name = "search-indexer"
+version = "0.1.0"
+dependencies = [
+ "search-ingest",
+ "search-model",
+ "search-query",
+ "search-tantivy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2094,6 +2111,7 @@ dependencies = [
  "jiff",
  "search-api",
  "search-backend",
+ "search-indexer",
  "search-ingest",
  "search-model",
  "search-query",

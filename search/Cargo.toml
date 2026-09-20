@@ -18,6 +18,7 @@ search-ranking = { path = "crates/ranking" }
 search-backend = { path = "crates/backend" }
 search-tantivy = { path = "crates/tantivy" }
 search-ingest = { path = "crates/ingest" }
+search-indexer = { path = "crates/indexer" }
 search-api = { path = "crates/api" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }

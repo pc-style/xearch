@@ -14,7 +14,8 @@ use std::{
     path::Path,
 };
 
-const MAX_INPUT: u64 = 64 * 1024 * 1024;
+/// Hard cap on one import's input bytes.
+pub const MAX_INPUT: u64 = 64 * 1024 * 1024;
 
 fn storage(error: impl fmt::Display) -> Error {
     Error::Storage(error.to_string())
@@ -28,13 +29,14 @@ pub struct Receipt {
 }
 
 /// Retain and import a dump envelope or an existing x.md capture envelope.
+///
 /// A crash before the receipt is safe to replay; source IDs are idempotent.
+/// The sink is consumed: on any failure the staged (uncommitted) writer is
+/// dropped here, so a poisoned writer can never be committed by a caller.
 ///
 /// # Errors
 /// Returns I/O, malformed envelope or sink errors. No receipt is written on failure.
-/// If import fails before `sink.commit()`, the sink can hold uncommitted upserts
-/// from this run. The caller must discard the sink and must not reuse or commit it.
-pub fn import(input: &Path, archive: &Path, sink: &mut dyn IndexSink) -> Result<Receipt> {
+pub fn import(input: &Path, archive: &Path, mut sink: impl IndexSink) -> Result<Receipt> {
     std::fs::create_dir_all(archive).map_err(storage)?;
     let mut source = File::open(input)
         .map_err(storage)?
@@ -71,7 +73,7 @@ pub fn import(input: &Path, archive: &Path, sink: &mut dyn IndexSink) -> Result<
         rejected: 0,
     };
     let mut context = Context {
-        sink,
+        sink: &mut sink,
         receipt: &mut receipt,
         quarantine: &mut quarantine,
         failure: None,
@@ -214,7 +216,10 @@ impl<'de> Visitor<'de> for Records<'_, '_> {
                 let payload = value
                     .get("payload")
                     .ok_or_else(|| serde::de::Error::custom("Missing capture payload"))?;
-                if payload.get("posts").is_some() {
+                // Only descend into a posts envelope when the field is a
+                // real array; a malformed capture record must quarantine
+                // rather than abort the whole import behind it.
+                if payload.get("posts").is_some_and(Value::is_array) {
                     Envelope(self.context)
                         .deserialize(payload)
                         .map_err(serde::de::Error::custom)?;
@@ -290,8 +295,13 @@ pub fn normalize(value: &Value) -> Result<Post> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|v| v.get("expanded_url").or_else(|| v.get("url")))
-        .filter_map(Value::as_str)
+        .filter_map(|v| {
+            // Key off a usable https string, not key presence: a null
+            // expanded_url must not shadow a valid url facet.
+            ["expanded_url", "url"]
+                .iter()
+                .find_map(|key| v.get(*key).and_then(Value::as_str))
+        })
         .filter(|s| s.starts_with("https://"))
         .map(str::to_owned)
         .collect();
@@ -303,7 +313,10 @@ pub fn normalize(value: &Value) -> Result<Post> {
         text,
         created_at,
         likes: count("likes")?,
-        reposts: count("reposts")?.or(count("retweets")?),
+        reposts: match count("reposts")? {
+            Some(n) => Some(n),
+            None => count("retweets")?,
+        },
         replies: count("replies")?,
         quotes: count("quotes")?,
         links,

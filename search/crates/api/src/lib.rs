@@ -113,6 +113,13 @@ pub fn router(
         }))
 }
 
+/// Domain-separation purposes. Cursors are signed so a client cannot forge
+/// a deep `offset` (bypassing pagination) or reset the TTL through `now`.
+const TICKET_PURPOSE: &str = "xearch-ticket-v1";
+const RECEIPT_PURPOSE: &str = "xearch-receipt-v1";
+const CURSOR_PURPOSE: &str = "xearch-cursor-v1";
+const BEARER_PURPOSE: &str = "bearer";
+
 fn unauthorized() -> HttpError {
     (
         StatusCode::UNAUTHORIZED,
@@ -134,8 +141,15 @@ fn map_error(error: Error) -> HttpError {
     }
 }
 
-async fn run(app: &App, request: SearchRequest) -> Result<SearchResponse, HttpError> {
+async fn run(app: &App, mut request: SearchRequest) -> Result<SearchResponse, HttpError> {
     request.validate().map_err(map_error)?;
+    // Cursors cross the wire HMAC-signed; verify before the engine sees them.
+    if let Some(outer) = request.cursor.take() {
+        let signed: Signed = serde_json::from_str(outer.as_str())
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid cursor signature.".into()))?;
+        verify(&signed, CURSOR_PURPOSE, &app.key)?;
+        request.cursor = Some(signed.payload);
+    }
     let expression =
         search_query::parse(&request.query, request.author.as_deref()).map_err(map_error)?;
     let permit = Arc::clone(&app.permits).try_acquire_owned().map_err(|_| {
@@ -181,6 +195,17 @@ async fn run(app: &App, request: SearchRequest) -> Result<SearchResponse, HttpEr
             .warnings
             .push("Some display fields were truncated; the full text remains indexed.".into());
     }
+    // Re-sign any continuing cursor so page depth stays server-controlled.
+    if let Some(cursor) = response.next_cursor.take() {
+        let signed = sign(cursor, CURSOR_PURPOSE, &app.key).map_err(map_error)?;
+        let encoded = serde_json::to_string(&signed).map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Cursor encoding failed.".into(),
+            )
+        })?;
+        response.next_cursor = Some(encoded);
+    }
     Ok(response)
 }
 
@@ -207,9 +232,9 @@ async fn search(
         .and_then(|s| s.strip_prefix("Bearer "))
         .ok_or_else(unauthorized)?;
     // Compare fixed-length MACs instead of a timing-sensitive string comparison.
-    let mut expected = mac("bearer", &app.key).map_err(map_error)?;
+    let mut expected = mac(BEARER_PURPOSE, &app.key).map_err(map_error)?;
     expected.update(&app.bearer);
-    let mut actual = mac("bearer", &app.key).map_err(map_error)?;
+    let mut actual = mac(BEARER_PURPOSE, &app.key).map_err(map_error)?;
     actual.update(token.as_bytes());
     expected
         .verify_slice(&actual.finalize().into_bytes())
@@ -221,7 +246,7 @@ async fn ticket_search(
     State(app): State<App>,
     Json(signed): Json<Signed>,
 ) -> Result<Json<Signed>, HttpError> {
-    verify(&signed, "xearch-ticket-v1", &app.key)?;
+    verify(&signed, TICKET_PURPOSE, &app.key)?;
     let ticket: Ticket = serde_json::from_str(&signed.payload).map_err(|_| unauthorized())?;
     let now = jiff::Timestamp::now().as_millisecond();
     if ticket.expires_at <= now || ticket.expires_at > now.saturating_add(60_000) {
@@ -240,7 +265,7 @@ async fn ticket_search(
             "Result encoding failed.".into(),
         )
     })?;
-    sign(payload, "xearch-receipt-v1", &app.key)
+    sign(payload, RECEIPT_PURPOSE, &app.key)
         .map(Json)
         .map_err(map_error)
 }
