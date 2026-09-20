@@ -1,0 +1,20 @@
+{
+  "name": "Xearch",
+  "install": "bash scripts/cloud-agent/install.sh",
+  "terminals": [
+    {
+      "name": "convex-backend",
+      "description": "Local isolated (anonymous) Convex backend for application state and integrations.",
+      "command": "export BUN_INSTALL=\"$HOME/.bun\"; export PATH=\"$BUN_INSTALL/bin:$PATH\"; CONVEX_AGENT_MODE=anonymous bun run backend"
+    },
+    {
+      "name": "web",
+      "description": "Vite dev server for the React frontend on http://localhost:5173.",
+      "command": "export BUN_INSTALL=\"$HOME/.bun\"; export PATH=\"$BUN_INSTALL/bin:$PATH\"; bun run dev"
+    }
+  ],
+  "ports": [
+    { "name": "web", "port": 5173 },
+    { "name": "convex", "port": 3210 }
+  ]
+}
