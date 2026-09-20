@@ -169,7 +169,7 @@ impl Engine {
     pub fn count_author(&self, author: &str) -> Result<u64> {
         self.reader.reload().map_err(storage)?;
         let normalized = search_query::normalize_author(author)?;
-        let term = Term::from_field_text(self.field("author")?, &normalized);
+        let term = Term::from_field_text(self.fields.author, &normalized);
         let query = TermQuery::new(term, IndexRecordOption::Basic);
         let count = self
             .reader
