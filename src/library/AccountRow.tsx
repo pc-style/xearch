@@ -7,13 +7,13 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { describeError } from "../errors";
 import { acquisitionStatusLabel, describeRunOutcome } from "../jobText";
 import {
-  Badge,
   PUBLICATION_STATE_META,
   acquisitionStatusTone,
   countWithUnit,
   formatRelative,
   isStalledRun,
 } from "./format";
+import { Badge } from "./format.tsx";
 
 /**
  * One account library row: identity, the four states the "dashboard"

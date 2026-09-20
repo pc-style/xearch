@@ -5,7 +5,8 @@ import type { AccountLibraryRow } from "../../convex/lib/contracts";
 import type { Id } from "../../convex/_generated/dataModel";
 import { acquisitionStatusLabel } from "../jobText";
 import { describeError } from "../errors";
-import { Badge, acquisitionStatusTone, formatRelative, isStalledRun } from "./format";
+import { acquisitionStatusTone, formatRelative, isStalledRun } from "./format";
+import { Badge } from "./format.tsx";
 
 /**
  * The compact "what's downloading right now" strip. Built only from

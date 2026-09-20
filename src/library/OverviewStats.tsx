@@ -2,7 +2,8 @@ import type { DashboardSummary } from "../../convex/lib/contracts";
 import type { ServiceStatus } from "../../convex/summary";
 import type { ProviderLimit } from "../../convex/limits";
 import { SERVICE_DISPLAY_NAME, serviceHealthLabel } from "../integrationStatus";
-import { Badge, countValue, countWithUnit, formatRelative } from "./format";
+import { countValue, countWithUnit, formatRelative } from "./format";
+import { Badge } from "./format.tsx";
 import ProviderLimits from "./ProviderLimits";
 
 /**
