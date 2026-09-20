@@ -15,15 +15,41 @@ export function jobLabel(job: Doc<"jobs">) {
     failed: "Failed",
   }[job.status];
 }
+/**
+ * A stopped (failed/partial/cancelled) run's own summary line — shared by
+ * both branches of `jobSummary` below so a stopped bulk job and a stopped
+ * non-bulk job are described the same honest way, never with a leftover
+ * in-progress phase. `cancel()` (convex/jobs.ts) writes a deliberate,
+ * accurate final `phase` message when it stops a job, so that one case is
+ * safe to show as-is; `finish()`/`expire()` never update `phase` on
+ * failure, so for "failed"/"partial" it stays whatever in-progress step
+ * ("Saving raw capture", etc.) was last reported before the stop — never
+ * safe to show as if it explained the outcome (to-do.md P0 "Do not leave
+ * failed jobs showing only 'Saving raw capture.'"). `job.error` (rendered
+ * separately by every caller of `jobSummary`) already carries the failure
+ * reason, so this only needs to add the retained-progress half of that
+ * to-do.md bullet.
+ */
+function stoppedRunSummary(job: Doc<"jobs">): string {
+  if (job.status === "cancelled") return job.phase ?? "Stopped by request.";
+  return job.count > 0
+    ? `${job.count.toLocaleString()} record${job.count === 1 ? "" : "s"} retained before this run stopped.`
+    : "Nothing was retained before this run stopped.";
+}
 export function jobSummary(job: Doc<"jobs">) {
   if (job.kind === "bulk") {
     if (job.postsReceived !== undefined)
       return `${job.postsReceived.toLocaleString()} posts received${job.pages ? ` across ${job.pages} ${job.pages === 1 ? "batch" : "batches"}` : ""}`;
-    return job.status === "complete"
-      ? "This older import saved a batch of posts. Its post count wasn't tracked."
-      : "Waiting for the next batch of posts";
+    if (job.status === "complete")
+      return "This older import saved a batch of posts. Its post count wasn't tracked.";
+    if (job.status === "failed" || job.status === "partial" || job.status === "cancelled")
+      return stoppedRunSummary(job);
+    return "Waiting for the next batch of posts";
   }
-  return job.status === "complete" ? "Response saved" : (job.phase ?? "Waiting to start");
+  if (job.status === "complete") return "Response saved";
+  if (job.status === "failed" || job.status === "partial" || job.status === "cancelled")
+    return stoppedRunSummary(job);
+  return job.phase ?? "Waiting to start";
 }
 export function jobWarnings(job: Doc<"jobs">) {
   return job.warnings.filter(

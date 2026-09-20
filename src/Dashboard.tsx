@@ -42,7 +42,17 @@ function Job({ job }: { job: Doc<"jobs"> }) {
                 // pipeline is covered per-account in the account library above,
                 // which is the only place search-publication state is reported.
                 "Saved. This isn't an account import, so it doesn't appear in your account library."
-          : (job.phase ?? "Waiting to start")}
+          : job.status === "queued" || job.status === "running"
+            ? (job.phase ?? "Waiting to start")
+            : job.status === "cancelled"
+              ? (job.phase ?? "Stopped by request.")
+              : // "failed" / "partial": never the leftover in-progress phase
+                // (e.g. "Saving raw capture") here — see jobText.ts
+                // stoppedRunSummary, which jobSummary above already uses for
+                // the retained-progress line; the actual failure reason is
+                // in job.error below. to-do.md P0 "Do not leave failed jobs
+                // showing only 'Saving raw capture.'"
+                "This run did not finish."}
       </p>
       <small>
         Updated {new Date(job.updatedAt).toLocaleString()}
