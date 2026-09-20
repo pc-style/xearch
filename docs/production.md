@@ -25,11 +25,17 @@ CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx @convex-dev/static-hosting upload --
 
 AgentMail delivery events for the configured sender inbox are registered at `https://utmost-kudu-321.convex.site/agentmail/webhook`. The inbox-scoped API succeeded; the organization-level create route rejected the key. `AGENTMAIL_WEBHOOK_SECRET` is configured in production. Incoming email processing is not registered. No email was sent during setup.
 
-Production imports use an outbound worker. At the September 20 integration check the VM worker, capture receiver, search API, continuous indexer, and nginx were running. Do not start a second worker or restart the active worker as routine verification. Follow the coordinated cutover steps below for any future worker move. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata and receipts return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. Each poll also forwards what the worker just observed about the loopback capture receiver, which is the only thing that ever sees it (see "Service health" below). `scripts/setup-worker.mjs` configures its production credential without printing it.
+Production imports use an outbound worker. At the September 20 integration check the VM worker, capture receiver, search API, continuous indexer, and nginx were running. Do not start a second worker or restart the active worker as routine verification. Follow the coordinated cutover steps below for any future worker move. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata, receipts, and provider-throttle observations return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. Each poll also forwards what the worker just observed about the loopback capture receiver, which is the only thing that ever sees it (see "Service health" below). `scripts/setup-worker.mjs` configures its production credential without printing it.
+
+`COLLECTOR_MODE=outbound` means Convex never talks to x.md or the capture receiver: `convex/importer.ts` returns before reading `RAW_CAPTURE_URL`/`RAW_CAPTURE_TOKEN`, so setting them on the production deployment does nothing. The worker reads them on its own machine, and the Connections UI labels that row "Download worker" rather than listing env vars. Worker liveness is expiry-driven: `worker.heartbeat` writes `collector.online` and schedules `worker.expire` 45 seconds later (`convex/worker.ts`), and the browser re-checks the disclosed `lastSeen` against its own clock. A Convex query does not re-run because time passed, so liveness must never be computed from `Date.now()` inside `integrations.configured`. Details: [the control plane](control-plane.md).
+
+In outbound mode the worker is also the only production writer of `providerThrottleEvents`, through `worker.report`'s `"throttle"` event. Without it the Provider limits panel stays empty while x.md is refusing imports. Facts are captured from refusals only, so remaining allowance on a *successful* call is still invisible, and `{ kind: "none" }` means nothing was observed, never "not throttled".
 
 Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
 
-The hosted frontend and Convex backend were still older than main `e98e093`; a full authenticated UI journey with the new diagnostics is not yet verified. Main's indexer now carries the publication sender; `publication.env` supplies its endpoint and token. No account has been published from it yet, so dashboard publication counts stay at zero until a real update lands. See `to-do.md` for the rollout and branch handoff.
+At the September 20 check the hosted frontend and Convex backend were still older than main `e98e093`; a full authenticated UI journey with the new diagnostics is not yet verified. Main now does contain the publication sender (`search/crates/indexer/src/publish.rs`, merged in `4c13fe4`), so `publication.env` reaches a real consumer — but only on a checkout and installed binary built from that commit or later. Do not add a second sender. See `to-do.md` for the rollout, and [indexer operations](search-indexer.md) for the credential file and the `publish=enabled` startup check.
+
+A TLS probe against the production route mutated no account state: an unknown handle returned HTTP 422 `rejected_invalid` and a wrong bearer returned HTTP 401 `rejected_unauthorized`. No real account has been published yet.
 
 Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; a guest session cannot send production email.
 
@@ -149,12 +155,31 @@ printing credentials:
 systemctl --user status xearch-capture.service
 systemctl --user status xearch-production-worker.service
 systemctl --user status xearch-frontend.service
+systemctl --user status xearch-search-indexer.service
 curl --fail --silent http://127.0.0.1:4319/health
 curl --fail --silent http://127.0.0.1:4320/health
 curl --fail --silent http://127.0.0.1:4321/health
 curl --fail --silent http://127.0.0.1:8080/
 ss -ltnp 'sport = :4319'
 ```
+
+Confirm which end the indexer picked up for publication without reading the
+credential file back. The watcher logs `publish=enabled` or
+`publish=disabled` at startup:
+
+```sh
+journalctl --user -u xearch-search-indexer.service | grep 'indexer resolved'
+```
+
+The credentials live in `~/xearch-data/search/publication.env` (mode 0600),
+loaded by `deploy/systemd/xearch-search-indexer.service` with a leading `-`
+so a missing file is not an error — the service starts and publication simply
+stays off. `PUBLICATION_UPDATE_URL` must be `https://` for a real deployment:
+the sender refuses a non-loopback `http://` endpoint outright, because every
+update carries the service token in an `Authorization: Bearer` header. A
+refused endpoint logs `indexer publish: disabled.` with the variable name and
+the offending host, and never the token itself. Full setup:
+[indexer operations](search-indexer.md) "Publishing to Convex".
 
 The committed units are specific to the `exedev` checkout path on this VM. If the
 repository or Bun executable moves, update both the committed and installed

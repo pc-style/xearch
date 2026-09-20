@@ -5,7 +5,7 @@ export type Sort = "relevance" | "engagement" | "likes" | "newest" | "oldest";
 // Three spellings of one author filter: `@theo`, `from:@theo` and `from:theo`.
 // The bare `from:handle` form was previously NOT recognised as an author — it
 // fell through to the operator check below and was rejected as an unsupported
-// operator, even though src/App.tsx's "find on X" button generated exactly
+// operator, even though the "find on X" button (src/ResultsSection.tsx) generated exactly
 // that spelling. All three now normalise to the same lowercased handle.
 // Built fresh per call rather than shared as one module-level /g regex: a
 // global regex carries `lastIndex` between uses, and this pattern is used

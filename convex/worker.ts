@@ -153,6 +153,21 @@ export const report = action({
     nextUntil: v.optional(v.string()),
     nextCursor: v.optional(v.string()),
     expectedUserId: v.optional(v.string()),
+    // The account this run turned out to be. Production runs
+    // COLLECTOR_MODE=outbound, so this worker — not convex/importer.ts — is
+    // what talks to x.md, and without this field the profile never reached
+    // `jobs.finish`. That is the entire reason the production `accounts`
+    // table was empty: identity was pinned on the job, but no account row
+    // was ever created from it, so the account library had nothing to show
+    // and every publication update was rejected as "no known account".
+    profile: v.optional(
+      v.object({
+        handle: v.string(),
+        userId: v.string(),
+        name: v.string(),
+        avatar: v.optional(v.string()),
+      }),
+    ),
     // Only read for the "throttle" event. Every field is the provider's own
     // report, forwarded verbatim; the worker never estimates one.
     throttle: v.optional(
@@ -213,6 +228,7 @@ export const report = action({
         nextUntil: args.nextUntil,
         nextCursor: args.nextCursor,
         expectedUserId: args.expectedUserId,
+        profile: args.profile,
       });
   },
 });
