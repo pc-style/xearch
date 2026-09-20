@@ -2,6 +2,13 @@ import { describe, it, expect, vi } from "vitest";
 import { XmdClient, retryDelay, publicUrl, type RawObject } from "../convex/lib/xmd";
 import { collectXmd, type CollectionRequest } from "../convex/lib/collect";
 import { deliverCapture, captureId, type Capture, type Receipt } from "../convex/lib/handoff";
+// Sanitized reproduction of a real x.md /api/v1/profiles/{handle}/posts response
+// for a request carrying `until` (a continuation page): structure and field
+// names are preserved from an actual retained capture; handle, timestamps, and
+// post bodies are scrubbed/synthetic. Its top-level keys are exactly
+// ["meta", "posts"] -- no embedded `profile`, which first-page (no `until`)
+// responses do include. See tests/fixtures/xmd-history-continuation-missing-profile.json.
+import continuationMissingProfile from "./fixtures/xmd-history-continuation-missing-profile.json";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
   return input instanceof Request ? input.url : input.toString();
@@ -102,6 +109,77 @@ describe("x.md raw acquisition handoff", () => {
     ).rejects.toMatchObject({ code: "invalid_history" });
     expect(r.captures.at(-1)?.terminal).toBe("partial");
     expect(r.captures.at(-1)?.records[0].payload.posts).toEqual([raw.post]);
+  });
+  it("accepts a JSON history continuation page even when x.md omits the embedded profile", async () => {
+    // Root cause of runs that retain ~500 posts and then permanently stop:
+    // x.md's own /posts endpoint omits its embedded `profile` field on any
+    // continuation request (one carrying `until`), while still returning a
+    // fully valid posts+meta payload. Identity was already pinned via the
+    // dedicated profile fetch earlier in collectXmd, so this must be accepted
+    // as valid partial history -- not rejected as malformed.
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      Response.json(
+        requestUrl(input).includes("/posts?") ? continuationMissingProfile : { profile },
+      ),
+    );
+    const r = receiver();
+    const result = await collectXmd(
+      new XmdClient("test-key", fetcher),
+      {
+        ...request,
+        format: undefined,
+        until: "2026-08-16T04:19:11.000Z",
+        expectedUserId: "123",
+      },
+      r.sink,
+      r.ack,
+    );
+    expect(result.postsReceived).toBe(2);
+    expect(result.nextUntil).toBe("2026-08-16T03:00:00.000Z");
+    expect(r.captures.at(-1)?.terminal).toBe("complete");
+    expect(r.captures.at(-1)?.records.at(-1)?.payload).toEqual(continuationMissingProfile);
+  });
+  it("still rejects a continuation page missing posts or meta as malformed, profile or not", async () => {
+    const malformed = { ...continuationMissingProfile, meta: undefined };
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      Response.json(requestUrl(input).includes("/posts?") ? malformed : { profile }),
+    );
+    const r = receiver();
+    await expect(
+      collectXmd(
+        new XmdClient("test-key", fetcher),
+        {
+          ...request,
+          format: undefined,
+          until: "2026-08-16T04:19:11.000Z",
+          expectedUserId: "123",
+        },
+        r.sink,
+        r.ack,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_history" });
+    expect(r.captures.at(-1)?.terminal).toBe("partial");
+  });
+  it("still rejects a first (non-continuation) page missing profile as invalid", async () => {
+    // The `until`-gated relaxation above is scoped to continuation requests
+    // only. A first-page request (no `until`) must still fail closed when
+    // the provider omits `profile`, otherwise a malformed or spoofed first
+    // response would silently skip identity verification entirely.
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      Response.json(
+        requestUrl(input).includes("/posts?") ? continuationMissingProfile : { profile },
+      ),
+    );
+    const r = receiver();
+    await expect(
+      collectXmd(
+        new XmdClient("test-key", fetcher),
+        { ...request, format: undefined, expectedUserId: "123" },
+        r.sink,
+        r.ack,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_history" });
+    expect(r.captures.at(-1)?.terminal).toBe("partial");
   });
   it("does not accept a changed identity in a JSON history response", async () => {
     const fetcher = vi.fn<typeof fetch>(async (input) =>

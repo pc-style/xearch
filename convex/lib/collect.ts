@@ -107,16 +107,31 @@ export async function collectXmd(
         const response = await client.history(request.input, options);
         // Preserve the complete provider envelope, including future fields.
         await add(response);
-        if (!Array.isArray(response.posts) || !response.meta || !response.profile)
+        if (!Array.isArray(response.posts) || !response.meta)
           throw new ProviderError(
             "invalid_history",
-            "x.md history is missing posts, profile, or its completion summary.",
+            "x.md history is missing posts or its completion summary.",
           );
         metadata = record(response.meta);
         postsReceived = response.posts.length;
         if (response.posts.length > options.maxPosts)
           throw new ProviderError("import_limit", "x.md exceeded the requested history size.");
-        if (string(record(response.profile).id) !== expectedUserId)
+        // x.md's own /posts endpoint omits the embedded `profile` field on
+        // continuation requests (any call carrying `until`), even though the
+        // rest of the envelope is a fully valid, complete page. Identity was
+        // already pinned via the dedicated profile fetch above, so its
+        // absence is tolerated ONLY on continuation requests -- treating it
+        // as malformed there would permanently stop every import after the
+        // first page (the exact "stops at ~500 posts" bug). A first (non-
+        // continuation) response must still include it, and whenever a
+        // profile IS present -- continuation or not -- it is still checked
+        // against the pinned identity.
+        if (request.until === undefined && !response.profile)
+          throw new ProviderError(
+            "invalid_history",
+            "x.md history is missing its embedded profile on a first (non-continuation) page.",
+          );
+        if (response.profile !== undefined && string(record(response.profile).id) !== expectedUserId)
           throw new ProviderError(
             "identity_mismatch",
             "Account identity changed during history collection. Raw captures need downstream review.",

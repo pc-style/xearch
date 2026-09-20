@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "handle": "example_user",
+    "count": 2,
+    "until": "2026-08-16T04:19:11.000Z",
+    "oldest": "2026-08-16T03:00:00.000Z",
+    "newest": "2026-08-16T04:00:00.000Z",
+    "truncated": true,
+    "floor_reached": false,
+    "with_replies": true,
+    "with_reposts": true,
+    "only_replies": false,
+    "concurrency": 8,
+    "windows": 1,
+    "pages": 1,
+    "retried_pages": 0,
+    "duration_ms": 842,
+    "estimated_rate_per_hour": 1000,
+    "source": "x-md",
+    "archive": {
+      "handle": "example_user",
+      "count": 2,
+      "oldest": "2026-08-16T03:00:00.000Z",
+      "newest": "2026-08-16T04:00:00.000Z",
+      "updated_at": "2026-08-16T04:19:11.000Z",
+      "floor_reached": false,
+      "covered_since": null,
+      "covered_until": "2026-08-16T04:19:11.000Z",
+      "served": 2,
+      "added": 0,
+      "walked": 2
+    }
+  },
+  "posts": [
+    {
+      "id": "1000000000000000001",
+      "text": "example post body one",
+      "created_at": "2026-08-16T04:00:00.000Z"
+    },
+    {
+      "id": "1000000000000000002",
+      "text": "example post body two",
+      "created_at": "2026-08-16T03:00:00.000Z"
+    }
+  ]
+}
