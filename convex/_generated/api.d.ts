@@ -25,7 +25,10 @@ import type * as lib_search from "../lib/search.js";
 import type * as lib_serviceAuth from "../lib/serviceAuth.js";
 import type * as lib_xmd from "../lib/xmd.js";
 import type * as library from "../library.js";
+import type * as limits from "../limits.js";
+import type * as publication from "../publication.js";
 import type * as search from "../search.js";
+import type * as summary from "../summary.js";
 import type * as worker from "../worker.js";
 
 import type {
@@ -52,7 +55,10 @@ declare const fullApi: ApiFromModules<{
   "lib/serviceAuth": typeof lib_serviceAuth;
   "lib/xmd": typeof lib_xmd;
   library: typeof library;
+  limits: typeof limits;
+  publication: typeof publication;
   search: typeof search;
+  summary: typeof summary;
   worker: typeof worker;
 }>;
 
