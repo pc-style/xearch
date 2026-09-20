@@ -92,6 +92,11 @@ export const run = internalAction({
       // and it must never grow into an application-side quota (AGENTS.md).
       if (error instanceof ProviderError && error.throttle) {
         const throttle = error.throttle;
+        // Best-effort on purpose. Recording what the provider said is
+        // strictly less important than finishing the job below: if this
+        // write failed and took the catch block with it, the run would stay
+        // "running" until the 10-minute expiry instead of reporting its real
+        // error. Losing one observation beats stranding the job.
         await ctx.runMutation(internal.jobs.recordThrottle, {
           jobId,
           attempt: job.attempt,
@@ -105,7 +110,7 @@ export const run = internalAction({
           resetAt: throttle.resetAt,
           retryAfterMs: throttle.retryAfterMs,
           observedAt: throttle.observedAt,
-        });
+        }).catch(() => {});
       }
       await ctx.runMutation(internal.jobs.finish, {
         jobId,

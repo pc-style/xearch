@@ -42,6 +42,11 @@ import {
 // `@convex-dev/aggregate` (convex guidelines "Query guidelines"), not a
 // larger constant.
 const MAX_OWNED_JOBS = 1_000;
+// Must stay equal to convex/library.ts's own MAX_OWNED_JOBS. The whole point
+// of the owner-scoped totals below is that they describe exactly the account
+// set `library.rows` lists; a different bound here would silently reintroduce
+// the mismatch this scoping exists to remove, just further out.
+const MAX_OWNED_ACCOUNT_JOBS = 500;
 const MAX_RECEIPTS_PER_JOB = 200;
 const MAX_PUBLICATION_UPDATES_PER_ACCOUNT = 500;
 
@@ -101,10 +106,14 @@ async function computeIndexTotals(
   let unknown = false;
   let searchableAccounts = 0;
   for (const accountId of accountIds) {
+    // `.first()` rather than `.unique()`: by_account is not
+    // uniqueness-enforced by the schema, and a second row for one account
+    // would make `.unique()` throw and take the whole dashboard down rather
+    // than degrade one number.
     const publication = await ctx.db
       .query("accountPublications")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .unique();
+      .first();
     if (!publication) continue;
     if (publication.state === "searchable") searchableAccounts += 1;
     if (publication.searchablePostCount !== undefined) {
@@ -152,6 +161,18 @@ async function ownedJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">
     .order("desc")
     .take(MAX_OWNED_JOBS);
   return jobs;
+}
+
+// The owner's account-history jobs, read with the SAME index, kind filter,
+// order and bound convex/library.ts `ownedAccountJobs` uses, so the accounts
+// resolved from this list are the accounts that appear as library rows.
+async function ownedAccountJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">[]> {
+  return ctx.db
+    .query("jobs")
+    .withIndex("by_owner", (q) => q.eq("owner", owner))
+    .filter((q) => q.eq(q.field("kind"), ACCOUNT_JOB_KIND))
+    .order("desc")
+    .take(MAX_OWNED_ACCOUNT_JOBS);
 }
 
 // Resolve one job to the account it belongs to, the same identity rule as
@@ -260,10 +281,7 @@ async function computeSavedCapturesAwaitingIndexing(
   return knownCount("captures", count);
 }
 
-async function computeQueue(
-  ctx: QueryCtx,
-  jobs: Doc<"jobs">[],
-): Promise<{ queue: QueueBreakdown; bulkJobs: Doc<"jobs">[] }> {
+async function computeQueue(ctx: QueryCtx, jobs: Doc<"jobs">[]): Promise<{ queue: QueueBreakdown }> {
   let waiting = 0;
   let active = 0;
   let failedRetryable = 0;
@@ -296,7 +314,6 @@ async function computeQueue(
       savedCapturesAwaitingIndexing: await computeSavedCapturesAwaitingIndexing(ctx, bulkJobs),
       failedRetryable: knownCount("jobs", failedRetryable),
     },
-    bulkJobs,
   };
 }
 
@@ -325,14 +342,14 @@ export const summary = query({
     // scope literal.
     const owner = await user(ctx);
     const jobs = await ownedJobs(ctx, owner);
-    const { queue, bulkJobs } = await computeQueue(ctx, jobs);
-    // The same account set convex/library.ts builds its rows from, resolved
-    // once and shared, so the "Indexed people" tile and the account list it
-    // links to can never disagree.
+    const { queue } = await computeQueue(ctx, jobs);
+    // Resolved from the library-matching read, not from the queue's wider
+    // all-kinds scan, so the "Indexed people" tile and the account list it
+    // links to are computed over the same rows and cannot disagree.
     const accountCache = new Map<string, Id<"accounts"> | null>();
     const accountIds: Id<"accounts">[] = [];
     const seen = new Set<Id<"accounts">>();
-    for (const job of bulkJobs) {
+    for (const job of await ownedAccountJobs(ctx, owner)) {
       const accountId = await resolveAccountId(ctx, job, accountCache);
       if (accountId && !seen.has(accountId)) {
         seen.add(accountId);

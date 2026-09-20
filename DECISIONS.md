@@ -41,12 +41,15 @@
   back to `DATA_SERVICE_TOKEN`) and the HTTP status mapping
   (200/401/422) the receiver replies with.
 - Known consequence of building ahead of agreement, found while verifying this
-  document (2026-09-20): `convex/jobs.ts`'s `finish` upsert (lines 344-348)
-  still resolves accounts purely `by_handle` and unconditionally patches
-  whatever row it finds, including a new `userId`. If assumption 1 above turns
-  out false (Pronsh's sender can only ever supply a handle), that gap and this
-  write-path bug compound each other on a real reassignment. to-do.md tracks
-  the write-path fix separately from this contract.
+  document (2026-09-20): `convex/jobs.ts`'s `finish` upsert resolved accounts
+  purely `by_handle` and unconditionally patched whatever row it found,
+  including a new `userId`. If assumption 1 above turns out false (Pronsh's
+  sender can only ever supply a handle), that gap and this write-path bug
+  compounded each other on a real reassignment.
+  **SUPERSEDED** by the account-identity decision in the
+  "Known-open-issues branch" section below: the write path now resolves
+  `by_user_id` and forks a new row on reassignment, so the compounding risk
+  is gone. Assumption 1 itself remains unconfirmed with Pronsh.
 - If any of the five assumptions turn out false, the receiver, the new schema
   tables, and the dashboard queries built against them (`convex/publication.ts`,
   `convex/schema.ts`, `convex/summary.ts`, `convex/library.ts`,
