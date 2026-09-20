@@ -406,13 +406,15 @@ fn too_large(file: &Path) -> bool {
 pub fn run_once(config: &Config) -> Result<Registry> {
     let path = registry_path(&config.state_dir);
     let mut registry = Registry::load(&path)?;
+    let engine = search_tantivy::open(&config.index, true)?;
     // Flush what the endpoint still owes a response for before importing
     // anything new: the reserved generation belongs to that update, so
     // freeing it first is what lets this pass's own imports publish at all.
-    if replay_pending_publications(config, &mut registry) {
+    // The index is opened first because the follow-on update that drains
+    // behind a resolved one is counted fresh, not replayed.
+    if replay_pending_publications(config, &engine, &mut registry) {
         registry.save(&path)?;
     }
-    let engine = search_tantivy::open(&config.index, true)?;
     let index_empty = engine.num_docs()? == 0;
     if index_empty && (!registry.users.is_empty() || !registry.captures.is_empty()) {
         eprintln!(
@@ -463,9 +465,18 @@ pub fn run_once(config: &Config) -> Result<Registry> {
 /// would tell the receiver a different set of `captureIds` was processed
 /// than the attempt that reserved the generation claimed.
 ///
-/// Returns whether anything was owed, so a pass that had nothing to replay
-/// does not rewrite the registry file for nothing.
-fn replay_pending_publications(config: &Config, registry: &mut Registry) -> bool {
+/// An account whose owed update is resolved here also has anything its
+/// stood-down imports were holding sent as a follow-on update — the only
+/// path by which a capture imported mid-outage is ever confirmed, since
+/// its file is already recorded and will never be imported again.
+///
+/// Returns whether anything was owed or deferred, so a pass with nothing
+/// to send does not rewrite the registry file for nothing.
+fn replay_pending_publications(
+    config: &Config,
+    engine: &search_tantivy::Engine,
+    registry: &mut Registry,
+) -> bool {
     let Some(publish_config) = config.publish.as_ref() else {
         return false;
     };
@@ -474,7 +485,9 @@ fn replay_pending_publications(config: &Config, registry: &mut Registry) -> bool
     let mut owed: Vec<String> = registry
         .publications
         .iter()
-        .filter(|(_, record)| record.pending.is_some() || record.transport_retry_pending)
+        .filter(|(_, record)| {
+            record.pending.is_some() || record.transport_retry_pending || record.deferred.is_some()
+        })
         .map(|(handle, _)| handle.clone())
         .collect();
     owed.sort();
@@ -482,7 +495,7 @@ fn replay_pending_publications(config: &Config, registry: &mut Registry) -> bool
         return false;
     }
     for handle in owed {
-        publish::replay_pending(Some(publish_config), registry, &handle);
+        publish::replay_pending(Some(publish_config), engine, registry, &handle);
     }
     true
 }

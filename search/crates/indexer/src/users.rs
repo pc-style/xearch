@@ -208,6 +208,77 @@ pub struct PendingPublication {
     pub observed_at_ms: i64,
 }
 
+/// Identity an import could not report at the time it happened, because an
+/// earlier update for the same account was still owed a response.
+///
+/// The reserved generation belongs to that owed update, so a second update
+/// cannot go out at it — but the import *did* happen, and the capture ids
+/// it would have confirmed are the only thing that tells Convex those
+/// captures were processed. Dropping them leaves a capture that is in the
+/// index and invisible in the product forever, because the importer skips
+/// it on every later pass (it is already recorded) and so never publishes
+/// it again. So they are kept here, against the account, and folded into
+/// the next update that actually goes out.
+///
+/// Several stood-down imports coalesce into one of these
+/// ([`Self::absorb`]); the whole point is that one follow-on update can
+/// then truthfully name every capture they covered.
+///
+/// Every field is `#[serde(default)]`, so a `users.json` written before
+/// this field existed loads unchanged instead of being quarantined.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeferredPublication {
+    /// Every capture id the stood-down imports would have confirmed, in
+    /// the order they were imported, without duplicates.
+    #[serde(default)]
+    pub capture_ids: Vec<String>,
+    /// The most recent non-empty `runId` among them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// The most recent non-empty `providerAccountId` among them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
+    /// The state the most recent stood-down import would have reported.
+    /// `None` only in a hand-edited registry; nothing is sent without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_state: Option<ReportedState>,
+    /// Verbatim import error of that most recent import, present exactly
+    /// when [`Self::reported_state`] is `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// When the most recent import was stood down, for operator triage.
+    #[serde(default)]
+    pub updated_at_ms: i64,
+}
+
+impl DeferredPublication {
+    /// Fold a newer stood-down import into this one.
+    ///
+    /// Capture ids accumulate — every one of them still needs confirming.
+    /// The reported state (and its error) is the newest import's, because
+    /// that is the account's current condition; the older state would have
+    /// been superseded by the newer update anyway had both gone out.
+    pub fn absorb(&mut self, newer: Self) {
+        for id in newer.capture_ids {
+            if !self.capture_ids.contains(&id) {
+                self.capture_ids.push(id);
+            }
+        }
+        if newer.run_id.is_some() {
+            self.run_id = newer.run_id;
+        }
+        if newer.provider_account_id.is_some() {
+            self.provider_account_id = newer.provider_account_id;
+        }
+        if newer.reported_state.is_some() {
+            self.reported_state = newer.reported_state;
+            self.error = newer.error;
+        }
+        self.updated_at_ms = newer.updated_at_ms;
+    }
+}
+
 /// Durable per-account publication state sent to Convex's
 /// `POST /publication/update` (`docs/publication-contract.md`).
 ///
@@ -260,6 +331,13 @@ pub struct PublicationRecord {
     /// this account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<PendingPublication>,
+    /// What imports that stood down while [`Self::pending`] was owed would
+    /// have reported. Folded into the next update that actually goes out,
+    /// so a capture imported during an outage is still confirmed even
+    /// though the importer will never look at its file again. `None` means
+    /// nothing is waiting to be carried forward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred: Option<DeferredPublication>,
 }
 
 /// The registry file: versioned map of handle to record.
@@ -426,6 +504,9 @@ impl Registry {
         // whether the receiver applied it, ignored it as a duplicate, or
         // rejected it outright.
         record.pending = None;
+        // `deferred` is deliberately left alone: those capture ids were
+        // never in *this* update, and they stay owed until an update that
+        // actually names them is delivered.
         if let Some((count, observed_at)) = applied_searchable {
             record.last_unique_post_count = Some(count);
             record.last_published_at_ms = Some(observed_at);
@@ -452,6 +533,21 @@ impl Registry {
         record.transport_retry_pending = true;
         record.last_publish_error = Some(error.to_owned());
         let _ = record.pending.get_or_insert(attempted);
+    }
+
+    /// Keep what an import would have reported but could not, because an
+    /// update for the same account was still owed a response.
+    ///
+    /// Merged into anything already deferred for that account
+    /// ([`DeferredPublication::absorb`]) so several stood-down imports
+    /// during one outage become one truthful follow-on update rather than
+    /// the last one silently winning.
+    pub fn defer_publication(&mut self, handle: &str, deferral: DeferredPublication) {
+        let record = self.publication(handle);
+        match record.deferred.as_mut() {
+            Some(existing) => existing.absorb(deferral),
+            None => record.deferred = Some(deferral),
+        }
     }
 
     /// Mark a successful import. Zero accepted posts is an error, not a

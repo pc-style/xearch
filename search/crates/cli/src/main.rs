@@ -191,8 +191,9 @@ fn run_publish(
     let handle = search_query::normalize_author(handle)?;
     let Some(config) = search_indexer::publish::PublishConfig::from_env() else {
         color_eyre::eyre::bail!(
-            "publication sender disabled: set PUBLICATION_UPDATE_URL and \
-             PUBLICATION_SERVICE_TOKEN (or DATA_SERVICE_TOKEN) first."
+            "publication sender disabled: set PUBLICATION_UPDATE_URL (https://, or a loopback \
+             http:// test endpoint) and PUBLICATION_SERVICE_TOKEN (or DATA_SERVICE_TOKEN) first. \
+             A rejected URL prints its own reason above."
         );
     };
     let engine = search_tantivy::open(index, false)?;
@@ -203,7 +204,7 @@ fn run_publish(
     // generation carrying different content as a sender-side bug. If the
     // endpoint is still down this replay fails and the fresh send below
     // stands down rather than reusing that generation.
-    search_indexer::publish::replay_pending(Some(&config), &mut registry, &handle);
+    search_indexer::publish::replay_pending(Some(&config), &engine, &mut registry, &handle);
     search_indexer::publish::report_after_import(
         Some(&config),
         &engine,

@@ -75,7 +75,24 @@ fn read_request(stream: &mut TcpStream) -> Option<CapturedRequest> {
 /// Accept exactly one connection, capture the request, and reply with a
 /// fixed status/body. Returns the URL to hit and a channel yielding the
 /// captured request once the client has connected.
+///
+/// Accepting only one connection is deliberate in the tests that use it: a
+/// second send in the same pass would come back as a transport failure and
+/// be visible in the registry, so "nothing else was sent" is an assertion,
+/// not an assumption.
 fn spawn_responder(
+    status_line: &'static str,
+    response_body: &'static str,
+) -> std::io::Result<(String, Receiver<CapturedRequest>)> {
+    spawn_responder_for(1, status_line, response_body)
+}
+
+/// As [`spawn_responder`], but serving `connections` requests in turn — for
+/// the cases where one pass legitimately sends more than one update (an
+/// owed update resolved, then the follow-on carrying what stood down
+/// behind it).
+fn spawn_responder_for(
+    connections: usize,
     status_line: &'static str,
     response_body: &'static str,
 ) -> std::io::Result<(String, Receiver<CapturedRequest>)> {
@@ -83,7 +100,10 @@ fn spawn_responder(
     let addr = listener.local_addr()?;
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
+        for _ in 0..connections {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
             if let Some(request) = read_request(&mut stream) {
                 let _ = tx.send(request);
             }
@@ -154,11 +174,12 @@ fn config_in(
     Ok(config)
 }
 
-fn publishing_to(url: String) -> PublishConfig {
-    PublishConfig {
-        url,
-        token: "t".to_owned(),
-    }
+/// Build a sender config the only way there is: through the validated
+/// constructor. Every test below therefore also proves that a plain-HTTP
+/// loopback endpoint is still accepted — the check added for cleartext
+/// credentials never made the local responder harder to point at.
+fn publishing_to(url: String) -> search_model::Result<PublishConfig> {
+    PublishConfig::new(url, "t")
 }
 
 fn post(id: &str, handle: &str, provider_id: &serde_json::Value) -> serde_json::Value {
@@ -193,6 +214,75 @@ fn capture_batch_from_run(
     })
 }
 
+/// Write one capture batch into a drop directory under its content hash.
+fn write_capture_file(
+    drop_dir: &std::path::Path,
+    sha: &str,
+    handle: &str,
+    post_id: &str,
+    provider_account_id: &str,
+    run_id: &str,
+) -> std::io::Result<()> {
+    let batch = capture_batch_from_run(
+        handle,
+        post_id,
+        &serde_json::json!(provider_account_id),
+        run_id,
+    );
+    std::fs::write(
+        drop_dir.join(format!("{sha}.json")),
+        serde_json::to_vec(&batch).map_err(std::io::Error::other)?,
+    )
+}
+
+/// The next request body the responder captured, decoded as JSON.
+fn next_body(rx: &Receiver<CapturedRequest>) -> Option<serde_json::Value> {
+    let request = rx.recv_timeout(std::time::Duration::from_secs(5)).ok()?;
+    serde_json::from_slice(&request.body).ok()
+}
+
+/// Report one succeeded capture import for `handle`, through whatever
+/// endpoint `url` names.
+fn report_capture(
+    url: String,
+    engine: &search_tantivy::Engine,
+    registry: &mut Registry,
+    handle: &str,
+    run_id: &str,
+    capture_id: &str,
+) -> search_model::Result<()> {
+    report_after_import(
+        Some(&publishing_to(url)?),
+        engine,
+        registry,
+        &ImportReport {
+            handle,
+            outcome: ImportOutcome::Succeeded,
+            provider_account_id: Some("42"),
+            run_id: Some(run_id),
+            capture_ids: vec![capture_id.to_owned()],
+        },
+    );
+    Ok(())
+}
+
+/// Two capture batches and one per-handle dump, all for `@twin`. Sorted
+/// candidate order is `aaa….json` < `bbb….json` < `twin.json`, so the
+/// first batch is the one that reserves the generation. Returns the two
+/// capture ids.
+fn seed_twin_drop(drop_dir: &std::path::Path) -> std::io::Result<(String, String)> {
+    let first = "a".repeat(64);
+    let second = "b".repeat(64);
+    write_capture_file(drop_dir, &first, "twin", "5001", "777", "run-first")?;
+    write_capture_file(drop_dir, &second, "twin", "5002", "777", "run-second")?;
+    let dump = serde_json::json!({"posts": [post("5003", "twin", &serde_json::json!("777"))]});
+    std::fs::write(
+        drop_dir.join("twin.json"),
+        serde_json::to_vec(&dump).map_err(std::io::Error::other)?,
+    )?;
+    Ok((first, second))
+}
+
 const fn succeeded_report(handle: &str) -> ImportReport<'_> {
     ImportReport {
         handle,
@@ -225,10 +315,7 @@ fn envelope_matches_the_receiver_contract_shape_on_success() {
         r#"{"outcome":"applied","committedGeneration":1}"#,
     )
     .unwrap();
-    let config = PublishConfig {
-        url,
-        token: "secret-token".to_owned(),
-    };
+    let config = PublishConfig::new(url, "secret-token").unwrap();
     let report = ImportReport {
         handle: "alice",
         outcome: ImportOutcome::Succeeded,
@@ -299,10 +386,7 @@ fn a_per_handle_dump_sends_handle_only_with_empty_capture_ids() {
     let engine = engine(dir.path()).unwrap();
     let mut registry = Registry::default();
     let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let config = PublishConfig {
-        url,
-        token: "t".to_owned(),
-    };
+    let config = PublishConfig::new(url, "t").unwrap();
     report_after_import(
         Some(&config),
         &engine,
@@ -330,10 +414,7 @@ fn failed_import_reports_failed_with_the_verbatim_error_and_never_a_count() {
     let engine = engine(dir.path()).unwrap();
     let mut registry = Registry::default();
     let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let config = PublishConfig {
-        url,
-        token: "t".to_owned(),
-    };
+    let config = PublishConfig::new(url, "t").unwrap();
     let report = ImportReport {
         handle: "carol",
         outcome: ImportOutcome::Failed("archive checksum mismatch"),
@@ -380,10 +461,7 @@ fn generation_increments_once_per_delivered_send_and_survives_a_reload() {
     let mut registry = Registry::default();
 
     let (url1, rx1) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let config = PublishConfig {
-        url: url1,
-        token: "t".to_owned(),
-    };
+    let config = PublishConfig::new(url1, "t").unwrap();
     report_after_import(
         Some(&config),
         &engine,
@@ -403,10 +481,7 @@ fn generation_increments_once_per_delivered_send_and_survives_a_reload() {
     );
 
     let (url2, rx2) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let config = PublishConfig {
-        url: url2,
-        token: "t".to_owned(),
-    };
+    let config = PublishConfig::new(url2, "t").unwrap();
     report_after_import(
         Some(&config),
         &engine,
@@ -432,10 +507,7 @@ fn a_permanent_rejection_still_consumes_the_generation_and_does_not_spin() {
         r#"{"outcome":"rejected_unauthorized"}"#,
     )
     .unwrap();
-    let config = PublishConfig {
-        url,
-        token: "wrong".to_owned(),
-    };
+    let config = PublishConfig::new(url, "wrong").unwrap();
     report_after_import(
         Some(&config),
         &engine,
@@ -473,10 +545,7 @@ fn a_transport_failure_never_consumes_a_generation_and_is_flagged_for_retry() {
     let probe = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = probe.local_addr().unwrap();
     drop(probe);
-    let config = PublishConfig {
-        url: format!("http://{addr}/publication/update"),
-        token: "t".to_owned(),
-    };
+    let config = PublishConfig::new(format!("http://{addr}/publication/update"), "t").unwrap();
     report_after_import(
         Some(&config),
         &engine,
@@ -510,10 +579,7 @@ fn an_https_url_is_wired_through_report_after_import_as_an_ordinary_transport_fa
     let probe = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = probe.local_addr().unwrap();
     drop(probe);
-    let config = PublishConfig {
-        url: format!("https://{addr}/publication/update"),
-        token: "t".to_owned(),
-    };
+    let config = PublishConfig::new(format!("https://{addr}/publication/update"), "t").unwrap();
     report_after_import(
         Some(&config),
         &engine,
@@ -598,10 +664,7 @@ fn a_truncated_response_body_is_a_delivered_response_not_a_transport_failure() {
     let partial = r#"{"outcome":"app"#;
     let (url, rx) =
         spawn_truncating_responder("HTTP/1.1 200 OK", partial, partial.len() + 64).unwrap();
-    let config = PublishConfig {
-        url,
-        token: "t".to_owned(),
-    };
+    let config = PublishConfig::new(url, "t").unwrap();
     report_after_import(
         Some(&config),
         &engine,
@@ -640,8 +703,11 @@ fn a_pending_retry_republishes_a_capture_without_reimporting_it() {
 
     // Pass 1: the endpoint is unreachable. The import happens; the
     // publication is left owed.
-    let unreachable =
-        config_in(dir.path(), Some(publishing_to(unreachable_url().unwrap()))).unwrap();
+    let unreachable = config_in(
+        dir.path(),
+        Some(publishing_to(unreachable_url().unwrap()).unwrap()),
+    )
+    .unwrap();
     let registry = search_indexer::run_once(&unreachable).unwrap();
     assert_eq!(registry.captures.get(&sha).unwrap().accepted, 1);
     assert!(
@@ -661,7 +727,7 @@ fn a_pending_retry_republishes_a_capture_without_reimporting_it() {
 
     // Pass 2: the endpoint is back.
     let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url).unwrap())).unwrap();
     let registry = search_indexer::run_once(&live).unwrap();
     let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
@@ -697,8 +763,11 @@ fn a_pending_retry_republishes_a_user_dump_without_reimporting_it() {
     )
     .unwrap();
 
-    let unreachable =
-        config_in(dir.path(), Some(publishing_to(unreachable_url().unwrap()))).unwrap();
+    let unreachable = config_in(
+        dir.path(),
+        Some(publishing_to(unreachable_url().unwrap()).unwrap()),
+    )
+    .unwrap();
     let registry = search_indexer::run_once(&unreachable).unwrap();
     assert_eq!(registry.users.get("ivy").unwrap().attempts, 1);
     assert!(
@@ -710,7 +779,7 @@ fn a_pending_retry_republishes_a_user_dump_without_reimporting_it() {
     );
 
     let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url).unwrap())).unwrap();
     let registry = search_indexer::run_once(&live).unwrap();
     let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
@@ -744,42 +813,14 @@ fn an_outage_owes_one_update_and_recovery_resends_exactly_it() {
     let config = config_in(dir.path(), None).unwrap();
     // Sorted candidate order is first.json < second.json < twin.json, so
     // the first batch is the one that reserves the generation.
-    let first = "a".repeat(64);
-    let second = "b".repeat(64);
-    std::fs::write(
-        config.drop_dir.join(format!("{first}.json")),
-        serde_json::to_vec(&capture_batch_from_run(
-            "twin",
-            "5001",
-            &serde_json::json!("777"),
-            "run-first",
-        ))
-        .unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        config.drop_dir.join(format!("{second}.json")),
-        serde_json::to_vec(&capture_batch_from_run(
-            "twin",
-            "5002",
-            &serde_json::json!("777"),
-            "run-second",
-        ))
-        .unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        config.drop_dir.join("twin.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "posts": [post("5003", "twin", &serde_json::json!("777"))]
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let (first, second) = seed_twin_drop(&config.drop_dir).unwrap();
 
     // The outage. Everything imports; nothing can be reported.
-    let unreachable =
-        config_in(dir.path(), Some(publishing_to(unreachable_url().unwrap()))).unwrap();
+    let unreachable = config_in(
+        dir.path(),
+        Some(publishing_to(unreachable_url().unwrap()).unwrap()),
+    )
+    .unwrap();
     let registry = search_indexer::run_once(&unreachable).unwrap();
     assert_eq!(registry.captures.len(), 2);
     assert_eq!(
@@ -813,15 +854,24 @@ fn an_outage_owes_one_update_and_recovery_resends_exactly_it() {
         Some(1),
         "the count as it was when the reserved update was built"
     );
+    let deferred = owed
+        .deferred
+        .as_ref()
+        .expect("the two imports that stood down must have left their identity behind");
+    assert_eq!(
+        deferred.capture_ids,
+        vec![second.clone()],
+        "the second capture's id is held for a follow-on; the dump has no id to hold"
+    );
 
-    // Recovery. The responder accepts exactly one connection, so a second
-    // send in this pass would come back as a transport failure and leave a
-    // new pending update behind — asserted against below.
-    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    // Recovery. Two connections: the owed update, then the follow-on that
+    // confirms what stood down behind it. A third send would come back as
+    // a transport failure and leave a pending update behind — asserted
+    // against below.
+    let (url, rx) = spawn_responder_for(2, "HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url).unwrap())).unwrap();
     let registry = search_indexer::run_once(&live).unwrap();
-    let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    let body = next_body(&rx).unwrap();
     assert_eq!(body["handle"], "twin");
     assert_eq!(
         body["captureIds"],
@@ -838,13 +888,38 @@ fn an_outage_owes_one_update_and_recovery_resends_exactly_it() {
          indexed by now)"
     );
 
+    // The follow-on: the second capture imported during the outage is
+    // never imported again (its hash is recorded), so this update is the
+    // only thing that can ever confirm it.
+    let body = next_body(&rx).expect("the follow-on must go out, not be dropped");
+    assert_eq!(body["handle"], "twin");
+    assert_eq!(
+        body["captureIds"],
+        serde_json::json!([second]),
+        "the follow-on confirms the capture that stood down, not an empty list"
+    );
+    assert_eq!(body["runId"], "run-second");
+    assert_eq!(
+        body["generation"], 2,
+        "the follow-on is a new update at the next generation, not a replay"
+    );
+    assert_eq!(
+        body["uniquePostCount"], 3,
+        "a new update carries a freshly counted number: all three posts are indexed by now"
+    );
+
     let record = registry.publications.get("twin").unwrap();
-    assert_eq!(record.generation, 1);
+    assert_eq!(record.generation, 2);
     assert!(!record.transport_retry_pending);
     assert!(
         record.pending.is_none(),
-        "a delivered response clears what was owed, and nothing else was sent in that pass: {:?}",
+        "both sends were answered, and nothing else was sent in that pass: {:?}",
         record.pending
+    );
+    assert!(
+        record.deferred.is_none(),
+        "what stood down has been confirmed and must not be sent a second time: {:?}",
+        record.deferred
     );
 }
 
@@ -864,36 +939,30 @@ fn a_replay_reuses_the_reserved_generation_and_no_other_update_borrows_it() {
     // rather than zero and an off-by-one would be visible.
     let (first_url, first_rx) =
         spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    report_after_import(
-        Some(&publishing_to(first_url)),
+    report_capture(
+        first_url,
         &engine,
         &mut registry,
-        &ImportReport {
-            handle: "zoe",
-            outcome: ImportOutcome::Succeeded,
-            provider_account_id: Some("42"),
-            run_id: Some("run-a"),
-            capture_ids: vec!["a".repeat(64)],
-        },
-    );
+        "zoe",
+        "run-a",
+        &"a".repeat(64),
+    )
+    .unwrap();
     first_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap();
     assert_eq!(registry.publications.get("zoe").unwrap().generation, 1);
 
     // The outage: generation 2 is reserved for this update and never spent.
-    report_after_import(
-        Some(&publishing_to(unreachable_url().unwrap())),
+    report_capture(
+        unreachable_url().unwrap(),
         &engine,
         &mut registry,
-        &ImportReport {
-            handle: "zoe",
-            outcome: ImportOutcome::Succeeded,
-            provider_account_id: Some("42"),
-            run_id: Some("run-b"),
-            capture_ids: vec!["b".repeat(64)],
-        },
-    );
+        "zoe",
+        "run-b",
+        &"b".repeat(64),
+    )
+    .unwrap();
     assert_eq!(
         registry.publications.get("zoe").unwrap().generation,
         1,
@@ -904,18 +973,15 @@ fn a_replay_reuses_the_reserved_generation_and_no_other_update_borrows_it() {
     // reserved: it must not go out at all.
     let (blocked_url, blocked_rx) =
         spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    report_after_import(
-        Some(&publishing_to(blocked_url)),
+    report_capture(
+        blocked_url,
         &engine,
         &mut registry,
-        &ImportReport {
-            handle: "zoe",
-            outcome: ImportOutcome::Succeeded,
-            provider_account_id: Some("42"),
-            run_id: Some("run-c"),
-            capture_ids: vec!["c".repeat(64)],
-        },
-    );
+        "zoe",
+        "run-c",
+        &"c".repeat(64),
+    )
+    .unwrap();
     assert!(
         blocked_rx
             .recv_timeout(std::time::Duration::from_millis(500))
@@ -935,24 +1001,48 @@ fn a_replay_reuses_the_reserved_generation_and_no_other_update_borrows_it() {
         Some("run-b"),
         "the owed update is not replaced by a newer one"
     );
+    assert_eq!(
+        registry
+            .publications
+            .get("zoe")
+            .unwrap()
+            .deferred
+            .as_ref()
+            .expect("standing down must keep what the import would have confirmed")
+            .capture_ids,
+        vec!["c".repeat(64)],
+        "standing down must not discard what the import would have confirmed"
+    );
 
-    // Recovery: the replay goes out at the reserved generation 2.
+    // Recovery: the replay goes out at the reserved generation 2, and the
+    // update that stood down behind it follows at generation 3.
     let (replay_url, replay_rx) =
-        spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    search_indexer::publish::replay_pending(Some(&publishing_to(replay_url)), &mut registry, "zoe");
-    let request = replay_rx
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        spawn_responder_for(2, "HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    search_indexer::publish::replay_pending(
+        Some(&publishing_to(replay_url).unwrap()),
+        &engine,
+        &mut registry,
+        "zoe",
+    );
+    let body = next_body(&replay_rx).unwrap();
     assert_eq!(
         body["generation"], 2,
         "a replay reuses the generation the failed attempt reserved"
     );
     assert_eq!(body["runId"], "run-b");
     assert_eq!(body["captureIds"], serde_json::json!(["b".repeat(64)]));
+
+    let body = next_body(&replay_rx).expect("what stood down must follow, not be dropped");
+    assert_eq!(
+        body["generation"], 3,
+        "the update that stood down goes out at its own fresh generation, never the reserved one"
+    );
+    assert_eq!(body["runId"], "run-c");
+    assert_eq!(body["captureIds"], serde_json::json!(["c".repeat(64)]));
     let record = registry.publications.get("zoe").unwrap();
-    assert_eq!(record.generation, 2);
+    assert_eq!(record.generation, 3);
     assert!(record.pending.is_none());
+    assert!(record.deferred.is_none());
 }
 
 /// A `users.json` written by the build that shipped before the owed update
@@ -1006,7 +1096,7 @@ fn a_registry_from_before_pending_updates_loads_and_is_never_replayed_from_guess
 
     // A pass with a live endpoint must not invent an update for that flag.
     let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
-    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url).unwrap())).unwrap();
     let registry = search_indexer::run_once(&live).unwrap();
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(500))
@@ -1039,7 +1129,7 @@ fn an_owed_update_round_trips_through_the_registry_file() {
     let path = search_indexer::users::registry_path(state_dir.path());
     let mut registry = Registry::default();
     report_after_import(
-        Some(&publishing_to(unreachable_url().unwrap())),
+        Some(&publishing_to(unreachable_url().unwrap()).unwrap()),
         &engine,
         &mut registry,
         &ImportReport {
@@ -1074,4 +1164,459 @@ fn an_owed_update_round_trips_through_the_registry_file() {
         "observedAt is replayed verbatim"
     );
     assert!(pending.unique_post_count.is_none());
+}
+
+/// The reviewer's case, exactly: capture A's publication never gets a
+/// response, capture B imports while A is still owed, and A's replay only
+/// succeeds on a later pass.
+///
+/// B's file is recorded the moment it imports, so the importer will never
+/// look at it again — if B's capture id is dropped when B stands down,
+/// nothing will ever tell Convex that B was processed. B is then in the
+/// index and invisible in the product forever. The follow-on update is the
+/// only thing that can close that, so it must go out and it must name B.
+#[test]
+fn a_capture_imported_while_an_update_was_owed_is_still_confirmed_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let scratch = config_in(dir.path(), None).unwrap();
+    let first = "a".repeat(64);
+    let second = "b".repeat(64);
+    write_capture_file(
+        &scratch.drop_dir,
+        &first,
+        "quinn",
+        "6001",
+        "555",
+        "run-first",
+    )
+    .unwrap();
+
+    // Pass 1: capture A imports; the endpoint is down, so A's update is
+    // owed and holds generation 1.
+    let unreachable = config_in(
+        dir.path(),
+        Some(publishing_to(unreachable_url().unwrap()).unwrap()),
+    )
+    .unwrap();
+    let registry = search_indexer::run_once(&unreachable).unwrap();
+    assert!(
+        registry
+            .publications
+            .get("quinn")
+            .unwrap()
+            .pending
+            .is_some()
+    );
+    assert_eq!(registry.publications.get("quinn").unwrap().generation, 0);
+
+    // Pass 2: still down. A's replay fails again, and capture B arrives
+    // and imports behind it.
+    write_capture_file(
+        &scratch.drop_dir,
+        &second,
+        "quinn",
+        "6002",
+        "555",
+        "run-second",
+    )
+    .unwrap();
+    let registry = search_indexer::run_once(&unreachable).unwrap();
+    assert!(
+        registry.captures.contains_key(&second),
+        "B imported, so the importer will skip its file on every later pass — this is why its \
+         capture id cannot simply be dropped"
+    );
+    let record = registry.publications.get("quinn").unwrap();
+    assert_eq!(
+        record.pending.as_ref().unwrap().capture_ids,
+        vec![first.clone()],
+        "the owed update is still A's"
+    );
+    assert_eq!(
+        record
+            .deferred
+            .as_ref()
+            .expect("B's capture id must be held against the account, not discarded")
+            .capture_ids,
+        vec![second.clone()],
+        "B's capture id must be held against the account, not discarded"
+    );
+
+    // Pass 3: the endpoint is back. A's replay goes out at its reserved
+    // generation, then B is confirmed by a follow-on at the next one.
+    let (url, rx) = spawn_responder_for(2, "HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url).unwrap())).unwrap();
+    let registry = search_indexer::run_once(&live).unwrap();
+
+    let replay = next_body(&rx).unwrap();
+    assert_eq!(replay["captureIds"], serde_json::json!([first]));
+    assert_eq!(replay["generation"], 1);
+
+    let follow_on =
+        next_body(&rx).expect("B must be confirmed by a follow-on update, not silently dropped");
+    assert_eq!(
+        follow_on["captureIds"],
+        serde_json::json!([second]),
+        "the follow-on must name the capture it confirms, not go out handle-only"
+    );
+    assert_eq!(follow_on["handle"], "quinn");
+    assert_eq!(follow_on["runId"], "run-second");
+    assert_eq!(follow_on["providerAccountId"], "555");
+    assert_eq!(follow_on["reportedState"], "searchable");
+    assert_eq!(follow_on["generation"], 2);
+    assert_eq!(
+        follow_on["uniquePostCount"], 2,
+        "a new update reports a freshly counted number: both captures are indexed"
+    );
+
+    let record = registry.publications.get("quinn").unwrap();
+    assert_eq!(record.generation, 2);
+    assert!(record.pending.is_none());
+    assert!(
+        record.deferred.is_none(),
+        "confirmed once, never sent again: {:?}",
+        record.deferred
+    );
+
+    // And a further pass sends nothing at all: the follow-on is not a
+    // retry loop.
+    let (quiet_url, quiet_rx) =
+        spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let quiet = config_in(dir.path(), Some(publishing_to(quiet_url).unwrap())).unwrap();
+    search_indexer::run_once(&quiet).unwrap();
+    assert!(
+        quiet_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_err(),
+        "nothing is owed and nothing is deferred, so a later pass must send nothing"
+    );
+}
+
+/// A per-handle dump that stands down carries no capture id, but the
+/// account still has something to say — and a dump followed by a capture
+/// must not lose the capture's id either. Several stood-down imports
+/// coalesce into one truthful follow-on.
+#[test]
+fn several_stood_down_imports_coalesce_into_one_follow_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path()).unwrap();
+    let mut registry = Registry::default();
+
+    // An owed update reserves generation 1.
+    report_after_import(
+        Some(&publishing_to(unreachable_url().unwrap()).unwrap()),
+        &engine,
+        &mut registry,
+        &ImportReport {
+            handle: "nina",
+            outcome: ImportOutcome::Succeeded,
+            provider_account_id: None,
+            run_id: None,
+            capture_ids: vec!["a".repeat(64)],
+        },
+    );
+
+    // Two more imports stand down behind it.
+    for (capture, run) in [("b", "run-b"), ("c", "run-c")] {
+        report_after_import(
+            Some(&publishing_to(unreachable_url().unwrap()).unwrap()),
+            &engine,
+            &mut registry,
+            &ImportReport {
+                handle: "nina",
+                outcome: ImportOutcome::Succeeded,
+                provider_account_id: Some("31"),
+                run_id: Some(run),
+                capture_ids: vec![capture.repeat(64)],
+            },
+        );
+    }
+    let deferred = registry
+        .publications
+        .get("nina")
+        .unwrap()
+        .deferred
+        .as_ref()
+        .expect("imports that stood down must leave their capture ids behind");
+    assert_eq!(
+        deferred.capture_ids,
+        vec!["b".repeat(64), "c".repeat(64)],
+        "both stood-down captures must survive, in order, not just the last one"
+    );
+    assert_eq!(deferred.run_id.as_deref(), Some("run-c"));
+
+    let (url, rx) = spawn_responder_for(2, "HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let config = publishing_to(url).unwrap();
+    search_indexer::publish::replay_pending(Some(&config), &engine, &mut registry, "nina");
+    next_body(&rx).unwrap();
+    let follow_on = next_body(&rx).expect("the coalesced follow-on must go out");
+    assert_eq!(
+        follow_on["captureIds"],
+        serde_json::json!(["b".repeat(64), "c".repeat(64)]),
+        "one follow-on confirms every capture that stood down"
+    );
+    assert_eq!(follow_on["providerAccountId"], "31");
+    assert!(
+        registry
+            .publications
+            .get("nina")
+            .unwrap()
+            .deferred
+            .is_none()
+    );
+}
+
+/// The safety net: if the follow-on could not go out on its own — the only
+/// way that happens is a post count that failed, which keeps the deferred
+/// ids rather than losing them — then the next update that *does* go out
+/// for the account folds them in. A deferred capture id is confirmed by
+/// the first update to follow it, whichever path produces that update.
+#[test]
+fn a_later_import_folds_in_what_stood_down_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path()).unwrap();
+    let mut registry = Registry::default();
+    registry.defer_publication(
+        "omar",
+        search_indexer::users::DeferredPublication {
+            capture_ids: vec!["b".repeat(64)],
+            run_id: Some("run-b".to_owned()),
+            provider_account_id: Some("7".to_owned()),
+            reported_state: Some(search_indexer::users::ReportedState::Searchable),
+            error: None,
+            updated_at_ms: 1_758_000_000_000_i64,
+        },
+    );
+
+    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    report_after_import(
+        Some(&publishing_to(url).unwrap()),
+        &engine,
+        &mut registry,
+        &ImportReport {
+            handle: "omar",
+            outcome: ImportOutcome::Succeeded,
+            provider_account_id: None,
+            run_id: Some("run-c"),
+            capture_ids: vec!["c".repeat(64)],
+        },
+    );
+    let body = next_body(&rx).unwrap();
+    assert_eq!(
+        body["captureIds"],
+        serde_json::json!(["c".repeat(64), "b".repeat(64)]),
+        "this update confirms its own capture and the one that stood down earlier"
+    );
+    assert_eq!(body["runId"], "run-c", "this import's own identity wins");
+    assert_eq!(
+        body["providerAccountId"], "7",
+        "identity this import did not have is taken from what stood down"
+    );
+    assert!(
+        registry
+            .publications
+            .get("omar")
+            .unwrap()
+            .deferred
+            .is_none()
+    );
+}
+
+/// A `users.json` written by the build that shipped before deferred
+/// capture ids existed — `publications` with an owed `pending` object but
+/// no `deferred` key — must load unquarantined and keep working.
+#[test]
+fn a_registry_from_before_deferred_capture_ids_loads_and_still_replays() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path(), None).unwrap();
+    let path = search_indexer::users::registry_path(&config.state_dir);
+    std::fs::create_dir_all(&config.state_dir).unwrap();
+    let sha = "e".repeat(64);
+    let previous_build = serde_json::json!({
+        "version": 1,
+        "users": {},
+        "captures": {
+            sha.clone(): {"handle": "pat", "accepted": 1, "rejected": 0, "updatedAtMs": 1_758_000_000_000_i64},
+        },
+        "publications": {
+            "pat": {
+                "generation": 4,
+                "lastUniquePostCount": 1,
+                "lastPublishedAtMs": 1_758_000_000_000_i64,
+                "lastPublishError": "connection refused",
+                "transportRetryPending": true,
+                "pending": {
+                    "reportedState": "searchable",
+                    "captureIds": [sha.as_str()],
+                    "runId": "run-old",
+                    "providerAccountId": "99",
+                    "uniquePostCount": 1,
+                    "uniquePostCountAsOf": 1_758_000_000_000_i64,
+                    "observedAtMs": 1_758_000_000_000_i64,
+                },
+            }
+        },
+    });
+    std::fs::write(&path, serde_json::to_vec(&previous_build).unwrap()).unwrap();
+
+    let loaded = Registry::load(&path).unwrap();
+    let record = loaded.publications.get("pat").unwrap();
+    assert_eq!(record.generation, 4);
+    assert!(
+        record.deferred.is_none(),
+        "a missing deferred key loads as nothing deferred, not as a parse failure"
+    );
+    assert_eq!(
+        record.pending.as_ref().unwrap().capture_ids,
+        vec![sha.clone()]
+    );
+
+    // And the owed update still replays from it, unchanged.
+    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url).unwrap())).unwrap();
+    search_indexer::run_once(&live).unwrap();
+    let body = next_body(&rx).unwrap();
+    assert_eq!(body["captureIds"], serde_json::json!([sha]));
+    assert_eq!(body["generation"], 5);
+    let no_bad_files = std::fs::read_dir(&config.state_dir)
+        .unwrap()
+        .flatten()
+        .all(|entry| !entry.file_name().to_string_lossy().contains(".bad-"));
+    assert!(
+        no_bad_files,
+        "an older-shaped registry must never be quarantined"
+    );
+}
+
+/// Deferred capture ids are durable: a restart in the middle of an outage
+/// must still confirm them.
+#[test]
+fn deferred_capture_ids_survive_the_registry_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path()).unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let path = search_indexer::users::registry_path(state_dir.path());
+    let mut registry = Registry::default();
+    for (capture, run) in [("a", "run-a"), ("b", "run-b")] {
+        report_after_import(
+            Some(&publishing_to(unreachable_url().unwrap()).unwrap()),
+            &engine,
+            &mut registry,
+            &ImportReport {
+                handle: "sam",
+                outcome: ImportOutcome::Succeeded,
+                provider_account_id: Some("3"),
+                run_id: Some(run),
+                capture_ids: vec![capture.repeat(64)],
+            },
+        );
+    }
+    registry.save(&path).unwrap();
+    let reloaded = Registry::load(&path).unwrap();
+    assert_eq!(
+        reloaded.publications.get("sam").unwrap().deferred,
+        registry.publications.get("sam").unwrap().deferred,
+        "every field of what was deferred must survive the restart"
+    );
+    assert_eq!(
+        reloaded
+            .publications
+            .get("sam")
+            .unwrap()
+            .deferred
+            .as_ref()
+            .expect("deferred capture ids must survive the registry file")
+            .capture_ids,
+        vec!["b".repeat(64)]
+    );
+}
+
+/// The bearer token travels in an `Authorization` header, so an endpoint
+/// that is not encrypted is refused where the configuration is built —
+/// before any request exists at all.
+#[test]
+fn a_non_loopback_http_endpoint_is_refused_before_any_request_is_built() {
+    // 192.0.2.0/24 is RFC 5737 TEST-NET-1: it is guaranteed not to be
+    // routed anywhere. A sender that actually tried this would block until
+    // its 20-second global timeout, so returning instantly is itself
+    // evidence that no connection was ever attempted.
+    let started = std::time::Instant::now();
+    let refused = PublishConfig::new("http://192.0.2.1/publication/update", "super-secret");
+    let error = refused.expect_err("plain HTTP to a routable host must be refused, not sent to");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "the refusal must happen before any request: this took {:?}",
+        started.elapsed()
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("PUBLICATION_UPDATE_URL"),
+        "the operator must be told which variable is wrong: {message}"
+    );
+    assert!(
+        message.contains("cleartext"),
+        "and why it is wrong: {message}"
+    );
+    assert!(
+        !message.contains("super-secret"),
+        "the error must never echo the token: {message}"
+    );
+
+    for url in [
+        "http://example.com/publication/update",
+        "HTTP://EXAMPLE.COM/publication/update",
+        "http://user:pw@example.com:8080/publication/update",
+        "http://[2001:db8::1]:8080/publication/update",
+        "http://127.0.0.1.example.com/publication/update",
+        "ftp://example.com/publication/update",
+        "/publication/update",
+    ] {
+        assert!(
+            PublishConfig::new(url, "t").is_err(),
+            "must be refused: {url}"
+        );
+    }
+}
+
+/// The check must not cost the loopback test endpoints anything, and must
+/// not get in the way of the real `https://` deployment either.
+#[test]
+fn loopback_http_and_https_endpoints_are_accepted() {
+    for url in [
+        "http://127.0.0.1:4319/publication/update",
+        "http://127.0.0.53:4319/publication/update",
+        "http://localhost:4319/publication/update",
+        "http://[::1]:4319/publication/update",
+        "https://utmost-kudu-321.convex.site/publication/update",
+        "HTTPS://utmost-kudu-321.convex.site/publication/update",
+    ] {
+        assert!(
+            PublishConfig::new(url, "t").is_ok(),
+            "must be accepted: {url}"
+        );
+    }
+}
+
+/// And end to end: a loopback `http://` endpoint still delivers a real
+/// update through the validated constructor, exactly as before.
+#[test]
+fn a_loopback_http_endpoint_still_delivers() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path()).unwrap();
+    let mut registry = Registry::default();
+    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+    let config = PublishConfig::new(url, "t").unwrap();
+    report_after_import(
+        Some(&config),
+        &engine,
+        &mut registry,
+        &succeeded_report("tess"),
+    );
+    let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer t")
+    );
+    assert_eq!(registry.publications.get("tess").unwrap().generation, 1);
 }

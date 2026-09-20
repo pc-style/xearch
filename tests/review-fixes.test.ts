@@ -246,6 +246,28 @@ describe("an owner is never refused their own account", () => {
     expect(String(runs[0].jobId)).toBe(String(ownRun));
   });
 
+  it("refuses to serve a history it could not search through completely", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "buried", userId: "8888", name: "Buried" }),
+    );
+    // A run for this account exists, but far enough down that the scan
+    // cannot reach it. The lookup therefore returns some jobs with
+    // exhausted:false for OTHER accounts — and the account's own run may be
+    // among the ones never reached. Presenting what was found as the
+    // account's history would be a partial scan wearing a complete label.
+    await job(t, alice, {
+      input: "buried",
+      kind: "bulk",
+      expectedUserId: "8888",
+      status: "complete",
+    });
+    for (let i = 0; i < 1100; i++)
+      await job(t, alice, { input: "buried", kind: "bulk", expectedUserId: "8888" });
+
+    await expect(a.query(libraryHistory, { accountId })).rejects.toThrow("full history");
+  });
+
   it("still refuses an account that is not the caller's", async () => {
     const { t, alice } = await setup();
     const bob = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
@@ -255,6 +277,49 @@ describe("an owner is never refused their own account", () => {
     );
     await job(t, alice, { input: "alices", kind: "bulk", expectedUserId: "4242" });
     await expect(b.query(libraryHistory, { accountId })).rejects.toThrow("Account not found.");
+  });
+});
+
+describe("a capture the indexer could not index", () => {
+  it("stays counted as awaiting indexing instead of being marked confirmed", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "flaky", userId: "321", name: "Flaky" }),
+    );
+    const bulk = await job(t, alice, {
+      input: "flaky",
+      kind: "bulk",
+      expectedUserId: "321",
+      status: "complete",
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.insert("receipts", {
+        jobId: bulk,
+        captureId: "cap-failed",
+        receiptId: "r1",
+        records: 10,
+      });
+      // The indexer reported that it could NOT index this capture. Applied,
+      // so it moved the account's state — but it confirms nothing.
+      await ctx.db.insert("publicationUpdates", {
+        accountId,
+        handle: "flaky",
+        captureIds: ["cap-failed"],
+        generation: 1,
+        reportedState: "failed",
+        error: { message: "index write failed" },
+        observedAt: Date.now(),
+        receivedAt: Date.now(),
+        outcome: "applied",
+      });
+    });
+
+    const summary = await a.query(summaryQuery, { now: Date.now() });
+    expect(summary.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 1,
+    });
   });
 });
 

@@ -165,7 +165,12 @@ async function confirmedCaptureIds(
     .take(MAX_PUBLICATION_UPDATES_PER_ACCOUNT);
   const set = new Set<string>();
   for (const update of updates) {
-    if (update.outcome !== "applied") continue;
+    // An applied update whose reportedState is "failed" tells us the indexer
+    // could NOT index those captures. Counting them as confirmed made them
+    // vanish from "saved captures awaiting indexing" — the one number that
+    // is supposed to show work still outstanding — so a capture that failed
+    // to index looked identical to one that succeeded.
+    if (update.outcome !== "applied" || update.reportedState === "failed") continue;
     for (const captureId of update.captureIds) set.add(captureId);
   }
   cache.set(accountId, set);

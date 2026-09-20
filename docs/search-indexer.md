@@ -79,7 +79,8 @@ Every intake account is one record, keyed by normalized handle
       "lastPublishedAtMs": 1789826880797,
       "transportRetryPending": false
       // when an update is owed, this is true and a "pending" object holds
-      // that exact update — see "Publishing to Convex" below
+      // that exact update; imports that stood down behind it leave their
+      // captureIds in a "deferred" object — see "Publishing to Convex" below
     }
   }
 }
@@ -168,8 +169,27 @@ absent leaves `run_once` behaving exactly as it always has:
 
 | Env var | Meaning |
 | --- | --- |
-| `PUBLICATION_UPDATE_URL` | Full URL of Convex's `POST /publication/update` route. |
+| `PUBLICATION_UPDATE_URL` | Full URL of Convex's `POST /publication/update` route. Must be `https://`; plain `http://` is accepted only for a loopback host (see below). |
 | `PUBLICATION_SERVICE_TOKEN` | Bearer token; falls back to `DATA_SERVICE_TOKEN` if unset (same convention as `convex/publication.ts`). |
+
+**`http://` to anything but loopback is refused, not sent to.** Every update
+carries the token in an `Authorization: Bearer` header, so a cleartext
+endpoint would put a live credential on the wire. The sender checks this
+where the configuration is built — before any request exists — and an
+endpoint it refuses disables publication with a log line naming the
+variable and the host:
+
+```
+indexer publish: disabled. PUBLICATION_UPDATE_URL points at http:// host
+"example.com", which would send PUBLICATION_SERVICE_TOKEN over the network in
+cleartext. Use https://, or a loopback host (127.0.0.1, ::1, localhost) for a
+local test endpoint.
+```
+
+Plain `http://` to `127.0.0.1`, `::1` or `localhost` keeps working, because
+those bytes never leave the machine — that is what this crate's own tests
+point at. A hostname that merely *resolves* to loopback is not accepted;
+what DNS answers is not something the sender can rely on.
 
 **Under systemd these go in exactly one file:
 `~/xearch-data/search/publication.env`, mode `0600`.** That is the path
@@ -240,18 +260,37 @@ followed by one publish attempt for that handle:
   whichever file the pass reaches first would confirm captures that update
   never processed (or, for a dump, confirm none at all).
 - Retry dispatch is per publication record, not per candidate file, and
-  runs at the top of a pass before any import: an outage costs exactly one
-  HTTP attempt per affected account per pass, and content that has not
+  runs at the top of a pass before any import: an outage costs at most one
+  resend attempt per affected account per pass, and content that has not
   changed is never imported, archived or indexed again to carry a resend.
 - While an update is owed, a later import for the same account does not
   publish its own update. The reserved generation belongs to the owed
   update, and `docs/publication-contract.md` ("Idempotency and staleness")
   is explicit that a generation resent with different content is a
-  sender-side bug. The newer state goes out on the next update after the
-  owed one is finally answered — which, for an account whose imports have
-  all already happened, means the next time that account imports anything.
-  Captures imported during an outage can therefore stay unconfirmed until
-  then; the registry keeps only one owed update per account, not a queue.
+  sender-side bug. So the import stands down — but it does not vanish:
+  what it would have reported (`captureIds`, `runId`,
+  `providerAccountId`, its state) is kept against the account under
+  `publications.<handle>.deferred`, and several stood-down imports
+  coalesce into one entry there.
+- As soon as the owed update is answered, that deferred entry goes out as
+  a **follow-on update** at the next generation, in the same pass. It is
+  a new update, not a replay: `uniquePostCount` is recounted live and
+  `observedAt` is fresh. What it carries from the registry is the
+  identity — so it names the captures it confirms rather than going out
+  handle-only. Once delivered, the entry is cleared and never sent again;
+  this is not a retry loop.
+- That matters because an import that stands down is already recorded:
+  the importer skips its file on every later pass, so no future import
+  will ever carry its capture id. Dropping it would leave a capture in
+  the index that Convex is never told about — searchable in the engine,
+  invisible in the product, permanently. A capture imported during an
+  outage is confirmed by the follow-on update, not left waiting for the
+  account to import something new.
+- If a later import for the account does publish before the follow-on
+  went out (which only happens if the follow-on's post count failed), it
+  folds the deferred capture ids into its own update. Its own state wins;
+  the ids accumulate. Either way a deferred capture id is confirmed by
+  the first update that actually goes out after it.
 - A permanent rejection (401/422/400) still advances the generation (a
   request *was* delivered) but is not retried automatically — that would
   spin on identical content, which `AGENTS.md` rules out.
@@ -260,12 +299,16 @@ followed by one publish attempt for that handle:
   invented for it: the flag is cleared with a log line saying so, and the
   account reports again on its next import, at the generation that was
   never spent.
+- A `users.json` written by a build that had no `deferred` entry loads the
+  same way: the key is simply absent, which reads as nothing deferred. So
+  does one written before `publications` existed at all. Neither is
+  quarantined.
 
 **Transport and verification.** Delivery goes over
 [`ureq`](https://docs.rs/ureq) with its `rustls` TLS backend
 (`search/Cargo.toml`'s `ureq = { features = ["rustls"] }`), so both
-`http://` (this crate's own loopback tests,
-`search/crates/indexer/tests/publication.rs` and
+`http://` (accepted only for the loopback endpoints this crate's own tests
+use, `search/crates/indexer/tests/publication.rs` and
 `search/crates/indexer/src/publish/transport.rs`) and `https://` work. This
 has been confirmed end to end against the real production deployment's
 HTTP-actions host — **`https://utmost-kudu-321.convex.site`, not
@@ -292,8 +335,9 @@ Inspect or replay this by hand:
 xearch-search --base-dir "$BASE" users list
 # Republish one handle's current live count without reimporting anything.
 # Any update still owed for that handle is resent first, exactly as it was
-# built; if the endpoint is still down, the fresh send stands down rather
-# than reusing that update's generation.
+# built, followed by anything imports stood down behind it; if the endpoint
+# is still down, the fresh send stands down rather than reusing that
+# update's generation.
 # Takes the indexer lock, so stop the watcher first if one is running.
 xearch-search --base-dir "$BASE" publish <handle>
 ```
@@ -376,7 +420,7 @@ whole configuration.
 | `serve [--listen 127.0.0.1:4320]`                      | needs `SEARCH_LOCAL_SIGNING_KEY` + `SEARCH_SERVICE_TOKEN` |
 | `watch [--archive --drop-dir --state-dir --poll-secs]` | background indexer; resolves and logs its dirs at startup |
 | `users list [--status …]` / `users mark …`             | registry ops; `list` now also shows each account's publication state |
-| `publish <handle>`                                     | republish one handle's current live count by hand (sends any owed update first, unchanged); needs `PUBLICATION_UPDATE_URL` + `PUBLICATION_SERVICE_TOKEN`/`DATA_SERVICE_TOKEN` |
+| `publish <handle>`                                     | republish one handle's current live count by hand (sends any owed update first, unchanged, then anything deferred behind it); needs `PUBLICATION_UPDATE_URL` + `PUBLICATION_SERVICE_TOKEN`/`DATA_SERVICE_TOKEN` |
 
 ## Serving the app contract
 

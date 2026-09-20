@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { receiverConnection } from "../src/App";
+import { receiverConnection } from "../src/integrationStatus";
 
 /**
  * `convex/integrations.ts`'s `configured.handoff` means "the raw-capture
