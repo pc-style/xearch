@@ -4,10 +4,12 @@ Updated September 20, 2026. Planning only: this list does not authorize implemen
 
 ## Urgent handoff — production integration (September 20)
 
-This section supersedes older runtime/branch claims below. Production checkout
-`/home/exedev/xearch-worker` is on main `e98e093`; the editor checkout is based on
-that same commit. The fixes in this handoff are not deployed to Convex or installed
-in the production checkout yet.
+This section supersedes older runtime/branch claims below. As written, the
+production checkout `/home/exedev/xearch-worker` was on main `e98e093` and the
+editor checkout was based on that same commit; the fixes in this handoff were
+not deployed to Convex or installed in the production checkout. `main` has
+since moved to `4c13fe4` (PR #19 merged), which is what the claims below have
+been re-checked against.
 
 - [x] Verify live retrieval, not just health: authenticated search and pagination
       passed through Rust :4320, nginx :4321, and the configured HTTPS endpoint.
@@ -37,14 +39,13 @@ in the production checkout yet.
       `dist/`. After backend deployment, publish a production-bound build there;
       verify HTML and assets at the existing exe.dev URL without changing access
       controls. Convex-hosted frontend is `https://utmost-kudu-321.convex.site/`.
-- [ ] **P0 collaborator dependency: integrate the existing publication sender,
-      not another implementation.** Main has no consumer of `PUBLICATION_UPDATE_URL`
-      or `PUBLICATION_SERVICE_TOKEN`; loading `publication.env` alone does nothing.
-      Existing implementation is on `adam/known-open-issues` at `ed94e0c` (sender
-      `4d9641a`, credential wiring `c83954e`, replay fix `1bb40ed`, main compatibility
-      `ed94e0c`). Coordinate review/merge; do not silently cherry-pick others' work.
-      `adam/dashboard-truth-gaps` at `2183b60` adds further health/queue work and has
-      diverged. After approved integration, install the sender-capable watcher and
+- [ ] **P0: install the sender-capable watcher on the VM.** The integration half
+      of this is done: `adam/known-open-issues` was reviewed and merged to `main`
+      as `4c13fe4` (PR #19), so `main` now consumes `PUBLICATION_UPDATE_URL` and
+      `PUBLICATION_SERVICE_TOKEN` (`search/crates/indexer/src/publish.rs`) and
+      `publication.env` reaches a real consumer. Do not build a second sender.
+      `adam/dashboard-truth-gaps` adds further health/queue work and is still
+      open. Remaining: install the sender-capable watcher from `main` and
       reconcile already-indexed accounts using its explicit `publish <handle>` flow
       with the watcher stopped. Preserve registry generations; this writes Convex
       publication state but must not re-download captures. Pending publication state
@@ -58,9 +59,14 @@ in the production checkout yet.
 
 Validation for this handoff: 201 tests passed, typecheck passed, production-bound
 frontend build passed into `.local-hosting/integration-check/dist` (not live
-`dist/`). Full lint remains blocked by 41 existing React Doctor findings; Oxlint
-reported zero errors and one existing memo-dependency warning. No production
+`dist/`). Oxlint reported zero errors and one existing warning. No production
 Convex deployment, paid import, data deletion, or worker restart was performed.
+
+Since that handoff, `bun run lint` is Oxlint alone: React Doctor was moved to an
+advisory CI check scoped to `src/` (`blocking: none`), so its findings no longer
+block lint. On `4c13fe4` the current readings are `bun run lint` → exit 0 with
+one `no-unused-vars` warning (`src/App.tsx:65`, `safeHostname`), `bun run
+typecheck` → exit 0, and `bunx vitest run` → 27 files / 263 tests passed.
 
 Ownership: Pronsh owns search and indexing. Our backlog covers the application, acquisition, Convex integration, and UI. Do not assign search-engine, ranking, replay, indexer, or cursor implementation to our agents. Mention collaborator work only as dependency context, not as our tasks.
 
@@ -108,7 +114,7 @@ Fix the import/library dashboard and its underlying data before adding discovery
 - [x] Tantivy retrieval, a backend-neutral search interface, five sorts, bounded 20-result pages, authenticated HTTP API, and automatic capture indexing are merged into `main`.
 - [x] Firecrawl and AgentMail Convex components are integrated; OpenAI query assistance exists.
 - [x] Public GitHub repository and hosted app exist. Earlier checks in this session returned HTTP 200 for the hosted app and `ok` for local search health; these do not prove the complete product journey.
-- [x] Refresh stale production documentation against observed integration state. Updated `docs/production.md` on September 20: authenticated Tantivy retrieval/pagination verified; hosted frontend/backend version skew, missing nginx document root, and absent publication sender remain explicitly unresolved. Corrected service/data/log paths, documented the paused updater and safe build output, and warned that a main push can deploy through CI. This closes documentation only, not the production rollout.
+- [x] Refresh stale production documentation against observed integration state. Updated `docs/production.md` on September 20: authenticated Tantivy retrieval/pagination verified; hosted frontend/backend version skew and the missing nginx document root remain explicitly unresolved. Corrected service/data/log paths, documented the paused updater and safe build output, and warned that a main push can deploy through CI. The "no publication sender" gap recorded there closed when `4c13fe4` merged; `docs/production.md` now documents the sender's credential file, its `https://`-only rule, and the `publish=enabled` startup check instead. This closes documentation only, not the production rollout.
 
 ### Collaborator dependency context — not our implementation backlog
 
@@ -134,11 +140,11 @@ Other branches on `pc-style/xearch` (`adam/repo-cleanup`, `adam/rewrite-foundati
 
 ## P1 — Complete the real product journey
 
-- [x] Add durable sign-in with verified email. Current guest-only authentication cannot complete the production-safe verified-recipient email flow. Closed: `convex/auth.ts` registers `Anonymous` + `EmailOTP`; `src/auth/EmailSignIn.tsx` is mounted in `src/App.tsx` at lines 1042 and 1100 (confirmed by grep this run — this contradicts that file's own stale doc comment, see cross-cutting note in DECISIONS.md); `tests/journey.test.ts` (12/12 tests passing, verbose re-run this run) covers OTP success/failure/identity/non-owner/default-deny.
+- [x] Add durable sign-in with verified email. Current guest-only authentication cannot complete the production-safe verified-recipient email flow. Closed: `convex/auth.ts` registers `Anonymous` + `EmailOTP`; `src/auth/EmailSignIn.tsx` is imported and mounted in `src/App.tsx` (confirmed by grep; the line numbers recorded earlier no longer apply after the results-section split, and the "cross-cutting note in DECISIONS.md" this bullet pointed at is not in that file — pointer withdrawn); `tests/journey.test.ts` (12/12 tests passing, verbose re-run this run) covers OTP success/failure/identity/non-owner/default-deny.
 - [x] Finish digest preview and explicit send, using AgentMail's existing delivery/retry machinery and ownership checks. Do not invent a second generic mail outbox. Closed: `convex/email.ts`'s `buildDigest` is the single source both `preview` and `send` use; `tests/journey.test.ts` "previews the digest without sending anything, then sends the identical content" and "keeps send gated on a verified, matching email even after digest preview succeeds" both pass this run.
 - [ ] Verify import → downloaded/indexing → searchable → search/sort/paginate → conversation or linked page → editable OpenAI assistance → digest preview/send. Partial, but the structural blocker is gone: the indexer→Convex sender now exists (`search/crates/indexer/src/publish.rs`), so "searchable" is reachable for the first time. Verified live against production this run with zero state written — an unknown handle returns HTTP 422 `rejected_invalid` and a wrong bearer token returns HTTP 401, through the real sender over TLS, which exercises auth, envelope, routing and the receiver's contract together. Remaining: no real account has been published yet, so no end-to-end chain has actually run; and `PUBLICATION_SERVICE_TOKEN` had to be created on the production deployment this run because it had never been set, which meant the receiver was failing closed and 401ing every caller regardless of any sender.
-- [ ] Verify Firecrawl, OpenAI, and AgentMail with approved real calls. Configured credentials alone are not evidence that integrations work. Not closed: `docs/production.md:26` states paid calls have not been live-tested in production; making them is out of this task's hard scope (no paid imports).
-- [ ] Verify the public hosted journey and record a short real-product demo after the dashboard and failures are fixed. Not closed: `docs/production.md:28` says browser visual checks were unavailable during deployment; no demo recording found anywhere in the repo or this session's scratchpad (checked this run).
+- [ ] Verify Firecrawl, OpenAI, and AgentMail with approved real calls. Configured credentials alone are not evidence that integrations work. Not closed: `docs/production.md` states paid calls have not been live-tested in production; making them is out of this task's hard scope (no paid imports).
+- [ ] Verify the public hosted journey and record a short real-product demo after the dashboard and failures are fixed. Not closed: `docs/production.md` says browser visual checks were unavailable during deployment; no demo recording found anywhere in the repo or this session's scratchpad (checked this run).
 
 ## Acceptance checks before calling the dashboard fixed
 
@@ -149,7 +155,7 @@ Other branches on `pc-style/xearch` (`adam/repo-cleanup`, `adam/rewrite-foundati
 - [x] Provider throttling shows the real reason and retry time. No provider allowance data means "unknown." Historical application caps do not appear as current limits. Closed against real acquisition data, not only synthetic rows: `tests/provider-limits-writepath.test.ts` asserts the provider's verbatim wording reaches the panel, that the more constraining of the two reported policies is the one shown, that `Retry-After` is applied to the observation time, that an absent allowance reads `unknown` rather than 0, and that a stale pre-PR#12 application-cap string left in `jobs.error` still produces `{ kind: "none" }`.
 - [x] Test the screenshot's partial/failing imports, successful imports, empty corpus, failed refresh with existing indexed posts, and stale/offline services. Closed, live-verified this run: `bunx vitest run tests/scenario-screenshot-cases.test.ts --reporter=verbose` — all 5 cases pass with console output matching the exact claimed behavior for each (quoted in the P0 bullets above).
 - [ ] Inspect rendered desktop and mobile states and exercise retry, continue, filters, and history expansion. Include a reviewed screenshot of the finished dashboard. Partial: personally viewed `scratchpad/11-dashboard-desktop-full.png` and `24-mobile-reconnecting.png` this run. Confirmed: correct section order on both, and a real mobile CSS defect — the "Reconnecting…" badge text wraps mid-word ("Reconnecti"/"ng…"). Not verified: retry/continue/filters/history-expansion, because the shared dev Convex deployment cannot authenticate anyone right now (repeated `Missing environment variable 'JWKS'` in `scratchpad/convex-logs-live.log`) — no account rows are visible in either screenshot to exercise those actions against.
-- [x] Run targeted application/backend tests, lint, typecheck, and a frontend build outside live `dist/`. Paid imports and shared deployment changes require separate authorization. Closed, all four run fresh this session: `bun run test` → 17 files/175 tests passed; `bun run typecheck` → exit 0; `bun run lint` → exit 0 (one pre-existing non-blocking warning, `src/App.tsx:327`); `bunx vite build --outDir <scratchpad>/build-check --emptyOutDir` → succeeded in 328ms, live `dist/` timestamps unchanged (Sep 19 05:43 before and after).
+- [x] Run targeted application/backend tests, lint, typecheck, and a frontend build outside live `dist/`. Paid imports and shared deployment changes require separate authorization. Closed, all four run fresh in that session: `bun run test` → 17 files/175 tests passed; `bun run typecheck` → exit 0; `bun run lint` → exit 0 with one pre-existing non-blocking warning; `bunx vite build --outDir <scratchpad>/build-check --emptyOutDir` → succeeded in 328ms, live `dist/` timestamps unchanged (Sep 19 05:43 before and after). Current readings on `4c13fe4` are in the handoff section at the top of this file.
 
 ## Later — do not let these delay the repair
 
