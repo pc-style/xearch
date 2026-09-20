@@ -60,29 +60,56 @@ Import controls work without `SEARCH_API_URL`. The separately owned search
 service's application boundary is documented in the
 [integration contract](integration-contract.md).
 
+## Collector modes
+
+Two collectors share `collectXmd` and `jobs.finish`. Which one runs is
+`COLLECTOR_MODE` on the Convex deployment:
+
+| Mode                                                | When                        | Who talks to x.md                                                |
+| --------------------------------------------------- | --------------------------- | ---------------------------------------------------------------- |
+| Receiver (default; any value other than `outbound`) | Local anonymous development | `convex/importer.ts`, writing to `RAW_CAPTURE_URL`               |
+| `outbound`                                          | Production                  | `scripts/production-worker.ts`, writing to the loopback receiver |
+
+Keep local work in receiver mode. `bun run env:sync` does not sync
+`COLLECTOR_MODE` or `COLLECTOR_TOKEN`; those are production worker settings
+from `scripts/setup-worker.mjs`. Do not point a local checkout's worker at
+production, and do not set `COLLECTOR_MODE=outbound` on the anonymous
+deployment as routine verification.
+
+In receiver mode the in-Convex importer already forwards a validated profile
+on finish, so a successful local bulk import creates the `accounts` row the
+library and publication receiver need. Production used to drop that profile
+in the worker; the current worker sends the same shape. Constraints and
+failure symptoms are in
+[production operations](production.md#how-an-account-row-is-created).
+`jobs.start` still requires a live worker when the deployment is outbound,
+or `X_MD_API_KEY` plus `RAW_CAPTURE_URL` when it is not.
+
 ## Connect providers
 
 Use `bunx convex env set NAME` and supply the value through stdin/the prompt. Do not use `VITE_` variables for secrets.
 
-| Variable                   | Purpose                                                     |
-| -------------------------- | ----------------------------------------------------------- |
-| `X_MD_API_KEY`             | x.md acquisition credential                                 |
-| `X_MD_BASE_URL`            | Optional alternate official origin, `https://x.pcstyle.dev` |
-| `RAW_CAPTURE_URL`          | Durable raw-capture receiver                                |
-| `SEARCH_API_URL`           | Search service retrieval endpoint                           |
-| `SEARCH_SERVICE_TOKEN`     | Read-only credential for the search endpoint                |
-| `RAW_CAPTURE_TOKEN`        | Ingestion-only credential for the capture receiver          |
-| `DATA_SERVICE_TOKEN`       | Legacy shared fallback when a dedicated token is unset      |
-| `FIRECRAWL_API_KEY`        | Linked-page scraping and web-context search                 |
-| `OPENAI_API_KEY`           | Editable query interpretation                               |
-| `OPENAI_MODEL`             | Optional model override; default `gpt-5-mini`               |
-| `AGENTMAIL_API_KEY`        | Result-digest delivery                                      |
-| `AGENTMAIL_INBOX_ID`       | Existing sender inbox                                       |
-| `AGENTMAIL_WEBHOOK_SECRET` | Verification of delivery webhooks                           |
+| Variable                   | Purpose                                                            |
+| -------------------------- | ------------------------------------------------------------------ |
+| `X_MD_API_KEY`             | x.md acquisition credential                                        |
+| `X_MD_BASE_URL`            | Optional alternate official origin, `https://x.pcstyle.dev`        |
+| `RAW_CAPTURE_URL`          | Durable raw-capture receiver                                       |
+| `SEARCH_API_URL`           | Search service retrieval endpoint                                  |
+| `SEARCH_SERVICE_TOKEN`     | Read-only credential for the search endpoint                       |
+| `RAW_CAPTURE_TOKEN`        | Ingestion-only credential for the capture receiver                 |
+| `DATA_SERVICE_TOKEN`       | Legacy shared fallback when a dedicated token is unset             |
+| `FIRECRAWL_API_KEY`        | Linked-page scraping and web-context search                        |
+| `OPENAI_API_KEY`           | Editable query interpretation                                      |
+| `OPENAI_MODEL`             | Optional model override; default `gpt-5-mini`                      |
+| `AGENTMAIL_API_KEY`        | Result-digest delivery                                             |
+| `AGENTMAIL_INBOX_ID`       | Existing sender inbox                                              |
+| `AGENTMAIL_WEBHOOK_SECRET` | Verification of delivery webhooks                                  |
+| `COLLECTOR_MODE`           | `outbound` selects the VM worker; unset keeps in-Convex collection |
+| `COLLECTOR_TOKEN`          | Shared secret for `worker.poll` / `worker.report`; production only |
 
 Register AgentMail's webhook at `<deployment>.convex.site/agentmail/webhook` for delivery events. A send is queued only by the explicit Email → Send results action. The interface distinguishes queued/sent/delivered states.
 
-The UI exposes account imports, search, and conversation collection. The same `jobs.start` API accepts `profile`, `following`, `followers`, and `archive`; these preserve complete responses for downstream account-discovery work. `bulk` supports `refresh:true` for engagement updates. All collection paths require a configured receiver, so an import never claims success by merely fetching data.
+The UI exposes account imports, search, and conversation collection. The same `jobs.start` API accepts `profile`, `following`, `followers`, and `archive`; these preserve complete responses for downstream account-discovery work. Only `bulk` returns a profile into `jobs.finish`, which is what creates the `accounts` row; the other kinds do not. `bulk` supports `refresh:true` for engagement updates. All collection paths require a configured receiver, so an import never claims success by merely fetching data.
 
 ## Verify
 
@@ -99,7 +126,7 @@ Oxlint runs with the Effect presets; `prepare` patches Oxlint and tsgolint on
 install. Search-service responses are decoded with Effect Schema
 in `convex/lib/results.ts`; other validators still use Zod.
 
-Tests cover raw payload preservation, JSON backfill pagination, safe unordered-stream behavior, stream completion, partial capture, identity pinning, origin selection, retry timing, durable receipts, user isolation, and the Firecrawl component response shape. Provider calls are mocked in tests. No email is sent and no provider credits are consumed by the suite. Selected ideas and remaining work from the supplied local-first spec are tracked in [spec adoption](spec-adoption.md).
+Tests cover raw payload preservation, JSON backfill pagination, safe unordered-stream behavior, stream completion, partial capture, identity pinning, outbound-worker finish-report account creation, origin selection, retry timing, durable receipts, user isolation, and the Firecrawl component response shape. Provider calls are mocked in tests. No email is sent and no provider credits are consumed by the suite. Selected ideas and remaining work from the supplied local-first spec are tracked in [spec adoption](spec-adoption.md).
 
 ## Guest sessions and publication
 

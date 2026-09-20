@@ -25,7 +25,7 @@ CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx @convex-dev/static-hosting upload --
 
 AgentMail delivery events for the configured sender inbox are registered at `https://utmost-kudu-321.convex.site/agentmail/webhook`. The inbox-scoped API succeeded; the organization-level create route rejected the key. `AGENTMAIL_WEBHOOK_SECRET` is configured in production. Incoming email processing is not registered. No email was sent during setup.
 
-Production imports use an outbound worker. At the September 20 integration check the VM worker, capture receiver, search API, continuous indexer, and nginx were running. Do not start a second worker or restart the active worker as routine verification. Follow the coordinated cutover steps below for any future worker move. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata and receipts return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. `scripts/setup-worker.mjs` configures its production credential without printing it.
+Production imports use an outbound worker. At the September 20 integration check the VM worker, capture receiver, search API, continuous indexer, and nginx were running. Do not start a second worker or restart the active worker as routine verification. Follow the coordinated cutover steps below for any future worker move. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata, receipts, and the finish-report profile return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. `scripts/setup-worker.mjs` configures `COLLECTOR_MODE=outbound` and `COLLECTOR_TOKEN` without printing the token. See [Outbound collector and accounts](#outbound-collector-and-accounts) for the account-creation path that depends on that finish report.
 
 Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
 
@@ -33,7 +33,66 @@ The hosted frontend and Convex backend were still older than main `e98e093`; a f
 
 Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; a guest session cannot send production email.
 
-Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. Browser visual checks were unavailable during deployment.
+Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. That profile-kind job proves raw handoff, not an `accounts` row: only a bulk finish report with a validated profile creates one. Browser visual checks were unavailable during deployment.
+
+## Outbound collector and accounts
+
+Production Convex is `COLLECTOR_MODE=outbound`. In that mode
+`convex/importer.ts` returns immediately and never calls x.md.
+`scripts/production-worker.ts` is the only production collector: it polls
+`worker.poll`, runs `collectXmd`, writes captures to `127.0.0.1:4319`, and
+reports progress through `worker.report`. Both `poll` and `report` refuse the
+call unless `COLLECTOR_MODE` is `outbound` and the token matches
+`COLLECTOR_TOKEN`. Local anonymous deployments stay in the default receiver
+mode instead; see [development](development.md#collector-modes).
+
+`jobs.start` still schedules `importer.run` for every job, including
+auto-continue and retry. In outbound mode that scheduled action is a no-op.
+The worker's next poll is what claims the re-queued job. Do not start a
+second worker to "help" continuations.
+
+### How an account row is created
+
+Pinning a job's `expectedUserId` is not the same as creating an account.
+`worker.report` `identity` → `jobs.pinIdentity` only writes the job. The
+`accounts` row (and `accountHandles` history) is created later, only when
+`jobs.finish` receives a `profile`:
+
+1. Bulk collection fetches the x.md profile first, hands that raw payload to
+   the receiver, then pins the numeric id before history.
+2. On success the worker maps that profile to `{ handle, userId, name, avatar? }`
+   with the same checks as `convex/importer.ts`: handle matches
+   `/^[A-Za-z0-9_]{1,15}$/`, `expectedUserId` is set, handle is stored
+   lowercased, name falls back to the screen name, avatar is kept only when it
+   is an `https://` URL. Otherwise `profile` is omitted and the job still
+   finishes.
+3. `worker.report` `finish` forwards that object to `jobs.finish`, which calls
+   `upsertAccount`. Identity is the provider id (`accounts.userId`); a
+   reassigned handle inserts a new row rather than adopting the previous
+   holder. See [the publication contract](publication-contract.md#account-identity).
+
+`collectXmd` only populates the returned `profile` on `kind: "bulk"`. A
+standalone `profile` / `following` / `followers` / `archive` / `live` /
+`post` job can complete with receipts and still leave `accounts` empty.
+Publication updates never invent an account; they reject with "No known
+account matches this update's providerAccountId/handle."
+
+Older production jobs that finished before this finish-report field existed
+did not create rows. Deploying the worker and backend together does not
+backfill them. Only a later bulk import that reports a valid profile will.
+Do not start that import without explicit approval.
+
+### Symptoms
+
+| What you see                                                                | Likely cause                                                                                                   |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Job complete, receipts present, account library empty                       | Finish report omitted `profile` (dropped in the worker, failed handle/id checks, or the job was not bulk).     |
+| Indexer / publication update `rejected_invalid`, "No known account matches" | Same gap: `upsertAccount` never ran, so `resolveAccount` has nothing to match.                                 |
+| Dashboard says the download worker is offline                               | No heartbeat within 45s (`collector` row `desktop`). Imports will not start.                                   |
+| `Worker authentication failed.`                                             | Convex `COLLECTOR_MODE` is not `outbound`, or `COLLECTOR_TOKEN` does not match `.local-captures/worker-token`. |
+
+Do not treat a durable capture receipt as proof that the account library or
+publication receiver can resolve that account.
 
 ## VM services
 
