@@ -45,6 +45,9 @@ enum Command {
         query: String,
         #[arg(long, default_value = "relevance", value_parser = ["relevance", "engagement", "likes", "newest", "oldest"])]
         sort: String,
+        /// Include backend timing and ranking counters in the JSON response.
+        #[arg(long)]
+        stats: bool,
     },
     /// Serve the existing app contract on loopback.
     Serve {
@@ -107,7 +110,12 @@ fn run_import(
     Ok(())
 }
 
-fn run_query(index: &std::path::Path, query: &str, sort: &str) -> color_eyre::Result<()> {
+fn run_query(
+    index: &std::path::Path,
+    query: &str,
+    sort: &str,
+    include_stats: bool,
+) -> color_eyre::Result<()> {
     let engine = search_tantivy::open(index, false)?;
     let sort: Sort = serde_json::from_value(serde_json::Value::String(sort.to_owned()))?;
     let expression = search_query::parse(query, None)?;
@@ -118,6 +126,7 @@ fn run_query(index: &std::path::Path, query: &str, sort: &str) -> color_eyre::Re
         sort,
         limit: 20,
         cursor: None,
+        include_stats,
     };
     println!(
         "{}",
@@ -215,7 +224,9 @@ async fn main() -> color_eyre::Result<()> {
     };
     match cli.command {
         Command::Import { input, archive } => run_import(&resolve_top_index()?, &input, &archive),
-        Command::Query { query, sort } => run_query(&resolve_top_index()?, &query, &sort),
+        Command::Query { query, sort, stats } => {
+            run_query(&resolve_top_index()?, &query, &sort, stats)
+        }
         Command::Watch {
             archive,
             drop_dir,

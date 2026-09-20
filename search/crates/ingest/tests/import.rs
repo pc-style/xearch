@@ -31,6 +31,7 @@ fn retained_import_replays_and_quarantines_invalid_records() {
         sort: Sort::Relevance,
         limit: 20,
         cursor: None,
+        include_stats: false,
     };
     let result = engine
         .search(
@@ -61,13 +62,15 @@ fn malformed_envelope_does_not_publish_partial_index() {
         sort: Sort::Relevance,
         limit: 20,
         cursor: None,
+        include_stats: false,
     };
-    assert!(
+    assert_eq!(
         engine
             .search(&search_query::parse("hello", None).unwrap(), &request, 0)
             .unwrap()
             .rows
-            .is_empty()
+            .len(),
+        0
     );
 }
 

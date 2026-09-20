@@ -2,11 +2,11 @@
 mod scoring;
 
 use search_backend::{IndexSink, SearchBackend};
-use search_model::{Error, Post, Result, SearchRequest, SearchResponse};
+use search_model::{BackendStats, Error, Post, Result, SearchRequest, SearchResponse, SearchStats};
 use search_query::Expr;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{ops::Bound, path::Path};
+use std::{ops::Bound, path::Path, time::Instant};
 use tantivy::collector::TopDocs;
 use tantivy::query::{
     AllQuery, BooleanQuery, ConstScoreQuery, EmptyQuery, Occur, PhraseQuery, Query, RangeQuery,
@@ -20,6 +20,16 @@ use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer, TokenStream}
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
 const MAX_WINDOW: usize = 10_000;
+
+fn started(enabled: bool) -> Option<Instant> {
+    enabled.then(Instant::now)
+}
+
+fn elapsed_us(start: Option<Instant>) -> u64 {
+    start.map_or(0, |started| {
+        u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+    })
+}
 
 fn storage(error: impl std::fmt::Display) -> Error {
     Error::Storage(error.to_string())
@@ -56,6 +66,7 @@ fn analyzer() -> TextAnalyzer {
 /// Returns filesystem, incompatible schema or index errors.
 pub fn open(path: &Path, create: bool) -> Result<Engine> {
     let expected = schema();
+    let fields = Fields::from_schema(&expected)?;
     let index = if create {
         std::fs::create_dir_all(path).map_err(storage)?;
         Index::open_or_create(
@@ -78,12 +89,43 @@ pub fn open(path: &Path, create: bool) -> Result<Engine> {
         .doc_store_cache_num_blocks(8)
         .try_into()
         .map_err(storage)?;
-    Ok(Engine { index, reader })
+    Ok(Engine {
+        index,
+        reader,
+        fields,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct Fields {
+    id: Field,
+    author: Field,
+    text: Field,
+    created: Field,
+    likes: Field,
+    engagement: Field,
+    post: Field,
+}
+
+impl Fields {
+    fn from_schema(schema: &Schema) -> Result<Self> {
+        let field = |name| schema.get_field(name).map_err(storage);
+        Ok(Self {
+            id: field("id")?,
+            author: field("author")?,
+            text: field("text")?,
+            created: field("created")?,
+            likes: field("likes")?,
+            engagement: field("engagement")?,
+            post: field("post")?,
+        })
+    }
 }
 
 pub struct Engine {
     index: Index,
     reader: IndexReader,
+    fields: Fields,
 }
 
 impl Engine {
@@ -97,12 +139,8 @@ impl Engine {
                 .index
                 .writer_with_num_threads(1, 32_000_000)
                 .map_err(storage)?,
-            schema: self.index.schema(),
+            fields: self.fields,
         })
-    }
-
-    fn field(&self, name: &str) -> Result<Field> {
-        self.index.schema().get_field(name).map_err(storage)
     }
 
     /// Live document count, reloaded from disk. Used to detect a registry
@@ -123,7 +161,7 @@ impl Engine {
                 let mut terms = Vec::new();
                 while stream.advance() {
                     terms.push(Term::from_field_text(
-                        self.field("text")?,
+                        self.fields.text,
                         &stream.token().text,
                     ));
                 }
@@ -147,14 +185,14 @@ impl Engine {
             }
             Expr::Author(author) => Ok(Box::new(ConstScoreQuery::new(
                 Box::new(TermQuery::new(
-                    Term::from_field_text(self.field("author")?, author),
+                    Term::from_field_text(self.fields.author, author),
                     IndexRecordOption::Basic,
                 )),
                 0.0,
             ))),
             Expr::Since(time) => Ok(Box::new(ConstScoreQuery::new(
                 Box::new(RangeQuery::new(
-                    Bound::Included(Term::from_field_i64(self.field("created")?, *time)),
+                    Bound::Included(Term::from_field_i64(self.fields.created, *time)),
                     Bound::Unbounded,
                 )),
                 0.0,
@@ -162,7 +200,7 @@ impl Engine {
             Expr::Until(time) => Ok(Box::new(ConstScoreQuery::new(
                 Box::new(RangeQuery::new(
                     Bound::Unbounded,
-                    Bound::Excluded(Term::from_field_i64(self.field("created")?, *time)),
+                    Bound::Excluded(Term::from_field_i64(self.fields.created, *time)),
                 )),
                 0.0,
             ))),
@@ -191,36 +229,32 @@ impl Engine {
 
 pub struct Writer {
     writer: IndexWriter,
-    schema: Schema,
+    fields: Fields,
 }
 
 impl IndexSink for Writer {
     fn upsert(&mut self, post: &Post) -> Result<()> {
-        let id = post
-            .tweet_id
-            .parse::<u64>()
-            .map_err(|_| Error::Invalid("Tweet ID must be an unsigned integer.".into()))?;
-        let field = |name| self.schema.get_field(name).map_err(storage);
+        let id = post.tweet_id.0;
         let mut document = TantivyDocument::default();
-        document.add_u64(field("id")?, id);
+        document.add_u64(self.fields.id, id);
         document.add_text(
-            field("author")?,
+            self.fields.author,
             search_query::normalize_author(&post.author)?,
         );
-        document.add_text(field("text")?, &post.text);
+        document.add_text(self.fields.text, &post.text);
         document.add_text(
-            field("post")?,
+            self.fields.post,
             serde_json::to_string(post).map_err(storage)?,
         );
-        document.add_f64(field("engagement")?, search_ranking::engagement(post));
+        document.add_f64(self.fields.engagement, search_ranking::engagement(post));
         if let Some(time) = post.created_at {
-            document.add_i64(field("created")?, time);
+            document.add_i64(self.fields.created, time);
         }
         if let Some(likes) = post.likes {
-            document.add_u64(field("likes")?, u64::from(likes));
+            document.add_u64(self.fields.likes, u64::from(likes));
         }
         self.writer
-            .delete_term(Term::from_field_u64(field("id")?, id));
+            .delete_term(Term::from_field_u64(self.fields.id, id));
         self.writer.add_document(document).map_err(storage)?;
         Ok(())
     }
@@ -237,8 +271,52 @@ struct Cursor {
     now: i64,
 }
 
-impl SearchBackend for Engine {
-    fn search(
+fn fingerprint(
+    searcher: &tantivy::Searcher,
+    expression: &Expr,
+    sort: search_model::Sort,
+    limit: usize,
+) -> Result<String> {
+    let mut hash = Sha256::new();
+    hash.update(serde_json::to_vec(&(expression, sort, limit)).map_err(storage)?);
+    for segment in searcher.segment_readers() {
+        hash.update(segment.segment_id().uuid_string());
+        hash.update(segment.num_deleted_docs().to_le_bytes());
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn cursor_bounds(request: &SearchRequest, fingerprint: &str, now: i64) -> Result<(usize, i64)> {
+    let cursor = request
+        .cursor
+        .as_ref()
+        .map(|raw| {
+            serde_json::from_str::<Cursor>(raw)
+                .map_err(|_| Error::Invalid("Invalid cursor.".into()))
+        })
+        .transpose()?;
+    if let Some(cursor) = cursor {
+        if cursor.fingerprint != fingerprint {
+            return Err(Error::StaleCursor);
+        }
+        if cursor.offset >= MAX_WINDOW
+            || cursor.now > now
+            || now.saturating_sub(cursor.now) > 300_000
+        {
+            return Err(Error::Invalid(
+                "Cursor expired or outside the result window.".into(),
+            ));
+        }
+        Ok((cursor.offset, cursor.now))
+    } else {
+        Ok((0, now))
+    }
+}
+
+impl Engine {
+    // Diagnostics are opt-in; keeping this path separate avoids timer branches
+    // in every default search candidate.
+    fn search_fast(
         &self,
         expression: &Expr,
         request: &SearchRequest,
@@ -247,39 +325,8 @@ impl SearchBackend for Engine {
         request.validate()?;
         self.reader.reload().map_err(storage)?;
         let searcher = self.reader.searcher();
-        let mut hash = Sha256::new();
-        hash.update(
-            serde_json::to_vec(&(expression, request.sort, request.limit)).map_err(storage)?,
-        );
-        for segment in searcher.segment_readers() {
-            hash.update(segment.segment_id().uuid_string());
-            hash.update(segment.num_deleted_docs().to_le_bytes());
-        }
-        let fingerprint = format!("{:x}", hash.finalize());
-        let cursor = request
-            .cursor
-            .as_ref()
-            .map(|raw| {
-                serde_json::from_str::<Cursor>(raw)
-                    .map_err(|_| Error::Invalid("Invalid cursor.".into()))
-            })
-            .transpose()?;
-        let (offset, now) = if let Some(cursor) = cursor {
-            if cursor.fingerprint != fingerprint {
-                return Err(Error::StaleCursor);
-            }
-            if cursor.offset >= MAX_WINDOW
-                || cursor.now > now
-                || now.saturating_sub(cursor.now) > 300_000
-            {
-                return Err(Error::Invalid(
-                    "Cursor expired or outside the result window.".into(),
-                ));
-            }
-            (cursor.offset, cursor.now)
-        } else {
-            (0, now)
-        };
+        let fingerprint = fingerprint(&searcher, expression, request.sort, request.limit)?;
+        let (offset, now) = cursor_bounds(request, &fingerprint, now)?;
         let query = self.compile(expression)?;
         let page_limit = request.limit.min(MAX_WINDOW.saturating_sub(offset));
         let collector = TopDocs::with_limit(page_limit.saturating_add(1))
@@ -296,7 +343,7 @@ impl SearchBackend for Engine {
             .map(|(_, address)| {
                 let document = searcher.doc::<TantivyDocument>(address).map_err(storage)?;
                 let raw = document
-                    .get_first(self.field("post")?)
+                    .get_first(self.fields.post)
                     .and_then(|value| value.as_str())
                     .ok_or_else(|| storage("Missing stored post"))?;
                 serde_json::from_str(raw).map_err(storage)
@@ -324,6 +371,98 @@ impl SearchBackend for Engine {
             rows,
             next_cursor,
             warnings,
+            stats: None,
+        })
+    }
+}
+
+impl SearchBackend for Engine {
+    fn search(
+        &self,
+        expression: &Expr,
+        request: &SearchRequest,
+        now: i64,
+    ) -> Result<SearchResponse> {
+        if !request.include_stats {
+            return self.search_fast(expression, request, now);
+        }
+        let stats_started = started(true);
+        request.validate()?;
+        let mut backend = BackendStats::default();
+
+        let stage = started(true);
+        self.reader.reload().map_err(storage)?;
+        let searcher = self.reader.searcher();
+        backend.reload_us = elapsed_us(stage);
+        backend.index_docs = searcher.num_docs();
+        backend.segments = u64::try_from(searcher.segment_readers().len()).unwrap_or(u64::MAX);
+
+        let stage = started(true);
+        let fingerprint = fingerprint(&searcher, expression, request.sort, request.limit)?;
+        backend.fingerprint_us = elapsed_us(stage);
+
+        let stage = started(true);
+        let (offset, now) = cursor_bounds(request, &fingerprint, now)?;
+        backend.cursor_us = elapsed_us(stage);
+
+        let stage = started(true);
+        let query = self.compile(expression)?;
+        backend.compile_us = elapsed_us(stage);
+
+        let page_limit = request.limit.min(MAX_WINDOW.saturating_sub(offset));
+        let collector = TopDocs::with_limit(page_limit.saturating_add(1))
+            .and_offset(offset)
+            .order_by(scoring::Ranking {
+                sort: request.sort,
+                now,
+            });
+        let stage = started(true);
+        let hits = searcher.search(&query, &collector).map_err(storage)?;
+        backend.retrieve_us = elapsed_us(stage);
+        backend.candidate_hits = u64::try_from(hits.len()).unwrap_or(u64::MAX);
+        backend.ranking_calls = backend.candidate_hits;
+        let more = hits.len() > page_limit;
+
+        let stage = started(true);
+        let rows = hits
+            .into_iter()
+            .take(page_limit)
+            .map(|(_, address)| {
+                let document = searcher.doc::<TantivyDocument>(address).map_err(storage)?;
+                let raw = document
+                    .get_first(self.fields.post)
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| storage("Missing stored post"))?;
+                serde_json::from_str(raw).map_err(storage)
+            })
+            .collect::<Result<Vec<Post>>>()?;
+        backend.materialize_us = elapsed_us(stage);
+        backend.returned_rows = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+
+        let next_offset = offset.saturating_add(rows.len());
+        let next_cursor = if more && next_offset < MAX_WINDOW {
+            Some(
+                serde_json::to_string(&Cursor {
+                    fingerprint,
+                    offset: next_offset,
+                    now,
+                })
+                .map_err(storage)?,
+            )
+        } else {
+            None
+        };
+        let warnings = if more && next_offset >= MAX_WINDOW {
+            vec!["Result window capped at 10,000. Narrow your query.".into()]
+        } else {
+            Vec::new()
+        };
+        backend.total_us = elapsed_us(stats_started);
+        Ok(SearchResponse {
+            rows,
+            next_cursor,
+            warnings,
+            stats: Some(SearchStats { backend, api: None }),
         })
     }
 }

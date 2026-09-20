@@ -21,6 +21,37 @@ export const postFields = {
   avatar: v.optional(v.string()),
   displayName: v.optional(v.string()),
 };
+
+export const backendStatsFields = {
+  totalUs: v.number(),
+  reloadUs: v.number(),
+  fingerprintUs: v.number(),
+  cursorUs: v.number(),
+  compileUs: v.number(),
+  retrieveUs: v.number(),
+  rankingCalls: v.number(),
+  materializeUs: v.number(),
+  candidateHits: v.number(),
+  returnedRows: v.number(),
+  indexDocs: v.number(),
+  segments: v.number(),
+};
+export const apiStatsFields = {
+  totalUs: v.number(),
+  authUs: v.number(),
+  validateUs: v.number(),
+  cursorVerifyUs: v.number(),
+  parseUs: v.number(),
+  permitUs: v.number(),
+  queueUs: v.number(),
+  engineUs: v.number(),
+  postprocessUs: v.number(),
+  cursorSignUs: v.number(),
+};
+export const searchStatsFields = {
+  backend: v.object(backendStatsFields),
+  api: v.optional(v.object(apiStatsFields)),
+};
 export const kindValidator = v.union(
   v.literal("bulk"),
   v.literal("live"),
@@ -293,6 +324,7 @@ export default defineSchema({
     raw: v.string(),
     sort: sortValidator,
     cursor: v.optional(v.string()),
+    includeStats: v.optional(v.boolean()),
     status: v.union(
       v.literal("queued"),
       v.literal("running"),
@@ -302,6 +334,7 @@ export default defineSchema({
     rows: v.array(v.object(postFields)),
     nextCursor: v.optional(v.string()),
     warnings: v.array(v.string()),
+    stats: v.optional(v.object(searchStatsFields)),
     error: v.optional(v.string()),
   }).index("by_owner", ["owner"]),
   saved: defineTable({

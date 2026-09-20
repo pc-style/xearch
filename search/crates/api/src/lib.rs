@@ -7,10 +7,10 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use search_backend::SearchBackend;
-use search_model::{Error, SearchRequest, SearchResponse};
+use search_model::{ApiStats, Error, SearchRequest, SearchResponse, SearchStats};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use tokio::sync::Semaphore;
 
 type HttpError = (StatusCode, String);
@@ -127,6 +127,12 @@ fn unauthorized() -> HttpError {
     )
 }
 
+fn elapsed_us(start: Option<Instant>) -> u64 {
+    start.map_or(0, |started| {
+        u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+    })
+}
+
 fn map_error(error: Error) -> HttpError {
     match error {
         Error::Invalid(message) => (StatusCode::BAD_REQUEST, message),
@@ -141,8 +147,18 @@ fn map_error(error: Error) -> HttpError {
     }
 }
 
-async fn run(app: &App, mut request: SearchRequest) -> Result<SearchResponse, HttpError> {
+async fn run(
+    app: &App,
+    mut request: SearchRequest,
+    auth_us: u64,
+    total_started: Option<Instant>,
+) -> Result<SearchResponse, HttpError> {
+    let include_stats = request.include_stats;
+    let validate_started = include_stats.then(Instant::now);
     request.validate().map_err(map_error)?;
+    let validate_us = elapsed_us(validate_started);
+
+    let cursor_verify_started = include_stats.then(Instant::now);
     // Cursors cross the wire HMAC-signed; verify before the engine sees them.
     if let Some(outer) = request.cursor.take() {
         let signed: Signed = serde_json::from_str(outer.as_str())
@@ -150,35 +166,49 @@ async fn run(app: &App, mut request: SearchRequest) -> Result<SearchResponse, Ht
         verify(&signed, CURSOR_PURPOSE, &app.key)?;
         request.cursor = Some(signed.payload);
     }
+    let cursor_verify_us = elapsed_us(cursor_verify_started);
+
+    let parse_started = include_stats.then(Instant::now);
     let expression =
         search_query::parse(&request.query, request.author.as_deref()).map_err(map_error)?;
+    let parse_us = elapsed_us(parse_started);
+
+    let permit_started = include_stats.then(Instant::now);
     let permit = Arc::clone(&app.permits).try_acquire_owned().map_err(|_| {
         (
             StatusCode::TOO_MANY_REQUESTS,
             "Search is busy. Retry shortly.".into(),
         )
     })?;
+    let permit_us = elapsed_us(permit_started);
+    let queued_at = include_stats.then(Instant::now);
     let engine = Arc::clone(&app.engine);
     let task = tokio::task::spawn_blocking(move || {
+        let queue_us = elapsed_us(queued_at);
+        let engine_started = include_stats.then(Instant::now);
         let result = engine.search(
             &expression,
             &request,
             jiff::Timestamp::now().as_millisecond(),
         );
+        let engine_us = elapsed_us(engine_started);
         drop(permit);
-        result
+        (result, queue_us, engine_us)
     });
     // Blocking work retains its permit even if the caller times out or disconnects.
-    let mut response = tokio::time::timeout(std::time::Duration::from_secs(10), task)
-        .await
-        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, "Search timed out.".into()))?
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Search worker failed.".into(),
-            )
-        })?
-        .map_err(map_error)?;
+    let (result, queue_us, engine_us) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, "Search timed out.".into()))?
+            .map_err(|_| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Search worker failed.".into(),
+                )
+            })?;
+    let mut response = result.map_err(map_error)?;
+
+    let postprocess_started = include_stats.then(Instant::now);
     let mut truncated = false;
     for post in &mut response.rows {
         truncated |= truncate(&mut post.text, 6000);
@@ -195,6 +225,9 @@ async fn run(app: &App, mut request: SearchRequest) -> Result<SearchResponse, Ht
             .warnings
             .push("Some display fields were truncated; the full text remains indexed.".into());
     }
+    let postprocess_us = elapsed_us(postprocess_started);
+
+    let cursor_sign_started = include_stats.then(Instant::now);
     // Re-sign any continuing cursor so page depth stays server-controlled.
     if let Some(cursor) = response.next_cursor.take() {
         let signed = sign(cursor, CURSOR_PURPOSE, &app.key).map_err(map_error)?;
@@ -205,6 +238,23 @@ async fn run(app: &App, mut request: SearchRequest) -> Result<SearchResponse, Ht
             )
         })?;
         response.next_cursor = Some(encoded);
+    }
+    let cursor_sign_us = elapsed_us(cursor_sign_started);
+
+    if include_stats {
+        let stats = response.stats.get_or_insert_with(SearchStats::default);
+        stats.api = Some(ApiStats {
+            total_us: elapsed_us(total_started),
+            auth_us,
+            validate_us,
+            cursor_verify_us,
+            parse_us,
+            permit_us,
+            queue_us,
+            engine_us,
+            postprocess_us,
+            cursor_sign_us,
+        });
     }
     Ok(response)
 }
@@ -226,6 +276,8 @@ async fn search(
     headers: HeaderMap,
     Json(request): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, HttpError> {
+    let total_started = request.include_stats.then(Instant::now);
+    let auth_started = total_started;
     let token = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
@@ -239,20 +291,30 @@ async fn search(
     expected
         .verify_slice(&actual.finalize().into_bytes())
         .map_err(|_| unauthorized())?;
-    run(&app, request).await.map(Json)
+    run(&app, request, elapsed_us(auth_started), total_started)
+        .await
+        .map(Json)
 }
 
 async fn ticket_search(
     State(app): State<App>,
     Json(signed): Json<Signed>,
 ) -> Result<Json<Signed>, HttpError> {
+    let total_started = Instant::now();
+    let auth_started = total_started;
     verify(&signed, TICKET_PURPOSE, &app.key)?;
     let ticket: Ticket = serde_json::from_str(&signed.payload).map_err(|_| unauthorized())?;
     let now = jiff::Timestamp::now().as_millisecond();
     if ticket.expires_at <= now || ticket.expires_at > now.saturating_add(60_000) {
         return Err(unauthorized());
     }
-    let result = run(&app, ticket.request).await?;
+    let result = run(
+        &app,
+        ticket.request,
+        elapsed_us(Some(auth_started)),
+        Some(total_started),
+    )
+    .await?;
     let receipt = Receipt {
         session_id: ticket.session_id,
         owner: ticket.owner,

@@ -1,6 +1,6 @@
 //! Replayable imports: retain exact input bytes, stream posts, commit, then receipt.
 use search_backend::IndexSink;
-use search_model::{Error, Post, Result};
+use search_model::{Error, Post, Result, TweetId};
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
@@ -307,9 +307,8 @@ pub fn normalize(value: &Value) -> Result<Post> {
         .collect();
     Ok(Post {
         url: format!("https://x.com/{author}/status/{tweet_id}"),
-        tweet_id,
+        tweet_id: TweetId(numeric),
         author,
-        author_id,
         text,
         created_at,
         likes: count("likes")?,

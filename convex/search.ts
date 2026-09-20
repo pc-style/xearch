@@ -7,7 +7,7 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
-import { sortValidator, postFields } from "./schema";
+import { postFields, searchStatsFields, sortValidator } from "./schema";
 import {
   parseQuery,
   assertAuthorizedScope,
@@ -28,6 +28,7 @@ export const start = mutation({
     raw: v.string(),
     sort: sortValidator,
     cursor: v.optional(v.string()),
+    includeStats: v.optional(v.boolean()),
     // Optional and forward-looking: today the only value this app can
     // authorize is "global" (see assertAuthorizedScope in ./lib/search), so
     // this is never persisted on the session — there is nothing narrower to
@@ -53,6 +54,7 @@ export const start = mutation({
       raw: args.raw,
       sort: args.sort,
       cursor,
+      includeStats: args.includeStats === true,
       status: "queued",
       rows: [],
       warnings: [],
@@ -83,6 +85,7 @@ export const complete = internalMutation({
     rows: v.array(v.object(postFields)),
     warnings: v.array(v.string()),
     nextCursor: v.optional(v.string()),
+    stats: v.optional(v.object(searchStatsFields)),
     error: v.optional(v.string()),
   },
   handler: async (ctx, { sessionId, ...rest }) => {
@@ -125,6 +128,7 @@ export const execute = internalAction({
           sort: session.sort,
           cursor: session.cursor,
           limit: 20,
+          ...(session.includeStats ? { includeStats: true } : {}),
         }),
         redirect: "error",
         signal: AbortSignal.timeout(30_000),

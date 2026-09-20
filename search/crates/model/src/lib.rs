@@ -1,5 +1,42 @@
 //! Backend-neutral wire types. No search-engine types cross this boundary.
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+
+/// Compact Rust representation of an X Snowflake ID. It remains a decimal
+/// string on the wire so JavaScript clients never lose integer precision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TweetId(pub u64);
+
+impl fmt::Display for TweetId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl Serialize for TweetId {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TweetId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let parsed = value
+            .parse::<u64>()
+            .map_err(|_| serde::de::Error::custom("Tweet ID must be an unsigned integer."))?;
+        if parsed == 0 || parsed.to_string() != value {
+            return Err(serde::de::Error::custom("Tweet ID must be canonical."));
+        }
+        Ok(Self(parsed))
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -16,9 +53,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Post {
-    pub tweet_id: String,
+    /// Stored as u64 in Rust but serialized as a decimal string for clients.
+    pub tweet_id: TweetId,
     pub author: String,
-    pub author_id: String,
     pub text: String,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,6 +98,9 @@ pub struct SearchRequest {
     pub limit: usize,
     #[serde(default)]
     pub cursor: Option<String>,
+    /// Diagnostics are opt-in so ordinary searches keep the small response.
+    #[serde(default, rename = "includeStats")]
+    pub include_stats: bool,
 }
 
 impl SearchRequest {
@@ -87,4 +127,65 @@ pub struct SearchResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<SearchStats>,
+}
+
+/// Timings and counters are emitted only when `includeStats` is true.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchStats {
+    pub backend: BackendStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<ApiStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendStats {
+    pub total_us: u64,
+    pub reload_us: u64,
+    pub fingerprint_us: u64,
+    pub cursor_us: u64,
+    pub compile_us: u64,
+    pub retrieve_us: u64,
+    pub ranking_calls: u64,
+    pub materialize_us: u64,
+    pub candidate_hits: u64,
+    pub returned_rows: u64,
+    pub index_docs: u64,
+    pub segments: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiStats {
+    pub total_us: u64,
+    pub auth_us: u64,
+    pub validate_us: u64,
+    pub cursor_verify_us: u64,
+    pub parse_us: u64,
+    pub permit_us: u64,
+    pub queue_us: u64,
+    pub engine_us: u64,
+    pub postprocess_us: u64,
+    pub cursor_sign_us: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Post, TweetId};
+
+    #[test]
+    fn tweet_id_is_compact_in_rust_and_decimal_on_wire() {
+        assert_eq!(std::mem::size_of::<TweetId>(), std::mem::size_of::<u64>());
+        let encoded = serde_json::to_string(&TweetId(1_234_567_890_123_456_789)).ok();
+        assert_eq!(encoded.as_deref(), Some("\"1234567890123456789\""));
+        let decoded = encoded
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<TweetId>(value).ok());
+        assert_eq!(decoded, Some(TweetId(1_234_567_890_123_456_789)));
+        let old_post = r#"{"tweetId":"1","author":"a","authorId":"42","text":"x","url":"https://x.com/a/status/1","links":[]}"#;
+        assert!(serde_json::from_str::<Post>(old_post).is_ok());
+    }
 }
