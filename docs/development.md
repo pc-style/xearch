@@ -30,9 +30,48 @@ out existing sessions. The frontend is http://localhost:5173. `.env.local` and
 `.convex/` are ignored. Use Connections in the app to inspect which integrations
 are configured.
 
+Shareable search URLs are `?q=…&sort=relevance|engagement|likes|newest|oldest`.
+Add `stats=1` to turn on **Stats for nerds** (the same flag as
+`includeStats` on the search request; ordinary results omit timings).
+`?dashboard=1` opens the import dashboard. Back/forward restores `q`,
+`sort`, and `stats` from `popstate`.
+
 ## Local import dashboard
 
-Open `http://localhost:5173/?dashboard=1` for the live import controls. Start/stop/retry jobs, continue older pages, and inspect raw-capture receipts. All seven x.md collection tasks are available. Jobs are private to the current guest session; other tabs in that session update through Convex subscriptions.
+Open `http://localhost:5173/?dashboard=1`. The page is an account library, not
+a job wall. `src/Dashboard.tsx` mounts `src/library/Library.tsx` first, then
+the non-account job feed, with the import form and Connections in the aside.
+Section order matches the compact-layout backlog item:
+
+| Section            | Source                                                             | What it shows                                                           |
+| ------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Overview           | `convex/summary.ts` `summary` / `health`, `convex/limits.ts` `all` | Indexed posts/people, queue buckets, dependency health, provider limits |
+| Account library    | `convex/library.ts` `rows`                                         | One row per resolved account, with search and publication-status filter |
+| Active queue       | same `rows`, unfiltered                                            | Currently queued or running bulk jobs                                   |
+| Recent run history | same `rows`                                                        | Last few runs across accounts, any outcome                              |
+| Other imports      | `convex/jobs.list` minus `kind: "bulk"`                            | Live search, post, profile, followers, following, archive               |
+| Start an import    | `convex/jobs.start`                                                | All seven x.md collection tasks                                         |
+
+Only `kind: "bulk"` creates or updates a library row. A live search such as
+`from:theo` is not an account identity. Jobs are private to the current guest
+session; other tabs in that session update through Convex subscriptions.
+Start/stop/retry, continue older pages, and raw-capture receipts stay on the
+per-account row (`src/library/AccountRow.tsx`) or on Other imports (`Job`).
+The search page's Imports modal is a shortcut job list on `src/App.tsx`; the
+account library exists only on this dashboard.
+
+**Indexed people** in Overview is counted from every `accountPublications`
+row (global). The list below is owner-scoped to the signed-in caller's own
+bulk imports. The tile links to `#account-library` and says so; do not treat
+the two numbers as the same set.
+
+Read-side identity in `convex/library.ts` groups by pinned provider account
+id (`job.expectedUserId` / `accounts.by_user_id`), falling back to handle
+only when no id was pinned. The write path is not there yet:
+`convex/jobs.ts` `finish` still looks up `accounts.by_handle` and patches
+that row, including a new `userId`. A real handle reassignment can still
+overwrite one account's identity with another's. See
+[the publication contract](publication-contract.md) and `to-do.md`.
 
 With the local backend running, configure the temporary local receiver once,
 then leave it running alongside the backend and frontend:
@@ -54,31 +93,83 @@ upstream request may still finish and already-written files remain. Technical
 details show up to 100 receipts per job. Older completed jobs with more history
 offer a continuation button; they are not silently restarted.
 
-Put backend keys and `OPENAI_MODEL` in `.env.local`, then run `bun run env:sync`. The script only syncs allowlisted nonempty variables to the local anonymous deployment and never prints their values. AgentMail webhooks need a public deployment URL; leave the webhook secret unset during local work unless a public callback has separately been configured.
+Put backend keys and `OPENAI_MODEL` in `.env.local`, then run `bun run env:sync`. The script only syncs allowlisted nonempty variables to the local anonymous deployment and never prints their values. `COLLECTOR_MODE` and `PUBLICATION_SERVICE_TOKEN` are not on that allowlist; set them with `bunx convex env set NAME` when a local publication or outbound-worker check actually needs them. AgentMail webhooks need a public deployment URL; leave the webhook secret unset during local work unless a public callback has separately been configured.
 
 Import controls work without `SEARCH_API_URL`. The separately owned search
 service's application boundary is documented in the
 [integration contract](integration-contract.md).
 
+### Signed-out vs loading
+
+`useQuery(fn, "skip")` and an in-flight query both return `undefined`. Signed-out
+visitors used to sit on "Loading…" forever because owner-scoped queries were
+called with `{}` before a session existed. Pass `"skip"` unless
+`useConvexAuth().isAuthenticated` is true, then branch the UI on
+`isAuthenticated` first:
+
+```ts
+const jobs = useQuery(api.jobs.list, isAuthenticated ? {} : "skip");
+// signed-out → "Connect to …"; authenticated && jobs === undefined → "Loading…"
+```
+
+Current skip sites: `Library` (summary, health, limits, unfiltered rows),
+`AccountLibrary` (filtered rows), Dashboard `jobs.list`, and in `src/App.tsx`
+results, jobs, saved searches, bookmarks, deliveries, and the email preview.
+`Job` receipts skip until the row is expanded, which only happens after
+sign-in. Do not "fix" empty signed-out panels by showing a spinner.
+
+`api.integrations.configured` is the exception: it does not call `user(ctx)`,
+so Connections can render without a session. It reports **configuration** (env
+vars present), not liveness. In `COLLECTOR_MODE=outbound` it also folds in the
+desktop collector heartbeat with `Date.now()` inside the query. Convex only
+reruns that query when a document or arg changes, so a dead worker can stay
+"online" until something else invalidates it. The Overview health panel is
+the place that is allowed to talk about liveness, and it uses a different
+table (`serviceHealth`) with a client-supplied clock.
+
+### `now` is an argument, not `Date.now()` in the query
+
+`convex/summary.ts` `summary` and `health` take a required `now: number`.
+Queries must not read the wall clock; `stale` would freeze at the last
+document-driven recompute. `src/library/Library.tsx` passes `now` and
+refreshes it every 30 seconds so Overview timestamps and the five-minute
+health stale window actually move. Do not restore an optional `now` that
+defaults to `Date.now()` in the handler.
+
+Nothing in this tree writes `serviceHealth` or `providerThrottleEvents` yet.
+Until a writer exists, health is `"unknown"` / "No health report received
+yet", and every provider limit is `{ kind: "none" }` ("No throttling
+reported" — not a checked all-clear). `src/integrationStatus.ts` keeps the
+two vocabularies apart: `indexingUnavailableMessage` answers "can I start an
+import" from `configured`; `serviceHealthLabel` answers "is a dependency
+alive" from observed facts. Do not merge them.
+
+`src/library/summaryApi.tsx` and `src/library/limitsApi.tsx` still call
+`summary` / `health` / `limits.all` through `anyApi` aliases. Codegen now
+lists those modules in `convex/_generated/api.d.ts`; the aliases resolve to
+the same functions. Prefer `api.summary.*` / `api.limits.all` in new code.
+
 ## Connect providers
 
 Use `bunx convex env set NAME` and supply the value through stdin/the prompt. Do not use `VITE_` variables for secrets.
 
-| Variable                   | Purpose                                                     |
-| -------------------------- | ----------------------------------------------------------- |
-| `X_MD_API_KEY`             | x.md acquisition credential                                 |
-| `X_MD_BASE_URL`            | Optional alternate official origin, `https://x.pcstyle.dev` |
-| `RAW_CAPTURE_URL`          | Durable raw-capture receiver                                |
-| `SEARCH_API_URL`           | Search service retrieval endpoint                           |
-| `SEARCH_SERVICE_TOKEN`     | Read-only credential for the search endpoint                |
-| `RAW_CAPTURE_TOKEN`        | Ingestion-only credential for the capture receiver          |
-| `DATA_SERVICE_TOKEN`       | Legacy shared fallback when a dedicated token is unset      |
-| `FIRECRAWL_API_KEY`        | Linked-page scraping and web-context search                 |
-| `OPENAI_API_KEY`           | Editable query interpretation                               |
-| `OPENAI_MODEL`             | Optional model override; default `gpt-5-mini`               |
-| `AGENTMAIL_API_KEY`        | Result-digest delivery                                      |
-| `AGENTMAIL_INBOX_ID`       | Existing sender inbox                                       |
-| `AGENTMAIL_WEBHOOK_SECRET` | Verification of delivery webhooks                           |
+| Variable                    | Purpose                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| `X_MD_API_KEY`              | x.md acquisition credential                                                   |
+| `X_MD_BASE_URL`             | Optional alternate official origin, `https://x.pcstyle.dev`                   |
+| `RAW_CAPTURE_URL`           | Durable raw-capture receiver                                                  |
+| `SEARCH_API_URL`            | Search service retrieval endpoint                                             |
+| `SEARCH_SERVICE_TOKEN`      | Read-only credential for the search endpoint                                  |
+| `RAW_CAPTURE_TOKEN`         | Ingestion-only credential for the capture receiver                            |
+| `DATA_SERVICE_TOKEN`        | Legacy shared fallback when a dedicated token is unset                        |
+| `FIRECRAWL_API_KEY`         | Linked-page scraping and web-context search                                   |
+| `OPENAI_API_KEY`            | Editable query interpretation                                                 |
+| `OPENAI_MODEL`              | Optional model override; default `gpt-5-mini`                                 |
+| `AGENTMAIL_API_KEY`         | Result-digest delivery                                                        |
+| `AGENTMAIL_INBOX_ID`        | Existing sender inbox                                                         |
+| `AGENTMAIL_WEBHOOK_SECRET`  | Verification of delivery webhooks                                             |
+| `COLLECTOR_MODE`            | `outbound` uses the production worker heartbeat; unset uses `RAW_CAPTURE_URL` |
+| `PUBLICATION_SERVICE_TOKEN` | Auth for `POST /publication/update`; falls back to `DATA_SERVICE_TOKEN`       |
 
 Register AgentMail's webhook at `<deployment>.convex.site/agentmail/webhook` for delivery events. A send is queued only by the explicit Email → Send results action. The interface distinguishes queued/sent/delivered states.
 

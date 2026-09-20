@@ -78,8 +78,9 @@ count rather than adding per-candidate clocks to the default hot path.
 - The default search path does no timing instrumentation.
 - `includeStats: true` opt-in requests backend and API timings in integer
   microseconds. The response is unchanged and omits `stats` by default.
-- The website exposes a **Stats for nerds** checkbox and renders backend/API
-  stages without changing ordinary result payloads.
+- The website exposes a **Stats for nerds** checkbox (`?stats=1` on the
+  search URL) and renders backend/API stages without changing ordinary
+  result payloads.
 - Snowflake date derivation was deliberately not added in this branch: the
   normalizer's existing provider timestamp semantics are preserved rather than
   inventing dates for numeric IDs whose provenance is unknown.
