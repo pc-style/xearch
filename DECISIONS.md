@@ -37,9 +37,13 @@
      distinct event shape.
   5. **`downloaded` vs. `waiting_for_indexing`** — collapsed into one instant
      on our side until the indexer can report a real pickup/start event.
+
   Also unconfirmed: the auth convention (`PUBLICATION_SERVICE_TOKEN` falling
   back to `DATA_SERVICE_TOKEN`) and the HTTP status mapping
-  (200/401/422) the receiver replies with.
+  (200/401/422) the receiver replies with. Assumptions 1-3 are now what the
+  in-repo sender actually does (`search/crates/indexer/src/publish.rs`,
+  merged in `4c13fe4`); that settles our side of them, not Pronsh's
+  agreement.
 - Known consequence of building ahead of agreement, found while verifying this
   document (2026-09-20): `convex/jobs.ts`'s `finish` upsert resolved accounts
   purely `by_handle` and unconditionally patched whatever row it found,
@@ -56,7 +60,7 @@
   `convex/limits.ts`) may need to change before a real indexer can use them.
   No real indexer has called `/publication/update` as of this entry.
 
-# Known-open-issues branch (`adam/known-open-issues`)
+# Known-open-issues branch (`adam/known-open-issues`, merged as `4c13fe4`)
 
 Decisions taken while closing the defects carried in the previous session's
 handoff. Each one is a judgement call a reviewer should be able to challenge.
@@ -68,7 +72,7 @@ handoff. Each one is a judgement call a reviewer should be able to challenge.
   `accounts` rows can then share one `handle`, so `by_handle` is no longer
   even nominally unique. Every read that used `.unique()` on it
   (`library.ts`, `summary.ts`, `jobs.start`) now reads two and treats an
-  ambiguous match as *unresolved* rather than picking one. The alternative —
+  ambiguous match as _unresolved_ rather than picking one. The alternative —
   rewriting the previous holder's handle to free it — was rejected: we do not
   know what that account renamed itself to, and inventing a value to preserve
   an index property would be exactly the kind of fabricated data the rest of
@@ -114,3 +118,46 @@ handoff. Each one is a judgement call a reviewer should be able to challenge.
 - **Oversized pages are split by measured bytes, not by a post count.**
   Retained captures on the VM range from ~2.1 KB to ~6.2 KB per post, so any
   fixed posts-per-capture constant would be wrong at one end of that range.
+
+Decisions added during review of that branch, before it merged:
+
+- **An incomplete ownership scan is refused before its results are looked
+  at.** `library.history` first returned whatever the scan found and only
+  said "incomplete" when it found nothing. But the scan walks
+  `_creationTime` order while history is presented by `updatedAt`, so a run
+  the scan never reached can belong in the page it would return. Returning
+  the partial set would present a partial scan as the account's history —
+  the same failure as presenting a partial count as a total — so
+  `exhausted: false` now throws regardless of what was collected.
+- **An applied `failed` publication update confirms nothing.**
+  `confirmedCaptureIds` counted every `applied` update's `captureIds` as
+  confirmed, including ones whose `reportedState` was `"failed"` — so a
+  capture the indexer could not index vanished from "saved captures awaiting
+  indexing", the one number meant to show outstanding work. `failed` is now
+  excluded there. It still moves the account's displayed state; it just does
+  not retire the evidence.
+- **The sender refuses a cleartext endpoint instead of trusting the
+  operator.** Every update carries `PUBLICATION_SERVICE_TOKEN` in an
+  `Authorization: Bearer` header, so `PublishConfig::new` rejects any
+  `http://` URL whose host is not loopback, at construction, before a
+  request can exist. Loopback `http://` stays allowed because that is what
+  the crate's own tests point at and those bytes never leave the machine. A
+  hostname that merely resolves to loopback is not accepted: DNS is not a
+  property this sender can rely on. Failing loudly at startup was chosen
+  over failing silently, because a misconfiguration that quietly disabled
+  publication looks identical to a working deployment with nothing to say.
+- **What a stood-down import would have reported is kept, not dropped.**
+  While an update is owed a response its generation is reserved, so a later
+  import for the same account cannot publish at it. That import used to just
+  log and vanish — and because the importer skips an already-recorded
+  capture on every later pass, its capture ids would never have been sent by
+  anything, leaving those posts indexed and invisible in the product
+  forever. They are now retained on the account
+  (`publications.<handle>.deferred`), several stood-down imports coalesce
+  into one entry, and the entry goes out as a follow-on update at the next
+  generation once the owed update is answered. A follow-on is a new update,
+  not a replay: it is recounted and freshly stamped, and only the identity
+  comes from the registry.
+
+Developer/operator map of the resulting behavior (identity, dismissal,
+limits, worker liveness, publication loop): `docs/control-plane.md`.
