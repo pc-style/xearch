@@ -72,6 +72,40 @@ const postDate = new Intl.DateTimeFormat(undefined, {
 });
 const compact = (n: number) => compactNumber.format(n);
 const formatDuration = (microseconds: number) => `${(microseconds / 1000).toFixed(2)} ms`;
+export type Connection = {
+  name: string;
+  ready: boolean | undefined;
+  purpose: string;
+  env?: string;
+  note?: string;
+};
+/**
+ * The "stores imported posts" row in the Connections panel means two
+ * different things depending on `convex/integrations.ts`'s `configured`
+ * query: in receiver mode it's a config question (set the env vars), in
+ * outbound mode it's a liveness question about the download worker (which
+ * reads RAW_CAPTURE_URL/TOKEN on its own machine — setting them here does
+ * nothing). Keep the vocabulary consistent with
+ * `integrationStatus.ts`'s `indexingUnavailableMessage`.
+ */
+export function receiverConnection(
+  collectorMode: "outbound" | "receiver" | undefined,
+  ready: boolean | undefined,
+): Connection {
+  if (collectorMode === "outbound")
+    return {
+      name: "Download worker",
+      ready,
+      purpose: "Stores imported posts",
+      note: "Connects to this deployment on its own and reconnects automatically — there's nothing to set here.",
+    };
+  return {
+    name: "Raw capture receiver",
+    ready,
+    env: "RAW_CAPTURE_URL, RAW_CAPTURE_TOKEN",
+    purpose: "Stores imported posts",
+  };
+}
 const safeHostname = (url: string) => {
   try {
     return new URL(url).hostname;
@@ -480,19 +514,14 @@ export default function App() {
       setPage(await readLink({ url }));
     }).finally(() => setReading(false));
   };
-  const connections = [
+  const connections: Connection[] = [
     {
       name: "Search service",
       ready: configured?.search,
       env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
       purpose: "Finds posts in your library",
     },
-    {
-      name: "Raw capture receiver",
-      ready: configured?.handoff,
-      env: "RAW_CAPTURE_URL, RAW_CAPTURE_TOKEN",
-      purpose: "Stores imported posts",
-    },
+    receiverConnection(configured?.collectorMode, configured?.handoff),
     {
       name: "x.md",
       ready: configured?.xmd,
@@ -1193,7 +1222,9 @@ export default function App() {
               <div>
                 <strong>{c.name}</strong>
                 <span className={c.ready ? "is-ready" : ""}>
-                  {c.ready ? (
+                  {configured === undefined ? (
+                    "Checking…"
+                  ) : c.ready ? (
                     <>
                       <Check size={13} />
                       Connected
@@ -1204,6 +1235,7 @@ export default function App() {
                 </span>
               </div>
               <p>{c.purpose}</p>
+              {c.note && <p>{c.note}</p>}
             </div>
           ))}
           <details className="local-setup">
@@ -1212,11 +1244,17 @@ export default function App() {
               <code>bunx convex env set NAME</code> prompts for each value. Webhook and production
               steps are in the README.
             </p>
-            {connections.map((c) => (
-              <p key={c.name}>
-                {c.name}: <code>{c.env}</code>
-              </p>
-            ))}
+            {connections.map((c) =>
+              c.env ? (
+                <p key={c.name}>
+                  {c.name}: <code>{c.env}</code>
+                </p>
+              ) : (
+                <p key={c.name}>
+                  {c.name}: {c.note}
+                </p>
+              ),
+            )}
           </details>
         </Modal>
       )}
