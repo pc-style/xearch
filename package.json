@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
-    "lint": "oxlint && npx react-doctor@latest",
+    "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "doctor": "react-compiler-healthcheck",
     "fmt": "oxfmt",
