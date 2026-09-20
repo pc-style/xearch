@@ -1,6 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { describeError } from "../errors";
+import { useTask } from "../errors";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -32,50 +32,37 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
   const [step, setStep] = useState<"request" | "verify">("request");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
+  const { busy: pending, message: error, setMessage: setError, run } = useTask();
   const emailFieldId = useId();
   const codeFieldId = useId();
 
-  const requestCode = async (e: FormEvent) => {
+  const requestCode = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = email.trim().toLowerCase();
     if (!EMAIL_PATTERN.test(trimmed)) {
       setError("Enter a valid email address.");
       return;
     }
-    setPending(true);
-    setError("");
-    try {
+    void run(async () => {
       await signIn("email", { email: trimmed });
       setEmail(trimmed);
       setCode("");
       setStep("verify");
-    } catch (err) {
-      setError(describeError(err));
-    } finally {
-      setPending(false);
-    }
+    });
   };
 
-  const verifyCode = async (e: FormEvent) => {
+  const verifyCode = (e: FormEvent) => {
     e.preventDefault();
     const trimmedCode = code.trim();
     if (!trimmedCode) {
       setError("Enter the code from your email.");
       return;
     }
-    setPending(true);
-    setError("");
-    try {
+    void run(async () => {
       await signIn("email", { email, code: trimmedCode });
       setCode("");
       onSignedIn?.();
-    } catch (err) {
-      setError(describeError(err));
-    } finally {
-      setPending(false);
-    }
+    });
   };
 
   const useDifferentEmail = () => {

@@ -39,7 +39,7 @@ import Dashboard from "./Dashboard";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { AccountBadge } from "./auth/AccountBadge";
 import { indexingUnavailableMessage } from "./integrationStatus";
-import { describeError } from "./errors";
+import { runTask, useTask } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -281,9 +281,10 @@ export default function App() {
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(null);
   const [view, setView] = useState<"search" | "bookmarks">("search"),
     [modal, setModal] = useState<"imports" | "saved" | "email" | "setup" | null>(null);
-  const [notice, setNotice] = useState(""),
-    [busy, setBusy] = useState(false),
-    [accountInput, setAccountInput] = useState(""),
+  // The busy flag and the one notice slot live in the shared task hook
+  // (src/errors.ts); `task` below is its runner, kept under the old name.
+  const { busy, setBusy, message: notice, setMessage: setNotice, run: task } = useTask();
+  const [accountInput, setAccountInput] = useState(""),
     [since, setSince] = useState("");
   const [dashboard, setDashboard] = useState(() =>
     new URLSearchParams(location.search).has("dashboard"),
@@ -316,24 +317,25 @@ export default function App() {
   }, [isAuthenticated]);
   const ensureSession = useCallback(async () => {
     if (authReady.current) return;
-    session.current ??= (async () => {
-      await signIn("anonymous");
-      // signIn stores tokens before the Convex websocket confirms authentication.
-      if (!authReady.current)
-        await new Promise<void>((resolve, reject) => {
-          const done = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-          const timer = setTimeout(() => {
-            authWaiters.current = authWaiters.current.filter((fn) => fn !== done);
-            reject(new Error("Session connection timed out. Try again."));
-          }, 20_000);
-          authWaiters.current.push(done);
-        });
-    })().finally(() => {
-      session.current = null;
-    });
+    if (session.current === null)
+      session.current = (async () => {
+        await signIn("anonymous");
+        // signIn stores tokens before the Convex websocket confirms authentication.
+        if (!authReady.current)
+          await new Promise<void>((resolve, reject) => {
+            const done = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            const timer = setTimeout(() => {
+              authWaiters.current = authWaiters.current.filter((fn) => fn !== done);
+              reject(new Error("Session connection timed out. Try again."));
+            }, 20_000);
+            authWaiters.current.push(done);
+          });
+      })().finally(() => {
+        session.current = null;
+      });
     await session.current;
   }, [signIn]);
   const accountResults = useQuery(api.search.accounts);
@@ -379,18 +381,6 @@ export default function App() {
   const webContext = useAction(api.integrations.webContext);
   const readLink = useAction(api.integrations.readLink),
     interpret = useAction(api.integrations.interpret);
-  const task = async (fn: () => Promise<unknown>, success?: string) => {
-    setNotice("");
-    setBusy(true);
-    try {
-      await fn();
-      if (success) setNotice(success);
-    } catch (e) {
-      setNotice(describeError(e));
-    } finally {
-      setBusy(false);
-    }
-  };
   const search = (query: string, nextSort: Sort = sort) => {
     setRaw(query.trim());
     setDraft(query.trim());
@@ -430,28 +420,42 @@ export default function App() {
     const { raw: query, sort: requestedSort, includeStats } = searchRequest;
     let active = true;
     // Every setState here runs after an await, never synchronously in the effect body.
+    // A superseded request must not touch state, so this run gets setters
+    // that go quiet once the effect is cleaned up.
     void (async () => {
       await ensureSession();
       if (!active) return;
-      setBusy(true);
-      setNotice("");
-      try {
-        const id = await startSearch({
-          raw: query,
-          sort: requestedSort,
-          includeStats,
-        });
-        if (active) setSessionId(id);
-      } catch (e) {
-        if (active) setNotice(describeError(e));
-      } finally {
-        if (active) setBusy(false);
-      }
+      await runTask(
+        async () => {
+          const id = await startSearch({
+            raw: query,
+            sort: requestedSort,
+            includeStats,
+          });
+          if (active) setSessionId(id);
+        },
+        {
+          setBusy: (value) => {
+            if (active) setBusy(value);
+          },
+          setMessage: (value) => {
+            if (active) setNotice(value);
+          },
+        },
+      );
     })();
     return () => {
       active = false;
     };
-  }, [searchRequest, configured?.search, queryError, ensureSession, startSearch]);
+  }, [
+    searchRequest,
+    configured?.search,
+    queryError,
+    ensureSession,
+    startSearch,
+    setBusy,
+    setNotice,
+  ]);
   const importAccount = (e: FormEvent) => {
     e.preventDefault();
     void task(async () => {
@@ -1023,7 +1027,7 @@ export default function App() {
               value={since}
               onChange={(e) => setSince(e.target.value)}
             />
-            <button className="primary" disabled={busy || !configured?.indexing}>
+            <button type="submit" className="primary" disabled={busy || !configured?.indexing}>
               <Download size={16} />
               Import posts
             </button>
@@ -1152,7 +1156,7 @@ export default function App() {
                 <p>
                   Sends to your verified address: <strong>{verifiedEmail}</strong>
                 </p>
-                <button className="primary" disabled={busy || !sessionId}>
+                <button type="submit" className="primary" disabled={busy || !sessionId}>
                   Send results
                 </button>
               </form>
