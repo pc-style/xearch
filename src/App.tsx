@@ -36,6 +36,8 @@ import {
   X,
 } from "lucide-react";
 import Dashboard from "./Dashboard";
+import { EmailSignIn } from "./auth/EmailSignIn";
+import { AccountBadge } from "./auth/AccountBadge";
 import { indexingUnavailableMessage } from "./integrationStatus";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
@@ -271,8 +273,7 @@ export default function App() {
   const [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [accountInput, setAccountInput] = useState(""),
-    [since, setSince] = useState(""),
-    [recipient, setRecipient] = useState("");
+    [since, setSince] = useState("");
   const [dashboard, setDashboard] = useState(() =>
     new URLSearchParams(location.search).has("dashboard"),
   );
@@ -328,6 +329,13 @@ export default function App() {
   const accounts = accountResults ?? [];
   const configured = useQuery(api.integrations.configured);
   const libraryLoading = accountResults === undefined || configured === undefined;
+  // The caller's own identity (convex/auth.ts `me`) — never a client-supplied
+  // id. `verifiedEmail` narrows straight to the one address `email.send` will
+  // ever accept (it requires an exact, case-insensitive match against the
+  // signed-in identity's own verified email — convex/email.ts `send`), so
+  // there is nothing to type or get wrong at send time.
+  const me = useQuery(api.auth.me);
+  const verifiedEmail = me?.emailVerified ? (me.email ?? null) : null;
   let queryError = "";
   try {
     parseQuery(raw);
@@ -343,6 +351,14 @@ export default function App() {
   const saved = useQuery(api.search.saved, isAuthenticated ? {} : "skip") ?? [];
   const bookmarks = useQuery(api.search.bookmarks, isAuthenticated ? {} : "skip") ?? [];
   const deliveries = useQuery(api.email.deliveries, isAuthenticated ? {} : "skip") ?? [];
+  // Read-only digest preview (convex/email.ts `preview`) — lets the modal
+  // show exactly what `send` would deliver before the user commits. Only
+  // queried while the email modal is actually open and there is a completed
+  // session to preview.
+  const emailPreview = useQuery(
+    api.email.preview,
+    modal === "email" && sessionId && isAuthenticated ? { sessionId } : "skip",
+  );
   const startSearch = useMutation(api.search.start);
   const start = useMutation(api.jobs.start),
     bookmark = useMutation(api.search.bookmark),
@@ -1015,32 +1031,49 @@ export default function App() {
       )}
       {modal === "email" && (
         <Modal notice={notice} title="Email these results" close={() => setModal(null)}>
-          <p className="muted-copy">
-            Send the first 10 matches for “{raw}”, with original post links. Sending happens only
-            when you press the button below.
-          </p>
-          <form
-            className="stack-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void task(async () => {
-                await ensureSession();
-                await send({ sessionId: sessionId!, recipient });
-              }, "Email queued. Delivery status appears below.");
-            }}
-          >
-            <label htmlFor="recipient">Email address</label>
-            <input
-              id="recipient"
-              type="email"
-              value={recipient}
-              onChange={(e) => setRecipient(e.target.value)}
-              required
-            />
-            <button className="primary" disabled={busy}>
-              Send results
-            </button>
-          </form>
+          {me === undefined ? (
+            <p className="muted-copy">Checking your account…</p>
+          ) : !verifiedEmail ? (
+            <>
+              <p className="muted-copy">
+                Sending requires a verified email address, so results only ever go to you. Search
+                and every other feature stay available without one.
+              </p>
+              <EmailSignIn
+                className="stack-form"
+                onSignedIn={() =>
+                  setNotice("Signed in. You can now preview and send this digest.")
+                }
+              />
+            </>
+          ) : (
+            <>
+              <p className="muted-copy">
+                {emailPreview
+                  ? `First ${emailPreview.rowCount} of ${emailPreview.totalCount} results for "${raw}", with original post links.`
+                  : `Send the first 10 matches for "${raw}", with original post links.`}{" "}
+                Sending happens only when you press the button below.
+              </p>
+              {emailPreview && <p className="muted-copy">Subject: {emailPreview.subject}</p>}
+              <form
+                className="stack-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void task(async () => {
+                    await ensureSession();
+                    await send({ sessionId: sessionId!, recipient: verifiedEmail });
+                  }, "Email queued. Delivery status appears below.");
+                }}
+              >
+                <p>
+                  Sends to your verified address: <strong>{verifiedEmail}</strong>
+                </p>
+                <button className="primary" disabled={busy || !sessionId}>
+                  Send results
+                </button>
+              </form>
+            </>
+          )}
           {deliveries.map((d) => (
             <p key={d._id} className="delivery">
               {d.query}: {d.delivery?.status ?? "unknown"}
@@ -1049,10 +1082,28 @@ export default function App() {
         </Modal>
       )}
       {modal === "setup" && (
-        <Modal title="Connections" close={() => setModal(null)}>
+        <Modal notice={notice} title="Connections" close={() => setModal(null)}>
           <p className="muted-copy">
             Configured on the backend by the operator. Nothing here is stored in your browser.
           </p>
+          <div className="connection-row">
+            <div>
+              <strong>Account</strong>
+              <AccountBadge />
+            </div>
+            {!verifiedEmail && (
+              <>
+                <p>
+                  Sign in with a verified email to send digest emails to yourself. Search and
+                  every other feature stay available as a guest.
+                </p>
+                <EmailSignIn
+                  className="stack-form"
+                  onSignedIn={() => setNotice("Signed in with a verified email address.")}
+                />
+              </>
+            )}
+          </div>
           {connections.map((c) => (
             <div className="connection-row" key={c.name}>
               <div>

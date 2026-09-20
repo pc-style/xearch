@@ -8,9 +8,15 @@ import {
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import { sortValidator, postFields } from "./schema";
-import { parseQuery } from "./lib/search";
+import {
+  parseQuery,
+  assertAuthorizedScope,
+  STALE_CURSOR_STATUS,
+  StaleSearchCursorError,
+} from "./lib/search";
 import { decodeSearchResponse } from "./lib/results";
 import { serviceToken } from "./lib/serviceAuth";
+import { summaryScopeValidator } from "./lib/contracts";
 import { user } from "./access";
 import type { Doc } from "./_generated/dataModel";
 export const accounts = query({
@@ -22,6 +28,12 @@ export const start = mutation({
     raw: v.string(),
     sort: sortValidator,
     cursor: v.optional(v.string()),
+    // Optional and forward-looking: today the only value this app can
+    // authorize is "global" (see assertAuthorizedScope in ./lib/search), so
+    // this is never persisted on the session — there is nothing narrower to
+    // remember yet. A caller that asks for anything else is rejected below
+    // rather than silently downgraded.
+    scope: v.optional(summaryScopeValidator),
   },
   handler: async (ctx, args) => {
     const owner = await user(ctx);
@@ -31,10 +43,16 @@ export const start = mutation({
       throw new ConvexError(
         "The search service is not connected yet. Configure SEARCH_API_URL to use your corpus.",
       );
-    if ((args.cursor?.length ?? 0) > 4000) throw new ConvexError("Invalid cursor.");
+    // An empty or whitespace-only cursor is not a page token; treat it as
+    // "first page" rather than handing the service a blank opaque value.
+    const cursor = args.cursor?.trim() ? args.cursor : undefined;
+    if ((cursor?.length ?? 0) > 4000) throw new ConvexError("Invalid cursor.");
+    assertAuthorizedScope(args.scope);
     const id = await ctx.db.insert("sessions", {
       owner,
-      ...args,
+      raw: args.raw,
+      sort: args.sort,
+      cursor,
       status: "queued",
       rows: [],
       warnings: [],
@@ -111,16 +129,25 @@ export const execute = internalAction({
         redirect: "error",
         signal: AbortSignal.timeout(30_000),
       });
+      // A cursor's page window going stale is the one failure this app can
+      // tell apart from a generic outage without inspecting the cursor
+      // itself (it stays opaque; the search service owns it) — see
+      // STALE_CURSOR_STATUS in ./lib/search. Only meaningful when this
+      // request actually carried a cursor.
+      if (response.status === STALE_CURSOR_STATUS && session.cursor)
+        throw new StaleSearchCursorError();
       if (!response.ok) throw new Error("Service unavailable");
       const result = decodeSearchResponse(await response.json());
       await ctx.runMutation(internal.search.complete, { sessionId, ...result });
-    } catch {
+    } catch (err) {
       await ctx.runMutation(internal.search.complete, {
         sessionId,
         rows: [],
         warnings: [],
         error:
-          "The search service could not return a valid result page. Try again or check its connection.",
+          err instanceof StaleSearchCursorError
+            ? "This search expired. Restart your search."
+            : "The search service could not return a valid result page. Try again or check its connection.",
       });
     }
   },

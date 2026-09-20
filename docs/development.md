@@ -105,8 +105,15 @@ Tests cover raw payload preservation, JSON backfill pagination, safe unordered-s
 
 Guest sessions let users use the app without an invite. Saved state belongs to
 that browser session; clearing its credentials loses access. Guest sessions are
-not verified email identities. Durable sign-in, verified-recipient email, and
-publication visibility are tracked in [the application backlog](../to-do.md).
-Raw acquisition receipts do not confirm downstream indexing. Search pages are
-short-lived UI snapshots, not a local corpus. Pronsh owns the corpus and search
-implementation.
+not verified email identities. Durable email sign-in exists (`convex/auth.ts`'s
+Email OTP provider, delivered through AgentMail) and gates sending a digest to a
+verified, matching address (`convex/email.ts` `send`); an anonymous guest session
+can search and import but can never pass that gate. The publication receiver and
+dashboard queries also exist (`convex/publication.ts`, `convex/summary.ts`,
+`convex/library.ts`, `convex/limits.ts` — see
+[the publication contract](publication-contract.md)). None of this has been
+exercised against a real AgentMail send or a real indexer yet — only against
+mocks and a local convex-test deployment — which [the application
+backlog](../to-do.md) still tracks as open verification work. Raw acquisition
+receipts do not confirm downstream indexing. Search pages are short-lived UI
+snapshots, not a local corpus. Pronsh owns the corpus and search implementation.
