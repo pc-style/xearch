@@ -30,6 +30,7 @@
 
 use crate::publish::{non_empty_env, transport};
 use crate::users::now_ms;
+use search_model::Result;
 use serde::Serialize;
 
 /// Convex `/service/health` sender configuration.
@@ -53,7 +54,29 @@ impl HealthConfig {
         let url = non_empty_env("SERVICE_HEALTH_URL")?;
         let token = non_empty_env("SERVICE_HEALTH_TOKEN")
             .or_else(|| non_empty_env("DATA_SERVICE_TOKEN"))?;
-        Some(Self { url, token })
+        match Self::new(url, token) {
+            Ok(config) => Some(config),
+            Err(error) => {
+                eprintln!("indexer heartbeat: disabled. {error}");
+                None
+            }
+        }
+    }
+
+    /// Build a heartbeat config, refusing an endpoint that would put the
+    /// bearer token on the wire in cleartext.
+    ///
+    /// A heartbeat carries the same credential a publication update does, so
+    /// it gets the same rule: `https://`, or a loopback host for a local test
+    /// endpoint. Rejecting here means a caller never holds a config that
+    /// could send one.
+    ///
+    /// # Errors
+    /// [`Error::Invalid`] when `url` is not `https://` and its host is not
+    /// loopback.
+    pub fn new(url: String, token: String) -> Result<Self> {
+        crate::publish::check_endpoint_is_encrypted("SERVICE_HEALTH_URL", &url)?;
+        Ok(Self { url, token })
     }
 }
 

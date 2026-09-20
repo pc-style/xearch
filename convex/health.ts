@@ -197,7 +197,10 @@ export const record = internalMutation({
     const existing = await ctx.db
       .query("serviceHealth")
       .withIndex("by_service", (q) => q.eq("service", args.service))
-      .unique();
+      // `.first()`, not `.unique()`: by_service is an ordinary index with no
+      // uniqueness guarantee, so a duplicate row would throw and take the
+      // whole query down rather than degrade one reading.
+      .first();
 
     // One row per service, forever: patch when it exists, insert only the
     // first time. A history of readings is not what this table is for — the

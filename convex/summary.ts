@@ -457,7 +457,9 @@ export const health = query({
       const row = await ctx.db
         .query("serviceHealth")
         .withIndex("by_service", (q) => q.eq("service", service))
-        .unique();
+        // `.first()`, not `.unique()`: by_service has no uniqueness
+        // guarantee, and a duplicate row must not take the query down.
+        .first();
       if (!row) {
         out.push({ service, kind: "unknown" });
         continue;
