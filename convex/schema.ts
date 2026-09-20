@@ -240,6 +240,10 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_owner", ["owner"])
+    // Kind belongs in the index, not in a `.filter()`: Convex applies a
+    // filter after the index scan, so filtering by kind would still read
+    // every job an owner has run to find their account imports among them.
+    .index("by_owner_and_kind", ["owner", "kind"])
     .index("by_input", ["kind", "input", "status"]),
   // One row per account: the current publication pipeline state plus the
   // last confirmed-searchable snapshot. These are deliberately separate

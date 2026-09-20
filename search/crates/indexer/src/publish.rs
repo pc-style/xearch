@@ -152,7 +152,10 @@ pub enum SendOutcome {
     /// `docs/publication-contract.md` "Response", status 200 covers
     /// `applied`/`stale_ignored`/`duplicate_ignored` (all terminal,
     /// non-retryable); 422/401/400 are permanent rejections. Either way the
-    /// request was delivered, so the generation it used is spent.
+    /// request was delivered, so the generation it used is spent — including
+    /// when the body was cut short after the status line arrived, which
+    /// leaves the optional fields below `None` but changes nothing about
+    /// the delivery (see [`transport::send_once`]).
     Delivered {
         status: u16,
         outcome: Option<String>,

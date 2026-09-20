@@ -5,7 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
 import { publicationStateValidator, jobStatusValidator } from "./schema";
 import { accountLibraryRowValidator, type AccountLibraryRow, type NextAction } from "./lib/contracts";
-import { canonicalAccountForUserId } from "./jobs";
+import { ownedAccountJobs, resolveJobAccount } from "./lib/accounts";
 
 /**
  * The account-library query that replaces the job wall (to-do.md P0
@@ -14,81 +14,13 @@ import { canonicalAccountForUserId } from "./jobs";
  * job/receipt counters) plus that account's own acquisition jobs. Full
  * semantics: docs/publication-contract.md.
  */
-
-// Only a full-account "bulk" import ever establishes an account identity.
-// live/post/profile/following/followers/archive jobs are queries or
-// non-account artifacts — `from:theo` is a query, not an identity — and must
-// never surface as a library row (to-do.md P0).
-const ACCOUNT_JOB_KIND = "bulk" as const;
-
-// Bounded reads (Convex query guidelines: no unbounded .collect()). Generous
-// relative to how many distinct accounts or runs one person realistically
-// works through by hand.
-const MAX_OWNED_JOBS = 500;
+// Bounded reads for one account's expandable history (Convex query
+// guidelines: no unbounded .collect()). Generous relative to how many runs
+// one person works through by hand.
 const MAX_HISTORY_JOBS = 50;
 const MAX_HISTORY_RECEIPTS = 100;
 
 type AccountBucket = { account: Doc<"accounts">; jobs: Doc<"jobs">[] };
-
-async function ownedAccountJobs(ctx: QueryCtx, owner: Id<"users">) {
-  return ctx.db
-    .query("jobs")
-    .withIndex("by_owner", (q) => q.eq("owner", owner))
-    .filter((q) => q.eq(q.field("kind"), ACCOUNT_JOB_KIND))
-    .order("desc")
-    .take(MAX_OWNED_JOBS);
-}
-
-// Resolve one job to the account it belongs to. Provider account id
-// (job.expectedUserId, pinned mid-run once collectXmd confirms identity — see
-// convex/jobs.ts pinIdentity) is the primary key; a job's raw input/handle is
-// used only as a fallback when no provider id has ever been pinned for that
-// run. Given two distinct `accounts` rows, this never groups them into one
-// bucket: a job that carries a pinned provider id always groups by that id,
-// never by whatever handle string it happened to carry. See
-// docs/publication-contract.md "Account identity".
-//
-// The matching write-side rule now exists too: convex/jobs.ts `upsertAccount`
-// resolves `by_user_id` and gives an unknown provider id arriving on a known
-// handle its OWN row rather than patching the incumbent's identity in place,
-// and records every handle an account has held in `accountHandles`. Before
-// that, this file's guarantee only held among rows that were already
-// distinct — a reassignment could still merge two identities at write time.
-// See to-do.md P0 "Do not combine different identities after a handle
-// reassignment" and docs/publication-contract.md's `accountHandles` section.
-async function resolveAccount(
-  ctx: QueryCtx,
-  job: Doc<"jobs">,
-  cache: Map<string, Doc<"accounts"> | null>,
-): Promise<Doc<"accounts"> | null> {
-  const providerAccountId = job.expectedUserId;
-  const cacheKey = providerAccountId !== undefined ? `id:${providerAccountId}` : `handle:${job.input}`;
-  const cached = cache.get(cacheKey);
-  if (cached !== undefined) return cached;
-  // Two different rules, because the two lookups mean different things.
-  //
-  // A provider id IS the identity, so several rows carrying the same id are
-  // duplicates of one account and resolve to the canonical (oldest) row —
-  // the same rule convex/jobs.ts `upsertAccount` writes through. Treating
-  // that as ambiguous would make a legitimately imported account disappear
-  // from the library whenever a legacy duplicate row existed.
-  //
-  // A handle is NOT an identity: two matches there really can be two
-  // different people who held it at different times, so that stays
-  // ambiguous and resolves to nothing rather than an arbitrary pick.
-  let found: Doc<"accounts"> | null;
-  if (providerAccountId !== undefined) {
-    found = await canonicalAccountForUserId(ctx, providerAccountId);
-  } else {
-    const matches = await ctx.db
-      .query("accounts")
-      .withIndex("by_handle", (q) => q.eq("handle", job.input))
-      .take(2);
-    found = matches.length === 1 ? matches[0] : null;
-  }
-  cache.set(cacheKey, found);
-  return found;
-}
 
 // Group this owner's bulk jobs by resolved account. A job whose identity
 // cannot be resolved to an existing account row is dropped, not shown as a
@@ -100,11 +32,11 @@ async function groupOwnedJobsByAccount(
   ctx: QueryCtx,
   owner: Id<"users">,
 ): Promise<Map<Id<"accounts">, AccountBucket>> {
-  const jobs = await ownedAccountJobs(ctx, owner);
+  const { jobs } = await ownedAccountJobs(ctx.db, owner);
   const identityCache = new Map<string, Doc<"accounts"> | null>();
   const byAccount = new Map<Id<"accounts">, AccountBucket>();
   for (const job of jobs) {
-    const account = await resolveAccount(ctx, job, identityCache);
+    const account = await resolveJobAccount(ctx.db, job, identityCache);
     if (!account) continue;
     const bucket = byAccount.get(account._id);
     if (bucket) bucket.jobs.push(job);

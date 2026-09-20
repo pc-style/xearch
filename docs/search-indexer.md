@@ -115,9 +115,12 @@ Safety properties:
 - A single-instance lock (`state/indexer.lock`, `"<pid> <kind>"`) keeps one
   watcher per data root. Holders are identity-checked by `/proc/<pid>/cmdline`
   (not just pid existence), stale locks are reclaimed atomically, and the
-  lock releases on Ctrl-C/SIGTERM. `users mark` takes the same lock for its
-  short section: it fails when a watcher runs, and a watcher starting at the
-  same instant waits rather than losing the change.
+  lock releases on Ctrl-C/SIGTERM. `users mark` and `publish` take the same
+  lock for their short sections: each fails when a watcher runs, and a
+  watcher starting at the same instant waits rather than losing the change.
+  Without that, a watcher pass could save a registry it loaded before a
+  manual `publish` and put the generation watermark back — the receiver
+  ignores any update that reuses a generation it has already committed.
 - Stale `.tmp*` files from a SIGKILLed run are swept at startup.
 
 ## Capture batches (raw-capture receiver output)
@@ -166,6 +169,35 @@ absent leaves `run_once` behaving exactly as it always has:
 | `PUBLICATION_UPDATE_URL` | Full URL of Convex's `POST /publication/update` route. |
 | `PUBLICATION_SERVICE_TOKEN` | Bearer token; falls back to `DATA_SERVICE_TOKEN` if unset (same convention as `convex/publication.ts`). |
 
+**Under systemd these go in exactly one file:
+`~/xearch-data/search/publication.env`, mode `0600`.** That is the path
+`deploy/systemd/xearch-search-indexer.service` loads
+(`EnvironmentFile=-%h/xearch-data/search/publication.env`), and the leading
+`-` means a missing file is not an error: the service starts anyway and
+publication simply stays disabled. Putting the file anywhere else — under
+`~/xearch-search` with the index and registry, for instance — looks like a
+working setup and silently publishes nothing.
+
+```sh
+install -d -m 700 ~/xearch-data/search
+touch ~/xearch-data/search/publication.env     # never truncates an existing file
+chmod 600 ~/xearch-data/search/publication.env
+# then edit it; one KEY=value per line, no quotes, no `export`:
+#   PUBLICATION_UPDATE_URL=https://<deployment>.convex.site/publication/update
+#   PUBLICATION_SERVICE_TOKEN=<the service token>
+systemctl --user restart xearch-search-indexer.service
+```
+
+The file holds a live bearer token. Keep it at mode `0600`, keep it outside
+any checkout, never commit it or paste it into an issue or a PR, and never
+write the token itself into this repository. Confirm which end the indexer
+picked up without ever reading the file back: the watcher logs
+`publish=enabled` or `publish=disabled` on startup.
+
+```sh
+journalctl --user -u xearch-search-indexer.service | grep 'indexer resolved'
+```
+
 When enabled, every import attempt (per-user dump or capture batch) is
 followed by one publish attempt for that handle:
 
@@ -195,6 +227,10 @@ followed by one publish attempt for that handle:
   transport failure (no response at all) leaves it untouched and sets
   `transportRetryPending: true`, so the same account is retried on a later
   poll pass without waiting for new bytes to show up in the drop directory.
+  That retry is a resend and nothing else: content that has not changed is
+  never imported, archived or indexed again to carry it, so an endpoint
+  outage costs one HTTP attempt per affected account per pass rather than a
+  full reimport of every recorded dump and capture batch.
   A permanent rejection (401/422/400) still advances the generation (a
   request *was* delivered) but is not retried automatically — that would
   spin on identical content, which `AGENTS.md` rules out.
@@ -228,7 +264,8 @@ Inspect or replay this by hand:
 ```sh
 # See generation/count/error per account alongside the usual ingestion state
 xearch-search --base-dir "$BASE" users list
-# Republish one handle's current live count without reimporting anything
+# Republish one handle's current live count without reimporting anything.
+# Takes the indexer lock, so stop the watcher first if one is running.
 xearch-search --base-dir "$BASE" publish <handle>
 ```
 

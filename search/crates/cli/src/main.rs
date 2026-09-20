@@ -182,6 +182,12 @@ fn run_publish(
     state_dir: &std::path::Path,
     handle: &str,
 ) -> color_eyre::Result<()> {
+    // Hold the same exclusive lock a watcher pass and `users mark` take.
+    // Without it a watcher that loaded the registry before this send can
+    // save its older copy afterwards, putting the generation watermark
+    // back — and the receiver ignores an update that reuses a generation
+    // it has already committed.
+    let _guard = search_indexer::acquire_exclusive(state_dir, "publish")?;
     let handle = search_query::normalize_author(handle)?;
     let Some(config) = search_indexer::publish::PublishConfig::from_env() else {
         color_eyre::eyre::bail!(

@@ -20,8 +20,7 @@ import ProviderLimits from "./ProviderLimits";
  */
 function scopeLabel(scope: DashboardSummary["scope"]): string {
   if (scope.kind === "owner") return "your imports only";
-  if (scope.kind === "global") return "all accounts in this deployment";
-  return "one account";
+  return scope.kind === "global" ? "all accounts in this deployment" : "one account";
 }
 
 export default function OverviewStats({

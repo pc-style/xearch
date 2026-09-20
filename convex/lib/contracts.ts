@@ -56,12 +56,12 @@ export type Count = Infer<typeof countValidator>;
 //     derived server-side from their own `jobs.owner` rows. This is what
 //     `convex/summary.ts` returns, and it is the ONLY scope the dashboard
 //     presents as the caller's own numbers.
-//   - "global": every account in the deployment regardless of who imported
-//     it. The summary used to report this while the account list beside it
-//     was owner-scoped, so the two contradicted each other and a caller with
-//     no imports of their own could still see a nonzero total. Kept in the
-//     union because it is a meaningful scope to state, not because anything
-//     returns it today.
+//   - "global": every account in the deployment. Never RETURNED by a summary
+//     any more — `convex/summary.ts` always reports "owner" — but still an
+//     accepted INPUT: `convex/search.ts` takes a caller-supplied scope and
+//     this is the one value its fail-closed gate allows, meaning "the whole
+//     shared corpus". Reachability differs by direction; do not delete it on
+//     the strength of the return side alone.
 //   - "account": a single account. Reserved for to-do.md P1's authorized
 //     collection access; not wired to anything yet.
 export const summaryScopeValidator = v.union(

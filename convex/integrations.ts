@@ -19,6 +19,13 @@ export const configured = query({
           .withIndex("by_name", (q) => q.eq("name", "desktop"))
           .unique()
       : null;
+    // `saving` answers two different questions depending on the mode, and
+    // the answer means different things to a person: in receiver mode it is
+    // whether an env var is set (configuration), in outbound mode it is
+    // whether the download worker checked in within the last 45s
+    // (liveness). Returning the bare boolean forced every consumer to
+    // remember that on its own, and the UI ended up labelling a config fact
+    // "Connected". The discriminant travels with the value instead.
     const saving = outbound
       ? !!worker?.online && Date.now() - worker.lastSeen < 45_000
       : !!process.env.RAW_CAPTURE_URL;
@@ -27,6 +34,10 @@ export const configured = query({
       indexing: !!process.env.X_MD_API_KEY && saving,
       search: !!process.env.SEARCH_API_URL,
       handoff: saving,
+      handoffState: {
+        kind: outbound ? ("live" as const) : ("configured" as const),
+        ok: saving,
+      },
       collectorMode: outbound ? ("outbound" as const) : ("receiver" as const),
       firecrawl: !!process.env.FIRECRAWL_API_KEY,
       openai: !!process.env.OPENAI_API_KEY,

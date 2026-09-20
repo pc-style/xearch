@@ -10,10 +10,15 @@ import {
   type RawObject,
 } from "../convex/lib/xmd";
 import { collectXmd, splitHistoryPage, type CollectionRequest } from "../convex/lib/collect";
-import { deliverCapture, type Capture } from "../convex/lib/handoff";
+import { CAPTURE_MAX_BYTES, deliverCapture, type Capture } from "../convex/lib/handoff";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
   return input instanceof Request ? input.url : input.toString();
+}
+/** Serialized size, measured independently of the code under test. */
+function bytes(value: unknown) {
+  return new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value))
+    .byteLength;
 }
 const profile = { id: "123", screen_name: "theo", name: "Theo" };
 const request: CollectionRequest = {
@@ -111,15 +116,13 @@ describe("x.md per-request capacity", () => {
   });
   it("splits a page too large for one capture into parts that each deliver", async () => {
     const envelope = page(2500);
-    const whole = new TextEncoder().encode(JSON.stringify(envelope)).byteLength;
-    expect(whole).toBeGreaterThan(4_000_000);
+    expect(bytes(envelope)).toBeGreaterThan(CAPTURE_MAX_BYTES);
     const { result, captures, bodies, ids } = await collectPage(envelope);
     // The profile preflight is its own capture; the history page follows.
     const history = captures.filter((capture) => capture.request.resource === "bulk");
     expect(history.length).toBeGreaterThan(1);
-    // Every delivered body is under deliverCapture's hard 4 MB limit.
-    for (const body of bodies)
-      expect(new TextEncoder().encode(body).byteLength).toBeLessThan(4_000_000);
+    // Every delivered body is under deliverCapture's hard ceiling.
+    for (const body of bodies) expect(bytes(body)).toBeLessThan(CAPTURE_MAX_BYTES);
     expect(new Set(ids).size).toBe(ids.length);
     // Sequence numbering stays contiguous across the split.
     expect(captures.map((capture) => capture.sequence)).toEqual(captures.map((_, i) => i));
@@ -162,13 +165,44 @@ describe("x.md per-request capacity", () => {
     const envelope = page(400);
     const parts = splitHistoryPage(envelope, 200_000);
     expect(parts.length).toBeGreaterThan(4);
-    for (const part of parts)
-      expect(new TextEncoder().encode(JSON.stringify(part)).byteLength).toBeLessThanOrEqual(
-        200_000,
-      );
-    expect(parts.flatMap((part) => part.posts as RawObject[])).toEqual(envelope.posts);
+    for (const part of parts) {
+      const serialized = bytes(part.payload);
+      expect(serialized).toBeLessThanOrEqual(200_000);
+      // The size handed out is the one the slicer sliced by: never smaller than
+      // what the part really serializes to, so a caller that trusts it instead
+      // of measuring again can never overfill a capture.
+      expect(part.bytes).toBeGreaterThanOrEqual(serialized);
+      expect(part.bytes).toBeLessThanOrEqual(200_000);
+    }
+    expect(parts.flatMap((part) => part.payload.posts as RawObject[])).toEqual(envelope.posts);
     // Nothing to split: a single record, and a non-array `posts` is untouched.
-    expect(splitHistoryPage({ posts: "not-an-array" }, 1)).toEqual([{ posts: "not-an-array" }]);
+    expect(splitHistoryPage({ posts: "not-an-array" }, 1)).toEqual([
+      { payload: { posts: "not-an-array" }, bytes: bytes({ posts: "not-an-array" }) },
+    ]);
+  });
+  it("slices by measured bytes, not by a posts-per-part count", () => {
+    // Posts of wildly different sizes: any count-based split would put the same
+    // number of posts in each part, and the fat ones would blow the budget.
+    const posts = Array.from({ length: 60 }, (_, index) => ({
+      id: String(index),
+      text: "x".repeat(200 + ((index * 1373) % 4000)),
+    }));
+    const parts = splitHistoryPage({ profile, posts, meta: { count: 60 } }, 12_000);
+    expect(parts.length).toBeGreaterThan(1);
+    const counts = parts.map((part) => (part.payload.posts as RawObject[]).length);
+    // Byte-driven slicing gives parts different post counts.
+    expect(new Set(counts).size).toBeGreaterThan(1);
+    for (const part of parts) expect(bytes(part.payload)).toBeLessThanOrEqual(12_000);
+    expect(parts.flatMap((part) => part.payload.posts as RawObject[])).toEqual(posts);
+  });
+  it("sizes a whole page exactly, without serializing it a second time", () => {
+    // The single measuring pass computes the page size from the posts it
+    // already measured. That arithmetic must equal the real serialized size,
+    // or the fits-in-one-capture decision would drift from the receiver's.
+    const envelope = page(50);
+    const [only] = splitHistoryPage(envelope, 10_000_000);
+    expect(only.payload).toBe(envelope);
+    expect(only.bytes).toBe(bytes(envelope));
   });
 });
 
@@ -231,11 +265,13 @@ describe("provider throttle facts", () => {
     expect("remaining" in (throttle as ProviderThrottle)).toBe(false);
     expect("resetAt" in (throttle as ProviderThrottle)).toBe(false);
   });
-  it("records every reported policy and reports the most constraining one", () => {
-    // Exactly the headers a live x.md response carried (unprefixed IETF spellings).
+  it("reports the most constraining reported allowance", () => {
+    // Exactly the headers a live x.md response carried (unprefixed IETF
+    // spellings), on the 429 that makes them mean something.
     const throttle = readThrottle(
       "xmd",
       "bulk",
+      429,
       new Headers({
         "ratelimit-policy": '"api-ip";q=600;w=60, "import-key";q=20;w=900',
         ratelimit: '"api-ip";r=599;t=27, "import-key";r=20;t=27',
@@ -246,16 +282,14 @@ describe("provider throttle facts", () => {
       undefined,
       NOW,
     );
+    // The tightest of the reported allowances, and nothing about the policies
+    // themselves: their quota and window were never stored or shown anywhere.
     expect(throttle).toEqual({
       provider: "xmd",
       operation: "bulk",
       observedAt: NOW,
       remaining: 20,
       resetAt: NOW + 27_000,
-      policies: [
-        { name: "api-ip", quota: 600, windowSeconds: 60, remaining: 599, resetAt: NOW + 27_000 },
-        { name: "import-key", quota: 20, windowSeconds: 900, remaining: 20, resetAt: NOW + 27_000 },
-      ],
     });
   });
   it("leaves allowance absent — never 0 — when the response did not report it", async () => {
@@ -265,15 +299,20 @@ describe("provider throttle facts", () => {
     expect(throttle?.retryAfterMs).toBe(5000);
     expect("remaining" in (throttle as ProviderThrottle)).toBe(false);
     expect("resetAt" in (throttle as ProviderThrottle)).toBe(false);
-    expect("policies" in (throttle as ProviderThrottle)).toBe(false);
-    expect(readThrottle("xmd", "profile", new Headers(), undefined, NOW)).toBeUndefined();
-    expect(readThrottle("xmd", "profile", new Headers(), { unrelated: true }, NOW)).toBeUndefined();
+    // A 429 that carried no allowance at all is still a refusal, and still
+    // reports nothing it was not told.
+    expect(readThrottle("xmd", "profile", 429, new Headers(), undefined, NOW)).toEqual({
+      provider: "xmd",
+      operation: "profile",
+      observedAt: NOW,
+    });
   });
   it("reads a reset value as delta-seconds or as an absolute epoch", () => {
     const scalar = (value: string) =>
       readThrottle(
         "xmd",
         "search",
+        429,
         new Headers({ "RateLimit-Remaining": "4", "RateLimit-Reset": value }),
         undefined,
         NOW,
@@ -294,6 +333,7 @@ describe("provider throttle facts", () => {
       readThrottle(
         "search",
         "search",
+        429,
         new Headers({ "X-RateLimit-Remaining": "7", "X-RateLimit-Reset": "60" }),
         undefined,
         NOW,
@@ -364,5 +404,114 @@ describe("provider throttle facts", () => {
       retryAfterMs: 12_000,
     });
     expect(throttle?.resetAt).toBeGreaterThan(Date.now() + 44_000);
+  });
+});
+
+// x.md returns these on EVERY response — successes, 404s, 500s alike — so they
+// state a standing allowance and never that this call was refused over one.
+const ALLOWANCE_HEADERS = {
+  "RateLimit-Policy": '"api-ip";q=600;w=60, "import-key";q=20;w=900',
+  RateLimit: '"api-ip";r=598;t=41, "import-key";r=19;t=873',
+  "RateLimit-Limit": "20",
+  "RateLimit-Remaining": "19",
+  "RateLimit-Reset": "41",
+};
+
+describe("only a refusal caused by a limit counts as throttling", () => {
+  it("does not call a 404 profile-not-found throttling, allowance headers and all", async () => {
+    // The bug: one bad handle wrote a providerThrottleEvents row, and the
+    // dashboard then reported x.md as throttled indefinitely.
+    expect(
+      await throttleOf(() =>
+        Response.json(
+          { error: { message: "Profile not found" } },
+          { status: 404, headers: ALLOWANCE_HEADERS },
+        ),
+      ),
+    ).toBeUndefined();
+  });
+  it("does not call a rejected API key throttling", async () => {
+    expect(
+      await throttleOf(() =>
+        Response.json(
+          { code: "unauthorized", detail: "Invalid API key." },
+          { status: 401, headers: ALLOWANCE_HEADERS },
+        ),
+      ),
+    ).toBeUndefined();
+  });
+  it("does not call a provider fault throttling", async () => {
+    expect(
+      await throttleOf(() =>
+        Response.json(
+          { code: "internal_error", detail: "Unexpected failure." },
+          { status: 500, headers: ALLOWANCE_HEADERS },
+        ),
+      ),
+    ).toBeUndefined();
+  });
+  it("does not call a 503 without a retry signal throttling", async () => {
+    expect(
+      await throttleOf(() =>
+        Response.json(
+          { code: "upstream_unavailable", detail: "Upstream is down." },
+          { status: 503, headers: ALLOWANCE_HEADERS },
+        ),
+      ),
+    ).toBeUndefined();
+  });
+  it("never reads throttling off a response the provider fulfilled", () => {
+    expect(
+      readThrottle("xmd", "history", 200, new Headers(ALLOWANCE_HEADERS), { posts: [] }, NOW),
+    ).toBeUndefined();
+  });
+  it("reports a 429 as throttling on the status alone", async () => {
+    const throttle = await throttleOf(() =>
+      Response.json({ detail: "Slow down." }, { status: 429, headers: ALLOWANCE_HEADERS }),
+    );
+    // Qualified by the status; the allowance headers only enrich it.
+    expect(throttle).toMatchObject({ provider: "xmd", reason: "Slow down.", remaining: 19 });
+  });
+  it("reports a 503 that carries a Retry-After as throttling", async () => {
+    // x.md documents `503 upstream_rate_limited` with `Retry-After`.
+    const throttle = await throttleOf(() =>
+      Response.json(
+        { code: "upstream_rate_limited", detail: "Upstream is rate limiting us." },
+        { status: 503, headers: { ...ALLOWANCE_HEADERS, "Retry-After": "30" } },
+      ),
+    );
+    expect(throttle).toMatchObject({
+      reason: "Upstream is rate limiting us.",
+      retryAfterMs: 30_000,
+    });
+  });
+  it("reports a rate_limited problem body as throttling whatever the status says", async () => {
+    // Production's own `code` and `type`, on a status that would not qualify.
+    const throttle = await throttleOf(() =>
+      Response.json({ ...rateLimitedBody, status: 500 }, { status: 500 }),
+    );
+    expect(throttle).toMatchObject({
+      reason: "Too many bulk imports for this API key: 20 per 15 minutes.",
+      retryAfterMs: 423_000,
+    });
+    expect(
+      readThrottle(
+        "xmd",
+        "history",
+        400,
+        new Headers(),
+        { type: "https://x.pcstyle.dev/docs/reliability#rate-limited" },
+        NOW,
+      ),
+    ).toEqual({ provider: "xmd", operation: "history", observedAt: NOW });
+  });
+  it("gives a Retry-After header and a retry_after body field the same meaning", async () => {
+    const header = await throttleOf(() =>
+      Response.json({ code: "rate_limited" }, { status: 429, headers: { "Retry-After": "423" } }),
+    );
+    const body = await throttleOf(() =>
+      Response.json({ code: "rate_limited", retry_after: 423 }, { status: 429 }),
+    );
+    expect(header?.retryAfterMs).toBe(body?.retryAfterMs);
   });
 });

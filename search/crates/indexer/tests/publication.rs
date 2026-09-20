@@ -99,8 +99,89 @@ fn spawn_responder(
     Ok((format!("http://{addr}/publication/update"), rx))
 }
 
+/// Reply with a real status line and a `Content-Length` larger than the
+/// bytes actually written, then close: a proxy truncating the response.
+fn spawn_truncating_responder(
+    status_line: &'static str,
+    partial_body: &'static str,
+    declared_length: usize,
+) -> std::io::Result<(String, Receiver<CapturedRequest>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            if let Some(request) = read_request(&mut stream) {
+                let _ = tx.send(request);
+            }
+            let response = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {declared_length}\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(partial_body.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    Ok((format!("http://{addr}/publication/update"), rx))
+}
+
 fn engine(dir: &std::path::Path) -> search_model::Result<search_tantivy::Engine> {
     search_tantivy::open(dir, true)
+}
+
+/// A URL on a port nothing listens on, so a send fails to connect fast and
+/// deterministically instead of waiting for a timeout.
+fn unreachable_url() -> std::io::Result<String> {
+    let probe = TcpListener::bind("127.0.0.1:0")?;
+    let addr = probe.local_addr()?;
+    drop(probe);
+    Ok(format!("http://{addr}/publication/update"))
+}
+
+fn config_in(
+    dir: &std::path::Path,
+    publish: Option<PublishConfig>,
+) -> std::io::Result<search_indexer::Config> {
+    let config = search_indexer::Config {
+        index: dir.join("index"),
+        archive: dir.join("archive"),
+        drop_dir: dir.join("drop"),
+        state_dir: dir.join("state"),
+        poll_interval: std::time::Duration::from_secs(1),
+        publish,
+    };
+    std::fs::create_dir_all(&config.drop_dir)?;
+    Ok(config)
+}
+
+fn publishing_to(url: String) -> PublishConfig {
+    PublishConfig {
+        url,
+        token: "t".to_owned(),
+    }
+}
+
+fn post(id: &str, handle: &str, provider_id: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "author": {"screen_name": handle, "id": provider_id},
+        "text": "hello world",
+        "created_timestamp": 1_758_000_000_i64,
+    })
+}
+
+fn capture_batch(handle: &str, id: &str, provider_id: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "version": 1,
+        "runId": "job1",
+        "source": "x-md",
+        "terminal": "complete",
+        "request": {"origin": "https://mdfromx.com", "resource": "archive", "input": handle},
+        "records": [{
+            "receivedAt": 1_758_000_000_000_i64,
+            "payload": {"posts": [post(id, handle, provider_id)]},
+        }],
+    })
 }
 
 const fn succeeded_report(handle: &str) -> ImportReport<'_> {
@@ -494,4 +575,147 @@ fn an_old_registry_with_no_publication_field_loads_without_quarantine() {
     registry.save(&path).unwrap();
     let reloaded = Registry::load(&path).unwrap();
     assert_eq!(reloaded.users.len(), 239);
+}
+
+#[test]
+fn a_truncated_response_body_is_a_delivered_response_not_a_transport_failure() {
+    // The status line arrived, so the request was delivered and the
+    // generation it used is spent. Treating the failed body read as "no
+    // response" would leave this account flagged for retry on every later
+    // pass while the receiver has already applied the update.
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path()).unwrap();
+    let mut registry = Registry::default();
+    let partial = r#"{"outcome":"app"#;
+    let (url, rx) =
+        spawn_truncating_responder("HTTP/1.1 200 OK", partial, partial.len() + 64).unwrap();
+    let config = PublishConfig {
+        url,
+        token: "t".to_owned(),
+    };
+    report_after_import(
+        Some(&config),
+        &engine,
+        &mut registry,
+        &succeeded_report("heidi"),
+    );
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+
+    let record = registry.publications.get("heidi").unwrap();
+    assert_eq!(
+        record.generation, 1,
+        "a response whose body was cut short was still delivered at this generation"
+    );
+    assert!(
+        !record.transport_retry_pending,
+        "a delivered 200 must never be retried just because its body was truncated"
+    );
+    assert!(
+        record.last_publish_error.is_none(),
+        "HTTP 200 is success regardless of how much of the body arrived: {:?}",
+        record.last_publish_error
+    );
+}
+
+#[test]
+fn a_pending_retry_republishes_a_capture_without_reimporting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let sha = "c".repeat(64);
+    let config = config_in(dir.path(), None).unwrap();
+    let batch = capture_batch("hero", "9001", &serde_json::json!("12345"));
+    std::fs::write(
+        config.drop_dir.join(format!("{sha}.json")),
+        serde_json::to_vec(&batch).unwrap(),
+    )
+    .unwrap();
+
+    // Pass 1: the endpoint is unreachable. The import happens; the
+    // publication is left owed.
+    let unreachable =
+        config_in(dir.path(), Some(publishing_to(unreachable_url().unwrap()))).unwrap();
+    let registry = search_indexer::run_once(&unreachable).unwrap();
+    assert_eq!(registry.captures.get(&sha).unwrap().accepted, 1);
+    assert!(
+        registry
+            .publications
+            .get("hero")
+            .unwrap()
+            .transport_retry_pending
+    );
+
+    // Plant a sentinel the import path would overwrite: a reimport calls
+    // Registry::mark_capture, which rewrites accepted from the receipt.
+    let path = search_indexer::users::registry_path(&config.state_dir);
+    let mut planted = Registry::load(&path).unwrap();
+    planted.captures.get_mut(&sha).unwrap().accepted = 999;
+    planted.save(&path).unwrap();
+
+    // Pass 2: the endpoint is back.
+    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    let registry = search_indexer::run_once(&live).unwrap();
+    let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["handle"], "hero");
+    assert_eq!(body["reportedState"], "searchable");
+    assert_eq!(
+        body["captureIds"],
+        serde_json::json!([sha]),
+        "the resend must still identify the capture it confirms"
+    );
+    assert_eq!(body["providerAccountId"], "12345");
+    assert_eq!(body["runId"], "job1");
+    assert_eq!(body["generation"], 1);
+
+    assert_eq!(
+        registry.captures.get(&sha).unwrap().accepted,
+        999,
+        "a publication retry must not re-run import/archive/index work for unchanged content"
+    );
+    let record = registry.publications.get("hero").unwrap();
+    assert_eq!(record.generation, 1);
+    assert!(!record.transport_retry_pending);
+}
+
+#[test]
+fn a_pending_retry_republishes_a_user_dump_without_reimporting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path(), None).unwrap();
+    let dump = serde_json::json!({"posts": [post("7001", "ivy", &serde_json::json!("42"))]});
+    std::fs::write(
+        config.drop_dir.join("ivy.json"),
+        serde_json::to_vec(&dump).unwrap(),
+    )
+    .unwrap();
+
+    let unreachable =
+        config_in(dir.path(), Some(publishing_to(unreachable_url().unwrap()))).unwrap();
+    let registry = search_indexer::run_once(&unreachable).unwrap();
+    assert_eq!(registry.users.get("ivy").unwrap().attempts, 1);
+    assert!(
+        registry
+            .publications
+            .get("ivy")
+            .unwrap()
+            .transport_retry_pending
+    );
+
+    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    let registry = search_indexer::run_once(&live).unwrap();
+    let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["handle"], "ivy");
+    assert_eq!(body["reportedState"], "searchable");
+    assert_eq!(body["uniquePostCount"], 1);
+
+    let record = registry.users.get("ivy").unwrap();
+    assert_eq!(
+        record.attempts, 1,
+        "the dump's bytes never changed: a publication retry must not import it again"
+    );
+    assert_eq!(record.status, search_indexer::users::UserStatus::Complete);
+    let publication = registry.publications.get("ivy").unwrap();
+    assert_eq!(publication.generation, 1);
+    assert!(!publication.transport_retry_pending);
 }

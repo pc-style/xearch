@@ -9,24 +9,6 @@ export type RawObject = Record<string, unknown>;
  */
 export type ThrottleProvider = "xmd" | "receiver" | "search";
 /**
- * One rate-limit policy exactly as the provider reported it. x.md applies
- * several at once (an `api-ip` one and an `import-key` one in the same
- * `RateLimit`/`RateLimit-Policy` headers), so the headline figures below are
- * accompanied by every policy observed rather than only the tightest.
- */
-export type ProviderThrottlePolicy = {
-  /** Policy name, e.g. `api-ip` or `import-key`, when the provider named it. */
-  name?: string;
-  /** Requests left in this policy's window (`r=`), when reported. */
-  remaining?: number;
-  /** The policy's quota (`q=`), when reported. */
-  quota?: number;
-  /** The policy's window length in seconds (`w=`), when reported. */
-  windowSeconds?: number;
-  /** Epoch ms this policy's window resets (`t=`), when reported. */
-  resetAt?: number;
-};
-/**
  * What a provider told us about its own limits, as facts. Every optional field
  * is present ONLY when the response genuinely carried it: an absent value stays
  * absent and is never estimated, defaulted, or filled in with a guess. Consumed
@@ -46,8 +28,6 @@ export type ProviderThrottle = {
   resetAt?: number;
   /** From `Retry-After`, else the problem body's `retry_after` seconds. */
   retryAfterMs?: number;
-  /** Every policy the response reported, when it reported any. */
-  policies?: ProviderThrottlePolicy[];
 };
 export class ProviderError extends Error {
   constructor(
@@ -174,41 +154,27 @@ function structuredList(value: string | null): StructuredItem[] {
 function headerValue(headers: Headers, name: string): string | null {
   return headers.get(name) ?? headers.get(`X-${name}`);
 }
-function throttlePolicies(headers: Headers, now: number): ProviderThrottlePolicy[] {
-  const byKey = new Map<string, ProviderThrottlePolicy>();
-  const merge = (key: string, patch: ProviderThrottlePolicy) => {
-    const current = byKey.get(key) ?? {};
-    byKey.set(key, {
-      name: patch.name ?? current.name,
-      remaining: patch.remaining ?? current.remaining,
-      quota: patch.quota ?? current.quota,
-      windowSeconds: patch.windowSeconds ?? current.windowSeconds,
-      resetAt: patch.resetAt ?? current.resetAt,
-    });
-  };
-  structuredList(headerValue(headers, "RateLimit-Policy")).forEach((item, index) =>
-    merge(item.name ?? `#${index}`, {
-      name: item.name,
-      quota: finiteNumber(item.params.q ?? item.params.limit),
-      windowSeconds: finiteNumber(item.params.w ?? item.params.window),
-    }),
-  );
-  structuredList(headerValue(headers, "RateLimit")).forEach((item, index) =>
-    merge(item.name ?? `#${index}`, {
-      name: item.name,
-      remaining: finiteNumber(item.params.r ?? item.params.remaining),
-      resetAt: resetAtFrom(item.params.t ?? item.params.reset, now),
-      quota: finiteNumber(item.params.limit),
-    }),
-  );
-  return [...byKey.values()]
-    .map((policy) => compact(policy))
-    .filter(
-      (policy) =>
-        policy.remaining !== undefined ||
-        policy.resetAt !== undefined ||
-        policy.quota !== undefined,
-    );
+/** One reported allowance: what is left, and when it comes back. */
+type Allowance = { remaining?: number; resetAt?: number };
+/**
+ * Every allowance the response reported, as candidates. x.md applies several
+ * policies at once (an `api-ip` one and an `import-key` one in the same
+ * `RateLimit` header), and some services send the older scalar
+ * `RateLimit-Remaining`/`-Reset` pair instead; the scalar is simply one more
+ * candidate rather than a second reconciliation pass over the list. Only `r=`
+ * and `t=` are read: the quota and window from `RateLimit-Policy` were never
+ * stored or shown anywhere.
+ */
+function allowances(headers: Headers, now: number): Allowance[] {
+  const candidates = structuredList(headerValue(headers, "RateLimit")).map((item) => ({
+    remaining: finiteNumber(item.params.r ?? item.params.remaining),
+    resetAt: resetAtFrom(item.params.t ?? item.params.reset, now),
+  }));
+  candidates.push({
+    remaining: finiteNumber(headerValue(headers, "RateLimit-Remaining")),
+    resetAt: resetAtFrom(headerValue(headers, "RateLimit-Reset"), now),
+  });
+  return candidates;
 }
 /** RFC 9457-style problem body, whether it is the body or nested under `error`. */
 function problemBody(body: unknown): RawObject | undefined {
@@ -235,62 +201,70 @@ function retryAfterFromHeader(value: string | null, now: number): number | undef
     ? retryDelay(value, now)
     : undefined;
 }
-function retryAfterFromBody(problem: RawObject | undefined): number | undefined {
+function retryAfterFromBody(problem: RawObject | undefined, now: number): number | undefined {
   const seconds = finiteNumber(problem?.retry_after ?? problem?.retryAfter);
-  if (seconds === undefined || seconds < 0) return undefined;
-  return Math.min(86_400_000, Math.max(1000, seconds * 1000));
+  // Delegate the clamp to `retryDelay`, exactly as the header path does, so the
+  // same number of seconds can never mean two different delays.
+  return seconds === undefined || seconds < 0 ? undefined : retryDelay(String(seconds), now);
 }
+/** `rate_limited`, `upstream_rate_limited`, `.../reliability#rate-limited`. */
+const namesRateLimit = (problem: RawObject | undefined) =>
+  ["code", "type"].some((key) =>
+    /ratelimit|toomanyrequests/.test(
+      (string(problem?.[key]) ?? "").toLowerCase().replace(/[^a-z]/g, ""),
+    ),
+  );
 /**
- * Read provider-reported limit facts off a response (and its already-decoded
- * body, when there is one). Returns undefined when the response said nothing
- * about limits — that is an absence of information, not "not throttled".
+ * Read provider-reported limit facts off a refused response (and its
+ * already-decoded body, when there is one). Returns undefined unless the
+ * provider refused *because of a limit*.
+ *
+ * The allowance headers cannot be that signal: x.md sends `RateLimit-Policy`,
+ * `RateLimit` and `RateLimit-Remaining` on EVERY response, successes and
+ * ordinary errors alike, so their presence only states a standing allowance.
+ * Treating them as the qualifier turned the first bad handle — a 404 "Profile
+ * not found" — into a throttle event the dashboard then reported forever.
+ * A refusal caused by a limit says so in one of exactly three ways:
+ *   - HTTP 429, the status that means precisely this;
+ *   - a usable `Retry-After`, the provider deliberately deferring this call
+ *     (x.md documents `503 upstream_rate_limited` that way; a 503 without one
+ *     is an outage, not a limit);
+ *   - a problem-body `code`/`type` naming a rate limit (production sends
+ *     `"code":"rate_limited"`, `"type":".../reliability#rate-limited"`).
+ * Remaining, reset and retry-after are then enrichment on a fact that already
+ * qualified, never the thing that qualifies it.
  */
 export function readThrottle(
   provider: ThrottleProvider,
   operation: string,
+  status: number,
   headers: Headers,
   body?: unknown,
   now = Date.now(),
 ): ProviderThrottle | undefined {
-  const policies = throttlePolicies(headers, now);
-  const scalarRemaining = finiteNumber(headerValue(headers, "RateLimit-Remaining"));
-  const scalarReset = resetAtFrom(headerValue(headers, "RateLimit-Reset"), now);
-  // Two policies can apply to one call (x.md: per-IP and per-API-key). The
-  // most constraining one is what actually gates the next request.
-  let tightest: ProviderThrottlePolicy | undefined;
-  for (const policy of policies)
-    if (
-      policy.remaining !== undefined &&
-      (tightest?.remaining === undefined || policy.remaining < tightest.remaining)
-    )
-      tightest = policy;
-  let remaining = tightest?.remaining;
-  let resetAt = tightest?.resetAt ?? scalarReset;
-  if (scalarRemaining !== undefined && (remaining === undefined || scalarRemaining < remaining)) {
-    remaining = scalarRemaining;
-    resetAt = scalarReset ?? resetAt;
-  }
   const problem = problemBody(body);
-  const reason = problemReason(problem);
-  const retryAfterMs =
-    retryAfterFromHeader(headers.get("Retry-After"), now) ?? retryAfterFromBody(problem);
-  if (
-    reason === undefined &&
-    remaining === undefined &&
-    resetAt === undefined &&
-    retryAfterMs === undefined &&
-    policies.length === 0
-  )
-    return undefined;
+  const deferredMs = retryAfterFromHeader(headers.get("Retry-After"), now);
+  // A fulfilled response is not a refusal at all.
+  if (status < 400) return undefined;
+  if (status !== 429 && deferredMs === undefined && !namesRateLimit(problem)) return undefined;
+  // Several allowances can apply to one call (x.md: per-IP and per-API-key).
+  // The most constraining one is what actually gates the next request.
+  const candidates = allowances(headers, now);
+  let tightest: Allowance | undefined;
+  for (const candidate of candidates)
+    if (
+      candidate.remaining !== undefined &&
+      (tightest?.remaining === undefined || candidate.remaining < tightest.remaining)
+    )
+      tightest = candidate;
   return compact({
     provider,
     operation,
     observedAt: now,
-    reason,
-    remaining,
-    resetAt,
-    retryAfterMs,
-    policies: policies.length ? policies : undefined,
+    reason: problemReason(problem),
+    remaining: tightest?.remaining,
+    resetAt: tightest?.resetAt ?? candidates.find(({ resetAt }) => resetAt !== undefined)?.resetAt,
+    retryAfterMs: deferredMs ?? retryAfterFromBody(problem, now),
   });
 }
 /**
@@ -370,7 +344,7 @@ export class XmdClient {
         retryDelay(response.headers.get("Retry-After")),
         [408, 429, 500, 502, 503, 504].includes(response.status),
         problem ? { error: problem, httpStatus: response.status } : undefined,
-        readThrottle("xmd", operation, response.headers, problem),
+        readThrottle("xmd", operation, response.status, response.headers, problem),
       );
     }
     return response;

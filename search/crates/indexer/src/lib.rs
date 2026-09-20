@@ -17,8 +17,9 @@
 //! pass.
 //!
 //! A single-instance lock (`state_dir/indexer.lock`) keeps one watcher per
-//! data root; `users mark` takes the same lock so manual overrides cannot
-//! be silently overwritten.
+//! data root; `users mark` and `publish` take the same lock so a manual
+//! override or a hand-sent publication update cannot be silently
+//! overwritten by a watcher pass that loaded the registry earlier.
 //!
 //! All directories come from the caller (CLI flags or `SEARCH_*`
 //! environment); nothing here assumes which machine it runs on.
@@ -86,7 +87,8 @@ impl Config {
     }
 }
 
-/// Path of the single-instance lock (`<pid> <kind>`, kind is watch|mark).
+/// Path of the single-instance lock (`<pid> <kind>`, kind is
+/// watch|mark|publish).
 #[must_use]
 pub fn lock_path(state_dir: &Path) -> PathBuf {
     state_dir.join("indexer.lock")
@@ -132,8 +134,8 @@ pub fn watcher_pid(state_dir: &Path) -> Option<u32> {
 /// Take the single-instance lock for `kind`.
 ///
 /// Creation is exclusive (`O_EXCL`), so only one process can hold it; stale
-/// locks (dead or unrelated pid) are reclaimed. A brief `mark` section makes
-/// a starting watcher wait instead of failing.
+/// locks (dead or unrelated pid) are reclaimed. A brief `mark` or `publish`
+/// section makes a starting watcher wait instead of failing.
 ///
 /// # Errors
 /// Returns [`Error::Invalid`] when a live xearch-search holds the lock.
@@ -159,7 +161,10 @@ pub fn acquire_exclusive(state_dir: &Path, kind: &str) -> Result<LockGuard> {
                 };
                 match lock_holder(&text) {
                     Some((pid, holder_kind)) if holds_our_lock(pid) => {
-                        if holder_kind == "mark" && kind == "watch" && attempt < 30 {
+                        // `mark` and `publish` are short sections a
+                        // starting watcher can simply wait out.
+                        let brief = matches!(holder_kind.as_str(), "mark" | "publish");
+                        if brief && kind == "watch" && attempt < 30 {
                             std::thread::sleep(Duration::from_millis(100));
                             continue;
                         }
@@ -282,7 +287,26 @@ fn author_handle(value: &serde_json::Value) -> Option<String> {
 }
 
 fn author_provider_id(value: &serde_json::Value) -> Option<String> {
-    value.get("author")?.get("id")?.as_str().map(str::to_owned)
+    provider_id(value.get("author")?.get("id")?)
+}
+
+/// A provider account id exactly as the payload carries it.
+///
+/// Every capture retained on this machine writes these as JSON strings,
+/// but the same field is a JSON number in other renderings of the same
+/// API. Reading only the string form would silently drop an id we could
+/// have read, and an update sent without `providerAccountId` falls back to
+/// handle matching on the receiver — the account-merge failure this
+/// identity exists to prevent. A non-negative integer is therefore
+/// accepted and rendered as its decimal string. Anything else (a float, a
+/// negative number, a bool, an object) is not an id and stays `None`
+/// rather than being guessed at.
+fn provider_id(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(id) => Some(id.clone()),
+        serde_json::Value::Number(id) => id.as_u64().map(|id| id.to_string()),
+        _ => None,
+    }
 }
 
 /// Identity signals a capture batch's own content can carry for a
@@ -333,12 +357,9 @@ fn capture_identity(file: &Path) -> CaptureIdentity {
                         .and_then(serde_json::Value::as_str)
                         .and_then(|name| search_query::normalize_author(name).ok())
                 });
-                identity.provider_account_id = identity.provider_account_id.or_else(|| {
-                    profile
-                        .get("id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                });
+                identity.provider_account_id = identity
+                    .provider_account_id
+                    .or_else(|| profile.get("id").and_then(provider_id));
             }
             let first_post = payload
                 .get("posts")
@@ -448,10 +469,19 @@ fn run_capture(
             .get(handle)
             .is_some_and(|p| p.transport_retry_pending)
     });
-    // Skip only when the batch is recorded AND the index still has content
-    // AND no publish attempt for it is still owed a retry. After an index
-    // reset the recorded hash must be reimported from drop regardless.
-    if !index_empty && registry.captures.contains_key(sha) && !publish_retry_pending {
+    // The batch is recorded and the index still has content: nothing about
+    // this content can need importing again. After an index reset
+    // (`index_empty`) the recorded hash must be reimported from drop
+    // regardless.
+    if !index_empty && registry.captures.contains_key(sha) {
+        // The only work that can still be owed here is a publication
+        // resend, and it travels on its own: dragging import, archive and
+        // index work along with it would repeat all of that for every
+        // recorded capture on every poll pass for as long as the endpoint
+        // is unreachable.
+        if let Some(handle) = recorded_handle.filter(|_| publish_retry_pending) {
+            republish_capture(config, engine, registry, file, sha, &handle);
+        }
         return;
     }
     let identity = capture_identity(file);
@@ -509,6 +539,34 @@ fn run_capture(
     }
 }
 
+/// Resend one capture batch's publication update after an earlier attempt
+/// never received a response. The batch is already imported, archived and
+/// indexed; the file is read only for the identity fields the envelope
+/// carries (`providerAccountId`, `runId`), never re-imported.
+fn republish_capture(
+    config: &Config,
+    engine: &search_tantivy::Engine,
+    registry: &mut Registry,
+    file: &Path,
+    sha: &str,
+    handle: &str,
+) {
+    let identity = capture_identity(file);
+    eprintln!("indexer publish retry capture={sha} user={handle} (no reimport)");
+    publish::report_after_import(
+        config.publish.as_ref(),
+        engine,
+        registry,
+        &publish::ImportReport {
+            handle,
+            outcome: publish::ImportOutcome::Succeeded,
+            provider_account_id: identity.provider_account_id.as_deref(),
+            run_id: identity.run_id.as_deref(),
+            capture_ids: vec![sha.to_owned()],
+        },
+    );
+}
+
 fn run_user(
     config: &Config,
     engine: &search_tantivy::Engine,
@@ -550,11 +608,32 @@ fn run_user(
             || rebound
             || record.status != users::UserStatus::Complete
             || record.file_sig.as_deref() != Some(&sig)
-    } || registry
-        .publications
-        .get(&handle)
-        .is_some_and(|publication| publication.transport_retry_pending);
+    };
     if !due {
+        // The bytes are unchanged and already in the index. A publication
+        // resend that is still owed is sent on its own, without
+        // re-entering import/archive/index for content nothing has touched
+        // — otherwise an unreachable endpoint would repeat that work for
+        // every affected account on every poll pass.
+        if registry
+            .publications
+            .get(&handle)
+            .is_some_and(|publication| publication.transport_retry_pending)
+        {
+            eprintln!("indexer publish retry user={handle} (no reimport)");
+            publish::report_after_import(
+                config.publish.as_ref(),
+                engine,
+                registry,
+                &publish::ImportReport {
+                    handle: &handle,
+                    outcome: publish::ImportOutcome::Succeeded,
+                    provider_account_id: None,
+                    run_id: None,
+                    capture_ids: Vec::new(),
+                },
+            );
+        }
         return;
     }
     let writer = match engine.writer() {
@@ -866,6 +945,101 @@ mod tests {
             1,
             "capture must not reimport"
         );
+    }
+
+    /// A capture batch carrying one profile record and one post, with the
+    /// provider ids written as `id_shape` (a JSON value).
+    fn capture_with_ids(handle: &str, id_shape: &serde_json::Value) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "version": 1,
+            "runId": "job-numeric",
+            "source": "x-md",
+            "terminal": "complete",
+            "request": {"origin": "https://mdfromx.com", "resource": "archive", "input": handle},
+            "records": [
+                {"receivedAt": 1_i64, "payload": {"profile": {"screen_name": handle, "id": id_shape}}},
+                {"receivedAt": 2_i64, "payload": {"posts": [{
+                    "id": "9001",
+                    "author": {"screen_name": handle, "id": id_shape},
+                    "text": "hello world",
+                    "created_timestamp": 1_758_000_000_i64,
+                }]}},
+            ]
+        }))
+        .expect("json")
+    }
+
+    fn identity_of(dir: &Path, body: &str) -> CaptureIdentity {
+        let file = dir.join("batch.json");
+        std::fs::write(&file, body).expect("write batch");
+        capture_identity(&file)
+    }
+
+    #[test]
+    fn a_profile_id_is_read_whether_it_is_a_json_string_or_a_json_number() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let from_string = identity_of(
+            dir.path(),
+            &capture_with_ids("hero", &serde_json::json!("12345")),
+        );
+        let from_number = identity_of(
+            dir.path(),
+            &capture_with_ids("hero", &serde_json::json!(12_345_u64)),
+        );
+        assert_eq!(from_string.provider_account_id.as_deref(), Some("12345"));
+        assert_eq!(
+            from_number.provider_account_id.as_deref(),
+            Some("12345"),
+            "a numeric id must not be dropped: an update without providerAccountId \
+             falls back to handle matching on the receiver"
+        );
+        assert_eq!(from_string, from_number);
+    }
+
+    #[test]
+    fn an_author_id_is_read_whether_it_is_a_json_string_or_a_json_number() {
+        // Same batch shape with the profile record removed, so the only
+        // remaining source is a post's author.id — the second extraction
+        // path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let posts_only = |id_shape: &serde_json::Value| {
+            serde_json::to_string(&serde_json::json!({
+                "version": 1, "runId": "r", "source": "x-md", "terminal": "complete",
+                "request": {"origin": "https://mdfromx.com", "resource": "archive", "input": "hero"},
+                "records": [{"receivedAt": 1_i64, "payload": {"posts": [{
+                    "id": "9002",
+                    "author": {"screen_name": "hero", "id": id_shape},
+                    "text": "hello world",
+                    "created_timestamp": 1_758_000_000_i64,
+                }]}}]
+            }))
+            .expect("json")
+        };
+        let from_string = identity_of(dir.path(), &posts_only(&serde_json::json!("777")));
+        let from_number = identity_of(dir.path(), &posts_only(&serde_json::json!(777_u64)));
+        assert_eq!(from_string.provider_account_id.as_deref(), Some("777"));
+        assert_eq!(from_number.provider_account_id.as_deref(), Some("777"));
+        assert_eq!(from_string.handle.as_deref(), Some("hero"));
+    }
+
+    #[test]
+    fn a_provider_id_that_is_neither_a_string_nor_a_whole_number_stays_absent() {
+        // Never guess: a float, a negative number or an object is not an
+        // id, and sending a made-up one would be worse than omitting it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for shape in [
+            serde_json::json!(-1_i64),
+            serde_json::json!(1.5_f64),
+            serde_json::json!({"value": "12345"}),
+            serde_json::json!(null),
+        ] {
+            let identity = identity_of(dir.path(), &capture_with_ids("hero", &shape));
+            assert!(
+                identity.provider_account_id.is_none(),
+                "{shape} is not a provider account id"
+            );
+            assert_eq!(identity.handle.as_deref(), Some("hero"));
+        }
     }
 
     #[test]

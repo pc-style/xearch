@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
-import { canonicalAccountForUserId } from "./jobs";
+import { ACCOUNT_JOB_KIND, ownedAccountJobs, resolveJobAccount } from "./lib/accounts";
 import { serviceValidator } from "./schema";
 import {
   dashboardSummaryValidator,
@@ -43,20 +43,9 @@ import {
 // `@convex-dev/aggregate` (convex guidelines "Query guidelines"), not a
 // larger constant.
 const MAX_OWNED_JOBS = 1_000;
-// Must stay equal to convex/library.ts's own MAX_OWNED_JOBS. The whole point
-// of the owner-scoped totals below is that they describe exactly the account
-// set `library.rows` lists; a different bound here would silently reintroduce
-// the mismatch this scoping exists to remove, just further out.
-const MAX_OWNED_ACCOUNT_JOBS = 500;
 const MAX_RECEIPTS_PER_JOB = 200;
 const MAX_PUBLICATION_UPDATES_PER_ACCOUNT = 500;
 
-// Only a full-account "bulk" import ever establishes an account identity or
-// a publication row (see convex/library.ts's own ACCOUNT_JOB_KIND) — a
-// "live"/"post"/etc. job's receipts can never be confirmed by a publication
-// update, since there is no account for one to apply to, so they are outside
-// the scope of "saved captures awaiting indexing" entirely.
-const ACCOUNT_JOB_KIND = "bulk" as const;
 
 function knownCount(unit: Count["unit"], value: number): Count {
   return { kind: "known", unit, value };
@@ -85,32 +74,16 @@ function unknownCount(unit: Count["unit"]): Count {
 
 // --- Indexed posts / indexed people (owner-scoped) ----------------------
 //
-// These two totals used to scan every `accountPublications` row in the
-// deployment with no owner filter, while `convex/library.ts` `rows` — the
-// list the "Indexed people" tile links to — was owner-scoped to the caller's
-// own bulk jobs. The screen therefore contradicted itself: a caller with
-// zero imports could read a nonzero "Indexed people" above an empty account
-// list, and every user saw everyone else's corpus counted as their own.
-//
-// Both numbers are now derived from exactly the account set
-// `convex/library.ts` builds its rows from: the accounts resolved from this
-// owner's own bulk jobs. The tile and the list agree by construction, and
-// the scan is bounded by how many accounts one person imported instead of by
-// how many exist globally — which also retires the old MAX_PUBLICATIONS
-// truncation case, since there is no unfiltered table scan left to truncate.
+// Both totals are derived from the same account set convex/library.ts builds
+// its rows from, so the "Indexed people" tile is exactly the length of the
+// list it links to rather than a number that happens to look similar. The
+// scan is bounded by one person's own imports; past that bound the totals
+// report "unknown" instead of presenting a partial sum as a complete one.
 
 async function computeIndexTotals(
   ctx: QueryCtx,
   accountIds: Id<"accounts">[],
-  truncated: boolean,
 ): Promise<{ indexedPosts: Count; indexedAccounts: Count }> {
-  if (truncated) {
-    // This owner has more account imports than one bounded read can cover,
-    // so neither total can be stated for the scope the contract claims —
-    // every account this caller imported. Say "unknown" rather than present
-    // the part we happened to read as the whole.
-    return { indexedPosts: unknownCount("posts"), indexedAccounts: unknownCount("accounts") };
-  }
   let sum = 0;
   let unknown = false;
   let searchableAccounts = 0;
@@ -157,75 +130,17 @@ async function computeIndexTotals(
   };
 }
 
-// --- Queue (owner-scoped: jobs.owner is the only place user ownership
-// actually exists in this schema — accounts/accountPublications are shared
-// across owners today, see computeIndexTotals above) ----------------------
+// --- Queue (owner-scoped via jobs.owner) ---------------------------------
 
 async function ownedJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">[]> {
-  const jobs = await ctx.db
+  return ctx.db
     .query("jobs")
     .withIndex("by_owner", (q) => q.eq("owner", owner))
     // Newest first: a bounded read that silently kept the OLDEST jobs would
     // describe a queue the owner no longer has.
     .order("desc")
     .take(MAX_OWNED_JOBS);
-  return jobs;
 }
-
-// The owner's account-history jobs, read with the SAME index, kind filter,
-// order and bound convex/library.ts `ownedAccountJobs` uses, so the accounts
-// resolved from this list are the accounts that appear as library rows.
-async function ownedAccountJobs(
-  ctx: QueryCtx,
-  owner: Id<"users">,
-): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
-  // One past the cap, so a full page is distinguishable from a truncated
-  // scan. Reporting a partial sum as a complete total is exactly the
-  // invented number this file exists to prevent.
-  const scanned = await ctx.db
-    .query("jobs")
-    .withIndex("by_owner", (q) => q.eq("owner", owner))
-    .filter((q) => q.eq(q.field("kind"), ACCOUNT_JOB_KIND))
-    .order("desc")
-    .take(MAX_OWNED_ACCOUNT_JOBS + 1);
-  const truncated = scanned.length > MAX_OWNED_ACCOUNT_JOBS;
-  return { jobs: truncated ? scanned.slice(0, MAX_OWNED_ACCOUNT_JOBS) : scanned, truncated };
-}
-
-// Resolve one job to the account it belongs to, the same identity rule as
-// convex/library.ts and convex/publication.ts: provider account id first
-// (job.expectedUserId, pinned mid-run once identity is confirmed), the raw
-// handle only as a fallback when no provider id has ever been pinned. Not
-// imported from convex/library.ts because that file exports no such helper
-// (only its two queries) and is out of this unit's owned files.
-async function resolveAccountId(
-  ctx: QueryCtx,
-  job: Doc<"jobs">,
-  cache: Map<string, Id<"accounts"> | null>,
-): Promise<Id<"accounts"> | null> {
-  const providerAccountId = job.expectedUserId;
-  const cacheKey = providerAccountId !== undefined ? `id:${providerAccountId}` : `handle:${job.input}`;
-  const cached = cache.get(cacheKey);
-  if (cached !== undefined) return cached;
-  // Same two rules convex/library.ts uses, and for the same reason: these
-  // totals must describe exactly the account set that file lists. A provider
-  // id resolves to the canonical (oldest) row, since duplicate rows for one
-  // id are duplicates of one account. A handle stays ambiguous when it
-  // matches more than one row, because two people really can have held it.
-  let id: Id<"accounts"> | null;
-  if (providerAccountId !== undefined) {
-    id = (await canonicalAccountForUserId(ctx, providerAccountId))?._id ?? null;
-  } else {
-    const matches = await ctx.db
-      .query("accounts")
-      .withIndex("by_handle", (q) => q.eq("handle", job.input))
-      .take(2);
-    id = matches.length === 1 ? matches[0]._id : null;
-  }
-  cache.set(cacheKey, id);
-  return id;
-}
-
 // Every capture id an account has an ACCEPTED ("applied") publication update
 // for. "accepted" deliberately excludes stale_ignored/duplicate_ignored/
 // rejected_* — those never changed accountPublications, so they cannot be
@@ -259,8 +174,11 @@ async function confirmedCaptureIds(
 async function computeSavedCapturesAwaitingIndexing(
   ctx: QueryCtx,
   bulkJobs: Doc<"jobs">[],
+  // Shared with the caller rather than built locally: this function and the
+  // owner-scoped totals resolve the same jobs to the same accounts, so a
+  // second cache just paid for every one of those reads twice per load.
+  accountCache: Map<string, Doc<"accounts"> | null>,
 ): Promise<Count> {
-  const accountCache = new Map<string, Id<"accounts"> | null>();
   const confirmedCache = new Map<Id<"accounts">, Set<string>>();
   // Dedupe at the ACCOUNT level across ALL of the owner's bulk jobs for that
   // account, never per job. captureId is content-addressed (same content ->
@@ -278,7 +196,7 @@ async function computeSavedCapturesAwaitingIndexing(
       .withIndex("by_capture", (q) => q.eq("jobId", job._id))
       .take(MAX_RECEIPTS_PER_JOB);
     if (receipts.length === 0) continue;
-    const accountId = await resolveAccountId(ctx, job, accountCache);
+    const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
     let bucket = capturesByAccount.get(accountId);
     if (!bucket) {
       bucket = new Set<string>();
@@ -298,7 +216,11 @@ async function computeSavedCapturesAwaitingIndexing(
   return knownCount("captures", count);
 }
 
-async function computeQueue(ctx: QueryCtx, jobs: Doc<"jobs">[]): Promise<{ queue: QueueBreakdown }> {
+async function computeQueue(
+  ctx: QueryCtx,
+  jobs: Doc<"jobs">[],
+  accountCache: Map<string, Doc<"accounts"> | null>,
+): Promise<QueueBreakdown> {
   let waiting = 0;
   let active = 0;
   let failedRetryable = 0;
@@ -325,12 +247,14 @@ async function computeQueue(ctx: QueryCtx, jobs: Doc<"jobs">[]): Promise<{ queue
     else if (job.status === "failed" || job.status === "partial") failedRetryable += 1;
   }
   return {
-    queue: {
-      waitingDownloads: knownCount("jobs", waiting),
-      activeDownloads: knownCount("jobs", active),
-      savedCapturesAwaitingIndexing: await computeSavedCapturesAwaitingIndexing(ctx, bulkJobs),
-      failedRetryable: knownCount("jobs", failedRetryable),
-    },
+    waitingDownloads: knownCount("jobs", waiting),
+    activeDownloads: knownCount("jobs", active),
+    savedCapturesAwaitingIndexing: await computeSavedCapturesAwaitingIndexing(
+      ctx,
+      bulkJobs,
+      accountCache,
+    ),
+    failedRetryable: knownCount("jobs", failedRetryable),
   };
 }
 
@@ -359,26 +283,29 @@ export const summary = query({
     // scope literal.
     const owner = await user(ctx);
     const jobs = await ownedJobs(ctx, owner);
-    const { queue } = await computeQueue(ctx, jobs);
+    // One cache for the whole request: the queue's capture tally and the
+    // owner-scoped totals below resolve the same jobs to the same accounts.
+    const accountCache = new Map<string, Doc<"accounts"> | null>();
+    const queue = await computeQueue(ctx, jobs, accountCache);
     // Resolved from the library-matching read, not from the queue's wider
     // all-kinds scan, so the "Indexed people" tile and the account list it
     // links to are computed over the same rows and cannot disagree.
-    const accountCache = new Map<string, Id<"accounts"> | null>();
     const accountIds: Id<"accounts">[] = [];
     const seen = new Set<Id<"accounts">>();
-    const accountJobs = await ownedAccountJobs(ctx, owner);
+    const accountJobs = await ownedAccountJobs(ctx.db, owner);
     for (const job of accountJobs.jobs) {
-      const accountId = await resolveAccountId(ctx, job, accountCache);
+      const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
       if (accountId && !seen.has(accountId)) {
         seen.add(accountId);
         accountIds.push(accountId);
       }
     }
-    const { indexedPosts, indexedAccounts } = await computeIndexTotals(
-      ctx,
-      accountIds,
-      accountJobs.truncated,
-    );
+    // Truncation is the caller's fact, not part of summing: past the bound
+    // neither total can honestly describe "every account this caller
+    // imported", which is what the scope below claims.
+    const { indexedPosts, indexedAccounts } = accountJobs.truncated
+      ? { indexedPosts: unknownCount("posts"), indexedAccounts: unknownCount("accounts") }
+      : await computeIndexTotals(ctx, accountIds);
     return {
       indexedPosts,
       indexedAccounts,

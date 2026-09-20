@@ -15,6 +15,22 @@ const summaryQuery = anyApi.summary.summary as unknown as FunctionReference<
   { now: number },
   DashboardSummary
 >;
+const applyUpdate = anyApi.publication.applyUpdate as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  {
+    version: 1;
+    providerAccountId?: string;
+    handle: string;
+    captureIds: string[];
+    generation: number;
+    reportedState: "indexing" | "searchable" | "failed";
+    uniquePostCount?: number;
+    uniquePostCountAsOf?: number;
+    observedAt: number;
+  },
+  { outcome: string; rejectionReason?: string }
+>;
 const libraryRows = anyApi.library.rows as unknown as FunctionReference<
   "query",
   "public",
@@ -125,6 +141,41 @@ describe("duplicate rows for one provider id", () => {
     // real people have held. That genuinely cannot be resolved.
     await job(t, alice, { input: "moved", kind: "bulk" });
     expect(await a.query(libraryRows, {})).toEqual([]);
+  });
+});
+
+describe("the publication receiver and the library agree on identity", () => {
+  it("applies an update for an account that has a duplicate row, instead of rejecting it forever", async () => {
+    const { t, alice, a } = await setup();
+    const [canonical] = await t.run(async (ctx) => [
+      await ctx.db.insert("accounts", { handle: "dup", userId: "42", name: "First Row" }),
+      await ctx.db.insert("accounts", { handle: "dup", userId: "42", name: "Second Row" }),
+    ]);
+    await job(t, alice, { input: "dup", kind: "bulk", expectedUserId: "42" });
+
+    // The receiver used to call two rows for one provider id ambiguous and
+    // answer rejected_invalid, while the library happily showed the account.
+    // That account would have sat at "waiting for indexing" forever while
+    // the indexer collected 422s.
+    const applied = await t.mutation(applyUpdate, {
+      version: 1,
+      providerAccountId: "42",
+      handle: "dup",
+      captureIds: ["cap-1"],
+      generation: 1,
+      reportedState: "searchable",
+      uniquePostCount: 7,
+      uniquePostCountAsOf: Date.now(),
+      observedAt: Date.now(),
+    });
+    expect(applied).toMatchObject({ outcome: "applied" });
+
+    // It landed on the canonical row, which is the one the library shows.
+    const rows = await a.query(libraryRows, {});
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0].accountId)).toBe(String(canonical));
+    expect(rows[0].publicationState).toBe("searchable");
+    expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 7 });
   });
 });
 

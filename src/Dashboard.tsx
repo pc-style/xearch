@@ -149,7 +149,7 @@ export default function Dashboard({
   // only for the non-account job kinds to-do.md P0 says must stay out of
   // the indexed-people list (live search, single post, profile, followers,
   // following, archive). The split is applied server-side via `scope`.
-  const otherJobs = jobs ?? [];
+
   const start = useMutation(api.jobs.start);
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
     [input, setInput] = useState(""),
@@ -316,7 +316,7 @@ export default function Dashboard({
               </button>
             ) : !jobs ? (
               <p>Loading jobs…</p>
-            ) : otherJobs.length === 0 ? (
+            ) : jobs.length === 0 ? (
               <div className="control-empty">
                 <h3>{showDismissed ? "Nothing here" : "No other imports yet"}</h3>
                 <p>
@@ -326,7 +326,7 @@ export default function Dashboard({
                 </p>
               </div>
             ) : (
-              otherJobs.map((job) => <Job key={job._id} job={job} />)
+              jobs.map((job) => <Job key={job._id} job={job} />)
             )}
           </section>
         </div>

@@ -6,7 +6,8 @@ import { internal } from "./_generated/api";
 import { kindValidator, throttleProviderValidator } from "./schema";
 import { user } from "./access";
 import { handle, statusUrl } from "./lib/xmd";
-import { parseQuery } from "./lib/search";
+import { canonicalQuery } from "./lib/search";
+import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 
 // Every filter a caller cares about is applied BEFORE the limit, by streaming
 // the owner's jobs newest-first and stopping once enough eligible ones are
@@ -22,10 +23,7 @@ const JOB_FEED_LIMIT = 20;
 // a library row; "other" is everything else (live search, single post,
 // profile, follower/following lookups) — the split src/Dashboard.tsx's
 // "Other imports" feed and convex/library.ts already draw.
-// Same literal convex/library.ts and convex/summary.ts use: only a full
-// account-history import establishes an account identity.
-const ACCOUNT_JOB_KIND = "bulk" as const;
-const jobScopeValidator = v.union(v.literal("all"), v.literal("account"), v.literal("other"));
+const jobScopeValidator = v.union(v.literal("all"), v.literal("other"));
 export const list = query({
   args: {
     includeDismissed: v.optional(v.boolean()),
@@ -42,9 +40,7 @@ export const list = query({
       .order("desc")) {
       if (++scanned > JOB_FEED_SCAN) break;
       if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
-      const isAccountJob = job.kind === ACCOUNT_JOB_KIND;
-      if (scope === "account" && !isAccountJob) continue;
-      if (scope === "other" && isAccountJob) continue;
+      if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
       out.push(job);
       if (out.length >= JOB_FEED_LIMIT) break;
     }
@@ -86,8 +82,7 @@ export const restoreSummary = internalMutation({
 // handle, so repeats collide instead of piling up.
 function canonicalLiveQuery(raw: string): string {
   try {
-    const { author, text } = parseQuery(raw.trim());
-    return [author ? `@${author}` : "", text].filter(Boolean).join(" ");
+    return canonicalQuery(raw).canonical;
   } catch (error) {
     // parseQuery throws plain Errors with copy already written for a person
     // ("Search one author at a time...", "Use @handle to filter authors...").
@@ -216,12 +211,19 @@ export const progress = internalMutation({
     await ctx.db.patch(job._id, { phase: args.phase, updatedAt: Date.now() });
   },
 });
+// Load a job this caller owns, or refuse. The same "not found" message
+// whether the job does not exist or simply is not theirs — never confirm the
+// existence of someone else's run.
+async function ownedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
+  const owner = await user(ctx);
+  const job = await ctx.db.get(jobId);
+  if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+  return job;
+}
 export const cancel = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    const job = await ownedJob(ctx, jobId);
     if (!["queued", "running"].includes(job.status)) return;
     await ctx.db.patch(jobId, {
       status: "cancelled",
@@ -233,9 +235,7 @@ export const cancel = mutation({
 export const retry = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    const job = await ownedJob(ctx, jobId);
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
     for (const status of ["queued", "running"] as const) {
@@ -265,17 +265,14 @@ export const retry = mutation({
 // was durably stored) stay exactly as they were, and `restore` brings the
 // row back — so it does not violate to-do.md's "do not delete records just
 // to hide duplicates".
-const DISMISSABLE = ["complete", "partial", "failed", "cancelled"] as const;
 export const dismiss = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    const job = await ownedJob(ctx, jobId);
     // Deliberately refuses queued/running work: hiding a run that is still
     // spending provider allowance would make it unstoppable from the UI.
     // Stop it first, then dismiss it.
-    if (!DISMISSABLE.includes(job.status as (typeof DISMISSABLE)[number]))
+    if (job.status === "queued" || job.status === "running")
       throw new ConvexError("Stop this run before dismissing it.");
     if (job.dismissedAt !== undefined) return;
     await ctx.db.patch(jobId, { dismissedAt: Date.now() });
@@ -284,9 +281,8 @@ export const dismiss = mutation({
 export const restore = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    // Ownership is the whole check here; the row itself is not needed.
+    await ownedJob(ctx, jobId);
     await ctx.db.patch(jobId, { dismissedAt: undefined });
   },
 });
@@ -330,9 +326,7 @@ export const recordThrottle = internalMutation({
 export const receipts = query({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    await ownedJob(ctx, jobId);
     return ctx.db
       .query("receipts")
       .withIndex("by_capture", (q) => q.eq("jobId", jobId))
@@ -473,36 +467,6 @@ export const finish = internalMutation({
 
 type Profile = { handle: string; userId: string; name: string; avatar?: string };
 
-// How many same-provider-id rows to consider when picking a canonical one.
-export const MAX_DUPLICATE_ACCOUNT_ROWS = 8;
-
-/**
- * The canonical `accounts` row for one provider account id.
- *
- * A provider id is the identity, so several rows carrying the SAME id are
- * duplicates of one account — not two identities — and must resolve to a
- * single row everywhere rather than being treated as ambiguous. Ambiguity
- * handling is reserved for HANDLE lookups, where two matches really can be
- * two different people who held the handle at different times.
- *
- * "Canonical" is the oldest row (lowest `_creationTime`), which is stable
- * across calls and independent of read order, so the write path here and the
- * read paths in convex/library.ts and convex/summary.ts always agree. Without
- * that agreement a legacy duplicate would let an import succeed while the
- * account vanished from the library and from the owner's totals.
- */
-export async function canonicalAccountForUserId(
-  ctx: { db: MutationCtx["db"] | QueryCtx["db"] },
-  userId: string,
-): Promise<Doc<"accounts"> | null> {
-  const matches = await ctx.db
-    .query("accounts")
-    .withIndex("by_user_id", (q) => q.eq("userId", userId))
-    .take(MAX_DUPLICATE_ACCOUNT_ROWS);
-  if (matches.length === 0) return null;
-  return matches.reduce((oldest, row) => (row._creationTime < oldest._creationTime ? row : oldest));
-}
-
 // Account identity is the provider account id, never the handle.
 //
 // This used to look the account up purely `by_handle` and unconditionally
@@ -516,17 +480,21 @@ export async function canonicalAccountForUserId(
 // See to-do.md P0 "Do not combine different identities after a handle
 // reassignment" and docs/publication-contract.md "Account identity".
 async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise<Id<"accounts">> {
-  // `by_user_id` is not uniqueness-enforced by the schema, so `.unique()`
-  // would throw on a duplicate rather than letting the import finish. Two
-  // rows for ONE provider id is a pre-existing data problem, not the
-  // cross-identity merge this function exists to prevent — both rows already
-  // claim the same identity — so one of them is chosen as canonical.
-  const existing = await canonicalAccountForUserId(ctx, profile.userId);
+  const existing = await canonicalAccountForUserId(ctx.db, profile.userId);
   let accountId: Id<"accounts">;
   if (existing) {
-    // Same provider id: this IS that account, whatever handle it now uses.
-    // Patching the handle here is how a rename is picked up.
-    await ctx.db.patch(existing._id, profile);
+    // Same provider id: this IS that account, whatever handle it now uses,
+    // so patching is how a rename gets picked up. Skipped when nothing
+    // actually changed: `finish` runs once per page and a multi-page import
+    // returns the same profile every time, so writing unconditionally
+    // rewrote an identical row up to sixty times per import — and every
+    // write re-fires the library and summary queries watching this document.
+    if (
+      existing.handle !== profile.handle ||
+      existing.name !== profile.name ||
+      existing.avatar !== profile.avatar
+    )
+      await ctx.db.patch(existing._id, profile);
     accountId = existing._id;
   } else {
     // No row for this provider id. Deliberately does NOT adopt a row that

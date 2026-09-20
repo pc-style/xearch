@@ -22,38 +22,19 @@ import { throttleProviderValidator } from "./schema";
  * this file can ever report is one the provider itself supplied; nothing
  * here reintroduces a self-imposed cap.
  *
- * The write path now exists. `convex/lib/xmd.ts` reads the provider's own
- * `RateLimit-*` / `Retry-After` headers and problem body into a structured
- * fact on `ProviderError`; `convex/importer.ts` and — in production, where
- * COLLECTOR_MODE is outbound and the VM worker is the only thing that talks
- * to x.md — `scripts/production-worker.ts` via `worker.report`'s "throttle"
- * event both record it through `convex/jobs.recordThrottle`. Facts are
- * captured on ERROR responses only, so a successful call's remaining
- * allowance is still not visible here; `{ kind: "none" }` therefore still
- * means "nothing has been observed", never "not throttled".
+ * Rows are written by `convex/importer.ts` and — in production, where
+ * COLLECTOR_MODE is outbound and the VM worker is the only thing that calls
+ * x.md — by `scripts/production-worker.ts` through `worker.report`'s
+ * "throttle" event. Facts are captured on error responses only, so a
+ * successful call's remaining allowance is not visible here, and
+ * `{ kind: "none" }` means "nothing has been observed", never "not
+ * throttled".
  *
- * Scope note — to-do.md P0 "Provider limits" is four separate bullets. This
- * file plus the dashboard wiring in src/library/ close two of them:
- *   - CLOSED: "Expose safe summary data through authenticated backend
- *     contracts." `current`/`all` are auth-gated via `user(ctx)` and return
- *     only derived provider-limit facts (never a raw state file, credential,
- *     or another user's data).
- *   - CLOSED (dashboard wiring): "show provider-reported throttling, remaining
- *     allowance ..., the affected operation, and the next retry time."
- *     `src/library/ProviderLimits.tsx` renders `limits.all`'s result and is
- *     mounted into the dashboard via `src/library/Library.tsx` ->
- *     `OverviewStats.tsx`, so a signed-in user can see this panel. It has
- *     nothing to show yet in production, though — see the next two bullets.
- *   - CLOSED: "Respect provider Retry-After/retryAfter." `nextRetryAt` is
- *     computed from `retryAfterMs`, which now reaches this table from real
- *     acquisition. tests/provider-limits-writepath.test.ts drives
- *     convex/importer.ts with a stubbed transport returning the exact 429
- *     body production retained on disk, and asserts the resulting reading —
- *     rather than inserting a synthetic row.
- *   - CLOSED: "Separate current provider throttling from historical 'today's
- *     import limit' errors." Same test file asserts that a stale, pre-PR#12
- *     application-cap string sitting in `jobs.error` still produces
- *     `{ kind: "none" }` here, because this file reads only observations.
+ * Evidence rather than a changelog: tests/provider-limits-writepath.test.ts
+ * drives the real acquisition path with the exact 429 body production
+ * retained on disk and asserts the reading that reaches the dashboard,
+ * including that an absent allowance reads "unknown" rather than 0 and that
+ * a stale application-cap string in jobs.error is never reported as current.
  */
 
 // Bounded read (Convex query guidelines: no unbounded `.collect()`).

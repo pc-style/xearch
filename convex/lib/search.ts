@@ -27,6 +27,22 @@ export function parseQuery(raw: string) {
   return { text, author: authors[0] };
 }
 
+/**
+ * One spelling for one search. `@theo`, `from:@theo` and `from:theo` all
+ * parse to the same author, so they must also STORE the same way — otherwise
+ * the same search opens three differently-named rows and each one slips past
+ * the duplicate guard, which matches on the stored string.
+ *
+ * Rendering lives here next to the parsing it inverts, so the two cannot
+ * drift: `convex/jobs.ts` canonicalises what a person typed, and
+ * `convex/integrations.ts` re-renders what the model proposed, and both get
+ * the same answer.
+ */
+export function canonicalQuery(raw: string): { text: string; author?: string; canonical: string } {
+  const { text, author } = parseQuery(raw.trim());
+  return { text, author, canonical: [author ? `@${author}` : "", text].filter(Boolean).join(" ") };
+}
+
 // --- Authorized collection scope ---------------------------------------------
 // The search wire contract (docs/integration-contract.md) has no per-user or
 // per-collection scoping field, and `accounts` (convex/schema.ts) carries no
