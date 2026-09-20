@@ -18,11 +18,13 @@ import type * as importer from "../importer.js";
 import type * as integrations from "../integrations.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_collect from "../lib/collect.js";
+import type * as lib_contracts from "../lib/contracts.js";
 import type * as lib_handoff from "../lib/handoff.js";
 import type * as lib_results from "../lib/results.js";
 import type * as lib_search from "../lib/search.js";
 import type * as lib_serviceAuth from "../lib/serviceAuth.js";
 import type * as lib_xmd from "../lib/xmd.js";
+import type * as library from "../library.js";
 import type * as search from "../search.js";
 import type * as worker from "../worker.js";
 
@@ -43,11 +45,13 @@ declare const fullApi: ApiFromModules<{
   integrations: typeof integrations;
   jobs: typeof jobs;
   "lib/collect": typeof lib_collect;
+  "lib/contracts": typeof lib_contracts;
   "lib/handoff": typeof lib_handoff;
   "lib/results": typeof lib_results;
   "lib/search": typeof lib_search;
   "lib/serviceAuth": typeof lib_serviceAuth;
   "lib/xmd": typeof lib_xmd;
+  library: typeof library;
   search: typeof search;
   worker: typeof worker;
 }>;
