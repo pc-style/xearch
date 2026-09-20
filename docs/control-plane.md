@@ -33,16 +33,53 @@ rather than the schema.
 
 `jobs.finish` → `upsertAccount` is the only path that creates an account
 row. A publication update that cannot resolve to an existing account is
-rejected (`422 rejected_invalid`), never used to invent one.
+rejected (`422 rejected_invalid`), never used to invent one. The rejection
+reason is "No known account matches this update's providerAccountId/handle."
+
+**`pinIdentity` is not an account row.** Both `convex/importer.ts` and
+`worker.report` `"identity"` call `jobs.pinIdentity`, which only patches
+`jobs.expectedUserId`. The library (`groupOwnedJobsByAccount` in
+`convex/library.ts`) drops a bulk job that cannot resolve to an existing
+`accounts` row. Captures, receipts, and a pinned id can all exist with an
+empty library.
+
+### Who actually calls `finish` with a profile
+
+`upsertAccount` runs only when `jobs.finish` receives its optional
+`profile` argument. Two callers exist; they do not agree:
+
+| Caller                                 | Mode                                   | Sends `profile`?                                                                                                                                                                                                                                              |
+| -------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `convex/importer.ts`                   | local / not `outbound`                 | Yes, after `collectXmd`. Handle must match `/^[A-Za-z0-9_]{1,15}$/` (from `screen_name`, then lowercased); `userId` is the pinned id; avatar only when the URL starts with `https://`. A failed check still finishes the job — it just skips `upsertAccount`. |
+| `convex/worker.ts` `report` `"finish"` | production / `COLLECTOR_MODE=outbound` | **No.** The action has no `profile` argument. `scripts/production-worker.ts` also strips `collectXmd`'s profile (`const { profile: _rawProfile, ...summary }`) before reporting.                                                                              |
+
+Production therefore never creates an `accounts` row, even after a successful
+bulk import with a durable capture and a pinned `expectedUserId`. That is why
+the library stays empty, "Indexed people" stays zero, and a real publication
+update for an already-indexed handle returns HTTP 422 `rejected_invalid`. A
+`kind: "profile"` job is a capture of the profile endpoint, not an
+`accounts` insert.
+
+Only `kind: "bulk"` collect returns a profile: `collectXmd` runs the
+dedicated profile preflight (and sets `onIdentity`) only on that kind.
+
+`jobs.start` / `retry` / auto-continue still schedule `internal.importer.run`
+in outbound mode. That action returns immediately
+(`convex/importer.ts` first line). The VM worker's next `poll` is what
+claims the queued job. `jobs.start` still requires `X_MD_API_KEY` on the
+Convex deployment even when Convex will not call x.md; the worker reads its
+own key from `.env.local` on the VM.
 
 `accountHandles` is never pruned (`recordHandle` in `convex/jobs.ts` inserts
 a new row with `firstSeenAt`/`lastSeenAt`, or touches `lastSeenAt` on one it
 already has, reading up to 50 rows per account) so "who held `@x` when" is
-answerable from data.
+answerable from data. Nothing writes that table until `upsertAccount` runs.
 
 **Pitfall:** `jobs.start` still looks an account up by handle to reuse a
 pinned `expectedUserId`. An ambiguous handle (two identities) is treated as
-unresolved rather than guessed.
+unresolved rather than guessed. A verified production profile download is a
+capture receipt, not proof an account exists. A later worker that starts
+sending `profile` does not backfill jobs that already finished.
 
 ## Jobs, dismissal, and live search
 
@@ -102,8 +139,8 @@ slice of that library page. It returns the runs it found plus `exhausted`,
 and `library.history` checks `exhausted` **before** it looks at what was
 found — not only when nothing was:
 
-- Incomplete scan → `ConvexError("Could not read this account's full
-  history — you have too many imports to search in one request.")`,
+- Incomplete scan → `ConvexError` "Could not read this account's full
+  history — you have too many imports to search in one request.",
   whatever it collected. The scan walks the index's `_creationTime` order
   while history is presented newest-by-`updatedAt`, so a run it never
   reached can belong in the fifty rows (`MAX_HISTORY_JOBS`) it would
@@ -227,7 +264,7 @@ any `http://` URL whose host is not loopback — before a configuration, let
 alone a request, exists. `https://` is always accepted; plain `http://` to
 `127.0.0.1`, `::1` or `localhost` stays accepted because those bytes never
 leave the machine, which is what the crate's own tests point at. A name
-that merely *resolves* to loopback is not accepted. An operator who
+that merely _resolves_ to loopback is not accepted. An operator who
 misconfigures this gets publication disabled and one log line naming the
 variable and the host — never the token:
 
@@ -243,7 +280,7 @@ got a response does not spend its generation: the update itself is stored
 (`publications.<handle>.pending` in `users.json`) and replayed byte for
 byte until some response arrives. While that is owed, a later import for
 the same account must not publish at the same generation, so it stands
-down — but what it *would* have reported (`captureIds`, `runId`,
+down — but what it _would_ have reported (`captureIds`, `runId`,
 `providerAccountId`, its state) is retained against the account under
 `publications.<handle>.deferred`, and several stood-down imports coalesce
 into one entry. As soon as the owed update is answered, that entry goes out
@@ -272,14 +309,15 @@ daily import budget.
 
 ## Tests that lock the rules
 
-| File                                         | What it proves                                                                                                       |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `tests/account-identity.test.ts`             | Reassignment forks; rename stays one row; library does not throw on a duplicated handle                              |
-| `tests/job-feed.test.ts`                     | Dismiss/restore; a dismissed run's captures still count as awaiting indexing; live-search canonicalisation           |
-| `tests/provider-limits-writepath.test.ts`    | Real 429 body reaches the panel; absent allowance is unknown; stale `jobs.error` is not current                      |
-| `tests/ownership-lookup.test.ts`             | `ownerJobsForAccount` collects every run for one account and reports whether the scan finished                       |
-| `tests/review-fixes.test.ts`                 | Filters apply before the page limit; history opens past the library page but is refused when the scan was incomplete; an applied `failed` update confirms no captures; bounded reads report unknown |
-| `tests/worker-liveness.test.ts`              | Liveness is decided client-side: it goes stale with no new write, and a timestamp that was not disclosed is not "down" |
-| `tests/convex.test.ts`                       | An offline worker makes `integrations.configured` report `handoff: false` and `jobs.start` refuse                    |
-| `tests/connections-ui.test.ts`               | Outbound mode labels the download worker, not capture env vars                                                       |
-| `search/crates/indexer/tests/publication.rs` | Sender envelope, generation spend, owed-update replay, stood-down capture ids folded into a follow-on, and a non-loopback `http://` endpoint refused before any request is built |
+| File                                         | What it proves                                                                                                                                                                                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tests/account-identity.test.ts`             | Reassignment forks; rename stays one row; library does not throw on a duplicated handle                                                                                                                                                                |
+| `tests/job-feed.test.ts`                     | Dismiss/restore; a dismissed run's captures still count as awaiting indexing; live-search canonicalisation                                                                                                                                             |
+| `tests/provider-limits-writepath.test.ts`    | Real 429 body reaches the panel; absent allowance is unknown; stale `jobs.error` is not current                                                                                                                                                        |
+| `tests/ownership-lookup.test.ts`             | `ownerJobsForAccount` collects every run for one account and reports whether the scan finished                                                                                                                                                         |
+| `tests/review-fixes.test.ts`                 | Filters apply before the page limit; history opens past the library page but is refused when the scan was incomplete; an applied `failed` update confirms no captures; bounded reads report unknown                                                    |
+| `tests/worker-liveness.test.ts`              | Liveness is decided client-side: it goes stale with no new write, and a timestamp that was not disclosed is not "down"                                                                                                                                 |
+| `tests/convex.test.ts`                       | An offline worker makes `integrations.configured` report `handoff: false` and `jobs.start` refuse                                                                                                                                                      |
+| `tests/connections-ui.test.ts`               | Outbound mode labels the download worker, not capture env vars                                                                                                                                                                                         |
+| (none on this branch)                        | Outbound finish dropping `profile` is verified by reading `scripts/production-worker.ts` and `convex/worker.ts`, not by a test. `tests/account-identity.test.ts` covers `upsertAccount` only through `jobs.finish` with a profile (the in-Convex path) |
+| `search/crates/indexer/tests/publication.rs` | Sender envelope, generation spend, owed-update replay, stood-down capture ids folded into a follow-on, and a non-loopback `http://` endpoint refused before any request is built                                                                       |

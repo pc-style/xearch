@@ -59,9 +59,19 @@ reassignment protection on that path degrades to the handle-ambiguity rule
   Publication applies the same resolver (`convex/publication.ts`), so an
   account visible in the library is the account an update can attach to.
 - This app does not create an account row purely from a publication update. Accounts
-  are created only from our own acquisition flow (`jobs.finish`). A publication
-  update that cannot resolve to an existing account is rejected
-  (`outcome: "rejected_invalid"`, logged, not applied) rather than used to invent one.
+  are created only from our own acquisition flow: `jobs.finish` → `upsertAccount`,
+  and only when `finish` is passed a `profile`. Local `convex/importer.ts` does
+  that for `kind: "bulk"` after validating the handle
+  (`/^[A-Za-z0-9_]{1,15}$/`) and keeping avatars only when they are `https://`.
+  Production (`COLLECTOR_MODE=outbound`) does not: `convex/importer.ts` no-ops,
+  `worker.report` `"finish"` has no `profile` argument, and
+  `scripts/production-worker.ts` strips `collectXmd`'s profile before reporting.
+  `pinIdentity` (a pinned `jobs.expectedUserId`) is not an account row. A
+  publication update that cannot resolve to an existing account is rejected
+  (`outcome: "rejected_invalid"`, logged, not applied) rather than used to invent
+  one. The rejection reason is "No known account matches this update's
+  providerAccountId/handle." See [the control plane](control-plane.md) and
+  [production operations](production.md) "Outbound collector and accounts".
 
 ## Publication states
 

@@ -77,6 +77,8 @@ Use `bunx convex env set NAME` and supply the value through stdin/the prompt. Do
 | `PUBLICATION_SERVICE_TOKEN` | Auth for `POST /publication/update` (indexer → Convex)      |
 | `RAW_CAPTURE_TOKEN`         | Ingestion-only credential for the capture receiver          |
 | `DATA_SERVICE_TOKEN`        | Legacy shared fallback when a dedicated token is unset      |
+| `COLLECTOR_MODE`            | `outbound` makes Convex skip x.md/capture (production only) |
+| `COLLECTOR_TOKEN`           | Production worker auth; never set on a local deployment     |
 | `FIRECRAWL_API_KEY`         | Linked-page scraping and web-context search                 |
 | `OPENAI_API_KEY`            | Editable query interpretation                               |
 | `OPENAI_MODEL`              | Optional model override; default `gpt-5-mini`               |
@@ -86,9 +88,30 @@ Use `bunx convex env set NAME` and supply the value through stdin/the prompt. Do
 
 Register AgentMail's webhook at `<deployment>.convex.site/agentmail/webhook` for delivery events. A send is queued only by the explicit Email → Send results action. The interface distinguishes queued/sent/delivered states.
 
-`PUBLICATION_SERVICE_TOKEN` is set with `bunx convex env set`, not `bun run env:sync` — that script's allowlist does not include it yet. The indexer's `PUBLICATION_UPDATE_URL` is not a Convex variable; it belongs in the indexer env file, and it must be `https://` — the sender refuses a non-loopback `http://` endpoint outright rather than sending a bearer token in cleartext. Plain `http://` to `127.0.0.1`, `::1` or `localhost` is still accepted, which is what a local test responder uses. See [indexer operations](search-indexer.md).
+`PUBLICATION_SERVICE_TOKEN`, `COLLECTOR_MODE`, and `COLLECTOR_TOKEN` are set
+with `bunx convex env set` (or `scripts/setup-worker.mjs` for the last two on
+production), not `bun run env:sync` — that script's allowlist does not include
+them. Keep anonymous local deployments in receiver mode: if `COLLECTOR_MODE`
+is `outbound` here, `convex/importer.ts` no-ops and nothing polls for jobs.
+The indexer's `PUBLICATION_UPDATE_URL` is not a Convex variable; it belongs in
+the indexer env file, and it must be `https://` — the sender refuses a
+non-loopback `http://` endpoint outright rather than sending a bearer token in
+cleartext. Plain `http://` to `127.0.0.1`, `::1` or `localhost` is still
+accepted, which is what a local test responder uses. See
+[indexer operations](search-indexer.md).
 
-The UI exposes account imports, search, and conversation collection. The same `jobs.start` API accepts `profile`, `following`, `followers`, and `archive`; these preserve complete responses for downstream account-discovery work. `bulk` supports `refresh:true` for engagement updates. All collection paths require a configured receiver (local) or a live download worker (production outbound mode), so an import never claims success by merely fetching data.
+The UI exposes account imports, search, and conversation collection. The same
+`jobs.start` API accepts `profile`, `following`, `followers`, and `archive`;
+these preserve complete responses for downstream account-discovery work. Only
+`kind: "bulk"` collect returns a profile, and only `jobs.finish` with that
+profile creates an `accounts` row (`upsertAccount`). A `profile` job is a
+capture of the profile endpoint, not a library row. `bulk` supports
+`refresh:true` for engagement updates. All collection paths require a
+configured receiver (local) or a live download worker (production outbound
+mode), so an import never claims success by merely fetching data. Production
+currently never delivers `profile` through `worker.report` — see
+[the control plane](control-plane.md) and
+[production operations](production.md) "Outbound collector and accounts".
 
 Dashboard workflows, identity rules, provider-limit honesty, and worker liveness are in [the control plane](control-plane.md). Finished runs can be cleared from the list and restored; clearing hides a row and deletes nothing. Live input `from:handle`, `@Handle`, and `@handle rest` store as one canonical search.
 

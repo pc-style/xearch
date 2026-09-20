@@ -29,7 +29,27 @@ Production imports use an outbound worker. At the September 20 integration check
 
 `COLLECTOR_MODE=outbound` means Convex never talks to x.md or the capture receiver: `convex/importer.ts` returns before reading `RAW_CAPTURE_URL`/`RAW_CAPTURE_TOKEN`, so setting them on the production deployment does nothing. The worker reads them on its own machine, and the Connections UI labels that row "Download worker" rather than listing env vars. Worker liveness is expiry-driven: `worker.heartbeat` writes `collector.online` and schedules `worker.expire` 45 seconds later (`convex/worker.ts`), and the browser re-checks the disclosed `lastSeen` against its own clock. A Convex query does not re-run because time passed, so liveness must never be computed from `Date.now()` inside `integrations.configured`. Details: [the control plane](control-plane.md).
 
-In outbound mode the worker is also the only production writer of `providerThrottleEvents`, through `worker.report`'s `"throttle"` event. Without it the Provider limits panel stays empty while x.md is refusing imports. Facts are captured from refusals only, so remaining allowance on a *successful* call is still invisible, and `{ kind: "none" }` means nothing was observed, never "not throttled".
+`scripts/setup-worker.mjs` is what sets production `COLLECTOR_MODE=outbound` and `COLLECTOR_TOKEN` (from `.local-captures/worker-token`) on `utmost-kudu-321`. Do not copy those onto a local anonymous deployment: `bun run env:sync` deliberately omits them, and a local checkout that inherited `outbound` would make `importer.ts` no-op with no VM worker polling. `jobs.start` still requires `X_MD_API_KEY` on the Convex deployment even in outbound mode; the worker's own key lives in the VM `.env.local` and is a separate copy.
+
+## Outbound collector and accounts
+
+The only code that inserts an `accounts` row is `jobs.finish` → `upsertAccount`, and only when `finish` is called with a `profile`. Production never does that.
+
+- `convex/importer.ts` (the path that _does_ pass a validated profile) returns immediately when `COLLECTOR_MODE=outbound`.
+- `convex/worker.ts` `report` `"finish"` has no `profile` argument, so it cannot call `upsertAccount` even if a caller sent one.
+- `scripts/production-worker.ts` strips the profile `collectXmd` returned: `const { profile: _rawProfile, ...summary } = result` then `report({ event: "finish", ...summary })`.
+- `worker.report` `"identity"` only runs `jobs.pinIdentity` (`jobs.expectedUserId`). That is not an account row.
+
+Identity pin ≠ account row. A profile-kind production download is a capture receipt, not an `accounts` row. Publication cannot invent the missing row (`422 rejected_invalid`). Jobs that already finished will not re-report; installing a worker that later sends `profile` does not backfill them. A later approved bulk import is required once that path exists. Handle validation (`/^[A-Za-z0-9_]{1,15}$/`) and https-only avatars are enforced only on the in-Convex finish path, which production does not run.
+
+| Symptom                                                      | Not this                                          | Actually this                                       |
+| ------------------------------------------------------------ | ------------------------------------------------- | --------------------------------------------------- |
+| Account library empty, Indexed people 0                      | "nothing imported yet"                            | `jobs` / `receipts` rows exist; `accounts` does not |
+| `POST /publication/update` → 422 `No known account matches…` | sender or token misconfig (a wrong bearer is 401) | receiver has no row to resolve                      |
+| Profile job complete with a local receipt                    | the account is in the library                     | capture of `/profiles/:handle` only                 |
+| `jobs.expectedUserId` set on a bulk run                      | `upsertAccount` ran                               | identity was pinned; finish had no profile          |
+
+In outbound mode the worker is also the only production writer of `providerThrottleEvents`, through `worker.report`'s `"throttle"` event. Without it the Provider limits panel stays empty while x.md is refusing imports. Facts are captured from refusals only, so remaining allowance on a _successful_ call is still invisible, and `{ kind: "none" }` means nothing was observed, never "not throttled".
 
 Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
 

@@ -16,7 +16,7 @@ These need coordination with the collaborator before implementation:
 
 1. Query AST and strict filter semantics, including UTC boundaries, unknown authors, real global Latest ordering, and separately labeled related results. Do not independently duplicate the retrieval analyzer in TypeScript.
 2. Search generation/watermark and expiring, query-bound cursors. No exact corpus count is required for ordinary results.
-3. Authenticated downstream publication updates, distinct from raw capture receipts. Durable long imports should move to a worker-side job API with bounded Convex reconciliation. Production already runs `COLLECTOR_MODE=outbound` with a VM worker; bulk JSON now requests up to 5,000 posts per page (x.md's documented maximum), splitting oversized pages across captures. A real account has not yet been published end-to-end.
+3. Authenticated downstream publication updates, distinct from raw capture receipts. Durable long imports should move to a worker-side job API with bounded Convex reconciliation. Production already runs `COLLECTOR_MODE=outbound` with a VM worker; bulk JSON now requests up to 5,000 posts per page (x.md's documented maximum), splitting oversized pages across captures. A real account has not yet been published end-to-end: outbound finish currently drops `collectXmd`'s profile, so production never inserts an `accounts` row and the receiver rejects updates with `422 rejected_invalid`.
 4. Removal propagation and evidence detail retrieval. Separate least-privilege search and capture credentials are implemented through `SEARCH_SERVICE_TOKEN` and `RAW_CAPTURE_TOKEN`, with a legacy shared-token fallback for existing configuration.
 
 ## Sponsor work still required for a public launch
