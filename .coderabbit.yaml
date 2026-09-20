@@ -1,0 +1,32 @@
+# Automatic review on every PR and every push to one, so a human never has to
+# type "@coderabbitai review" to get a branch looked at.
+language: en-GB
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  # The Rust search workspace is Pronsh's (see AGENTS.md); review it, but the
+  # application side is where our changes land.
+  path_filters:
+    - "!dist/**"
+    - "!**/_generated/**"
+    - "!bun.lock"
+  path_instructions:
+    - path: "convex/**"
+      instructions: >-
+        Convex backend. Flag any query that reads the wall clock internally,
+        any public function missing an ownership check, any count presented as
+        something it is not (accepted records as unique searchable posts, a
+        file count as a post count, unknown rendered as zero), and any use of
+        .unique() on an index with no uniqueness constraint.
+    - path: "src/**"
+      instructions: >-
+        React 19 + Vite. Flag user-facing copy that conflates configuration,
+        connectivity, download completion and search publication — these are
+        four distinct states and the copy must say which one it means.
+chat:
+  auto_reply: true
