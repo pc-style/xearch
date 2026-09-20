@@ -811,10 +811,14 @@ mod tests {
         let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe");
         let addr = probe.local_addr().expect("addr");
         drop(probe);
-        health::HealthConfig {
-            url: format!("http://{addr}/service/health"),
-            token: "test-token".to_owned(),
-        }
+        // Loopback, so the constructor's cleartext refusal accepts it —
+        // going through `new` is the point: nothing, including a test,
+        // should be able to assemble a config that skips that check.
+        health::HealthConfig::new(
+            format!("http://{addr}/service/health"),
+            "test-token".to_owned(),
+        )
+        .expect("a loopback endpoint is accepted")
     }
 
     #[test]

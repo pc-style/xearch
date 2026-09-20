@@ -124,7 +124,12 @@ function parseReport(body: unknown): HealthReport | null {
     if (!isRecord(body.error)) return null;
     if (!hasOnlyKeys(body.error, ERROR_KEYS)) return null;
     if (typeof body.error.message !== "string" || body.error.message.length === 0) return null;
-    if (body.error.message.length > MAX_ERROR_MESSAGE) return null;
+    // Deliberately NOT rejected for being long. The reporter sends whatever
+    // the failure actually said, verbatim; refusing a verbose message with a
+    // 400 would throw away the observation and leave the previous health
+    // reading standing, which is the opposite of what a failure report is
+    // for. `record` clamps it on the way into the document instead, so the
+    // row stays bounded and the service still gets marked unhealthy.
   }
   // An unhealthy report with nothing to say about why is not a usable
   // observation: `lastError` is supposed to carry the real failure text, so
@@ -196,7 +201,11 @@ export const record = internalMutation({
     const observedAt = Date.now();
     const existing = await ctx.db
       .query("serviceHealth")
-      .withIndex("by_service", (q) => q.eq("service", args.service))
+      .withIndex("by_service_and_observed", (q) => q.eq("service", args.service))
+      // Newest observation wins. `by_service` alone orders by nothing the
+      // caller cares about, so `.first()` on it would return an arbitrary
+      // row rather than the current reading.
+      .order("desc")
       // `.first()`, not `.unique()`: by_service is an ordinary index with no
       // uniqueness guarantee, so a duplicate row would throw and take the
       // whole query down rather than degrade one reading.

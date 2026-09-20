@@ -456,7 +456,11 @@ export const health = query({
     for (const service of SERVICES) {
       const row = await ctx.db
         .query("serviceHealth")
-        .withIndex("by_service", (q) => q.eq("service", service))
+        .withIndex("by_service_and_observed", (q) => q.eq("service", service))
+      // Newest observation wins. `by_service` alone orders by nothing the
+      // caller cares about, so `.first()` on it would return an arbitrary
+      // row rather than the current reading.
+      .order("desc")
         // `.first()`, not `.unique()`: by_service has no uniqueness
         // guarantee, and a duplicate row must not take the query down.
         .first();

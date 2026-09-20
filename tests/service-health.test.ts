@@ -514,3 +514,24 @@ describe("the internal upsert itself (convex/health.ts record)", () => {
     expect(row.lastError?.message.length).toBeLessThan(1100);
   });
 });
+
+describe("a long failure message", () => {
+  it("is clamped and stored, not rejected — a verbose failure must not cost us the observation", async () => {
+    const t = setup();
+    vi.stubEnv("SERVICE_HEALTH_TOKEN", "secret");
+    const long = "x".repeat(5_000);
+    const res = await t.fetch(
+      "/service/health",
+      report(healthReport({ healthy: false, error: { message: long } })),
+    );
+    expect(res.status).toBe(200);
+
+    const stored = await rows(t);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].healthy).toBe(false);
+    // Stored, bounded, and visibly truncated rather than silently cut or
+    // thrown away for being verbose.
+    expect(stored[0].lastError?.message.length).toBeLessThan(long.length);
+    expect(stored[0].lastError?.message).toContain("truncated");
+  });
+});

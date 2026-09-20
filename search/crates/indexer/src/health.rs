@@ -39,8 +39,12 @@ use serde::Serialize;
 /// entirely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthConfig {
-    pub url: String,
-    pub token: String,
+    // Private so `new` is the only way in. Public fields would let a caller
+    // inside this crate assemble a config pointing at a cleartext endpoint
+    // and skip the check entirely, and `report_pass` would then hand that
+    // URL and the bearer token straight to the transport.
+    url: String,
+    token: String,
 }
 
 impl HealthConfig {
