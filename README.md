@@ -27,6 +27,8 @@ submission, and `DECISIONS.md` records implementation decisions. Tool configs,
 - [Local development and provider configuration](docs/development.md)
 - [Production operations](docs/production.md)
 - [Application/search integration contract](docs/integration-contract.md)
+- [Publication contract and dashboard counts](docs/publication-contract.md)
+- [Search indexer operations](docs/search-indexer.md)
 - [Product responsibilities](docs/product.md) and [spec adoption](docs/spec-adoption.md)
 - [Hackathon build evidence](hackathon.md)
 

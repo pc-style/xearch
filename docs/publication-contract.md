@@ -10,11 +10,16 @@ has the validators and TypeScript types, `convex/publication.ts` plus the
 `convex/summary.ts` / `convex/library.ts` / `convex/limits.ts` are the dashboard
 queries built on them (`tests/publication.test.ts`, `tests/summary.test.ts`,
 `tests/library.test.ts`, `tests/limits.test.ts`,
-`tests/scenario-publication-lifecycle.test.ts`). No real indexer has ever called this
-route, the URL has not been shared with Pronsh, and nothing in "Open assumptions"
-below has been confirmed — to-do.md P0 ("Agree the summary/publication contract with
-the collaborator before parallel implementation") is still unchecked. None of this
-changes the existing raw-capture or search contracts in `docs/integration-contract.md`.
+`tests/scenario-publication-lifecycle.test.ts`, `tests/queued-posts.test.ts`).
+Service-health writers now exist separately (`convex/health.ts`
+`POST /service/health`, the search probe cron, and the production worker's
+receiver forward; `tests/service-health.test.ts`) — that is liveness, not
+publication. No real indexer has ever called `/publication/update`, the URL
+has not been shared with Pronsh, and nothing in "Open assumptions" below has
+been confirmed — to-do.md P0 ("Agree the summary/publication contract with
+the collaborator before parallel implementation") is still unchecked. None of
+this changes the existing raw-capture or search contracts in
+`docs/integration-contract.md`.
 
 Scope: this covers the boundary between "a raw capture has been durably received" and
 "an account's posts are confirmed searchable." It does not implement, and does not ask
@@ -52,7 +57,7 @@ resolution before either side writes code against this document.
   (`accountId`, `handle`, `firstSeenAt`, `lastSeenAt`). When the same provider id keeps
   its existing account row and simply renames, this is an ordinary update: patch
   `accounts.handle` and add a row here. When a handle used to resolve to one provider
-  id and a fresh capture now shows a *different* provider id under the same handle,
+  id and a fresh capture now shows a _different_ provider id under the same handle,
   that is a reassignment, not a rename: the existing account row (and its publication
   state and search history) must be left alone, and a new account row is created for
   the new identity. Nothing merges. This resolution logic is not implemented anywhere
@@ -69,13 +74,13 @@ resolution before either side writes code against this document.
 Five states, held on the new `accountPublications` table (one row per account),
 `state: "downloaded" | "waiting_for_indexing" | "indexing" | "searchable" | "failed"`:
 
-| State | Who asserts it | Meaning |
-| --- | --- | --- |
-| `downloaded` | This app, from its own acquisition facts | At least one raw-capture receipt exists for this account and no publication update has ever arrived for it. |
-| `waiting_for_indexing` | This app | The capture is available for the indexer to pick up; no publication update has arrived yet. In practice this follows `downloaded` immediately — see "Assumption" below. |
-| `indexing` | The indexer, via a publication update | The indexer has started processing and is telling us so before it has a result. |
-| `searchable` | The indexer, via a publication update | A confirmed commit: the reported `uniquePostCount` posts for this account are live in the index and queryable now. |
-| `failed` | The indexer, via a publication update | Publication failed for this account. Acquisition may have succeeded; only the indexing/publication step failed. |
+| State                  | Who asserts it                           | Meaning                                                                                                                                                                 |
+| ---------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `downloaded`           | This app, from its own acquisition facts | At least one raw-capture receipt exists for this account and no publication update has ever arrived for it.                                                             |
+| `waiting_for_indexing` | This app                                 | The capture is available for the indexer to pick up; no publication update has arrived yet. In practice this follows `downloaded` immediately — see "Assumption" below. |
+| `indexing`             | The indexer, via a publication update    | The indexer has started processing and is telling us so before it has a result.                                                                                         |
+| `searchable`           | The indexer, via a publication update    | A confirmed commit: the reported `uniquePostCount` posts for this account are live in the index and queryable now.                                                      |
+| `failed`               | The indexer, via a publication update    | Publication failed for this account. Acquisition may have succeeded; only the indexing/publication step failed.                                                         |
 
 A publication update itself can only ever assert `reportedState: "indexing" |
 "searchable" | "failed"` (`reportedPublicationStateValidator` in `convex/schema.ts`).
@@ -119,20 +124,20 @@ the last good number instead of flipping to unknown or zero.
 `publicationUpdateEnvelope` (`convex/lib/contracts.ts`), built from
 `publicationUpdateFields` (`convex/schema.ts`) plus a version tag:
 
-| Field | Type | Required | Meaning |
-| --- | --- | --- | --- |
-| `version` | `1` | yes | For future evolution of this envelope. |
-| `providerAccountId` | string | no | The provider (x.md) numeric account id. Send this whenever the indexer can determine it — see "The one thing to agree first" above. |
-| `handle` | string | yes | Normalized handle, always sent, used as the fallback identity lookup. |
-| `runId` | string | no | The Convex `jobs._id` (as a string) of the acquisition run this update reflects, when it traces to one run. Same `runId` already used in the raw-capture envelope (`docs/integration-contract.md`). |
-| `captureIds` | string[] | yes (may be empty) | The content-addressed capture ids (same id space as `Capture`/`Receipt.captureId` in `convex/lib/handoff.ts`) this update confirms were processed. |
-| `generation` | number | yes | Monotonic per account, assigned by the sender. See "Idempotency and staleness" below — every ordering and dedup rule in this contract pivots on this one number. |
-| `reportedState` | `"indexing" \| "searchable" \| "failed"` | yes | See "Publication states" above. |
-| `uniquePostCount` | number | no | Unique, currently-searchable post count for this account as of this update. See "What unique means" below. Send it on a `searchable` update; omit rather than guess on `indexing`/`failed`. |
-| `uniquePostCountAsOf` | number (epoch ms) | no | When the indexer computed `uniquePostCount`. Required whenever `uniquePostCount` is present. |
-| `pendingWork` | `{ unit: "jobs" \| "captures" \| "posts", count: number }` | no | Work the indexer knows is still outstanding for this account, in whatever unit is natural to report. Omit when unknown — never send a guessed count. |
-| `error` | `{ message: string, code?: string }` | required when `reportedState: "failed"` | The indexer's own reason. Verbatim, not reworded by us. |
-| `observedAt` | number (epoch ms) | yes | When the indexer observed/computed this update. Distinct from `receivedAt`, which this app assigns on acceptance. |
+| Field                 | Type                                                       | Required                                | Meaning                                                                                                                                                                                                                                                    |
+| --------------------- | ---------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`             | `1`                                                        | yes                                     | For future evolution of this envelope.                                                                                                                                                                                                                     |
+| `providerAccountId`   | string                                                     | no                                      | The provider (x.md) numeric account id. Send this whenever the indexer can determine it — see "The one thing to agree first" above.                                                                                                                        |
+| `handle`              | string                                                     | yes                                     | Normalized handle, always sent, used as the fallback identity lookup.                                                                                                                                                                                      |
+| `runId`               | string                                                     | no                                      | The Convex `jobs._id` (as a string) of the acquisition run this update reflects, when it traces to one run. Same `runId` already used in the raw-capture envelope (`docs/integration-contract.md`).                                                        |
+| `captureIds`          | string[]                                                   | yes (may be empty)                      | The content-addressed capture ids (same id space as `Capture`/`Receipt.captureId` in `convex/lib/handoff.ts`) this update confirms were processed.                                                                                                         |
+| `generation`          | number                                                     | yes                                     | Monotonic per account, assigned by the sender. See "Idempotency and staleness" below — every ordering and dedup rule in this contract pivots on this one number.                                                                                           |
+| `reportedState`       | `"indexing" \| "searchable" \| "failed"`                   | yes                                     | See "Publication states" above.                                                                                                                                                                                                                            |
+| `uniquePostCount`     | number                                                     | no                                      | Unique, currently-searchable post count for this account as of this update. See "What unique means" below. Send it on a `searchable` update; omit rather than guess on `indexing`/`failed`.                                                                |
+| `uniquePostCountAsOf` | number (epoch ms)                                          | no                                      | When the indexer computed `uniquePostCount`. Required whenever `uniquePostCount` is present.                                                                                                                                                               |
+| `pendingWork`         | `{ unit: "jobs" \| "captures" \| "posts", count: number }` | no                                      | Outstanding work for this account in the unit that is natural to report. Omit when unknown — never send a guessed count. Sticky on apply; dashboard aggregates per unit (see "Dashboard-facing shapes"). The current Rust sender does not emit this field. |
+| `error`               | `{ message: string, code?: string }`                       | required when `reportedState: "failed"` | The indexer's own reason. Verbatim, not reworded by us.                                                                                                                                                                                                    |
+| `observedAt`          | number (epoch ms)                                          | yes                                     | When the indexer observed/computed this update. Distinct from `receivedAt`, which this app assigns on acceptance.                                                                                                                                          |
 
 Fields not listed here (an account-level "generation" the indexer wants to track that
 isn't a publication concern, ranking internals, per-post detail) do not belong in this
@@ -149,8 +154,8 @@ ever ingested for that account — not:
 - **Not** `jobs.postsReceived` — a per-page download counter (bulk/JSON kind only),
   capped at 500 per page, reset in ways that track acquisition, not the index.
 - **Not** the Rust indexer's own registry `accepted`/`rejected` fields — per the
-  collaborator-dependency reader's findings, those count records accepted by the *last
-  successful import only*, overwritten every pass, not a running or unique-lifetime
+  collaborator-dependency reader's findings, those count records accepted by the _last
+  successful import only_, overwritten every pass, not a running or unique-lifetime
   total, and not deduplicated across captures.
 - **Not** a count of files, receipts, or jobs. A count of files is not a count of posts.
 
@@ -216,7 +221,7 @@ builds the receiver, not fixed by this document.
   (`convex/publication.ts`'s `receiveUpdate`), built against
   `publicationUpdateEnvelope` exactly as specified above. It has only ever been
   called by `t.fetch(...)` in `tests/publication.test.ts` and `tests/
-  scenario-publication-lifecycle.test.ts`, against an in-memory convex-test
+scenario-publication-lifecycle.test.ts`, against an in-memory convex-test
   deployment; no real indexer has called it and the URL has not been given to
   Pronsh.
 - **Response:** implemented as `{ outcome, committedGeneration?, rejectionReason? }`
@@ -251,20 +256,42 @@ to it (that is acquisition-side implementation, out of scope here).
 
 ## Worker/indexer/service health
 
-`serviceHealth` (`convex/schema.ts`) is a new table, one row per external dependency
-(`service: "indexer" | "receiver" | "search"`), holding `healthy`, `lastHeartbeatAt`,
-`lastSuccessAt`, and `lastError` as observed facts with timestamps. This exists because
-`integrations.configured` today reports "configured" (an env var is set) as if it were
-"healthy," and outside of the outbound-collector's own `collector` heartbeat table,
-nothing observes whether the receiver or the indexer are actually alive (see the
-limits reader's findings). x.md itself is not tracked here — it is a per-call
-third-party dependency, covered by `providerThrottleEvents` instead of a standing
-health row.
+`serviceHealth` (`convex/schema.ts`) is one row per external dependency
+(`service: "indexer" | "receiver" | "search"`), holding observed facts:
+`healthy`, `observedAt`, `lastHeartbeatAt`, `lastSuccessAt`, and `lastError`.
+This exists because `integrations.configured` answers only "is an env var set".
+The dashboard Dependency health panel (`convex/summary.ts` `health`, rendered by
+`src/library/OverviewStats.tsx`) reads these rows and never derives liveness
+from configuration. A service that has never reported stays
+`{ kind: "unknown" }` ("No health report received yet") — nothing is seeded at
+deploy time. Readings older than five minutes (`SERVICE_STALE_AFTER_MS`) are
+`stale: true` and must not render as a fresh Healthy.
 
-Nothing in this task adds the code that writes to `serviceHealth`. Now that the
-receiver above exists, a natural source for `indexer` health is "did we receive a
-publication update recently" — but that wiring (reading `publicationUpdates` and
-writing a `serviceHealth` row from it) is a later implementation step, not done here.
+Three writers, none of which invent a row from configuration:
+
+| Service    | Writer                                                                                                                      | Observation                                                 |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `indexer`  | Pronsh's watcher, once per poll pass (`search/crates/indexer/src/health.rs` via `POST /service/health` in `convex/http.ts`) | the pass completed, or failed with its verbatim error       |
+| `search`   | Convex cron every 2 minutes (`convex/crons.ts` → `health.probeSearch`)                                                      | `GET <SEARCH_API_URL origin>/health` answered the body `ok` |
+| `receiver` | production download worker on every poll (`scripts/production-worker.ts` → `worker:poll`)                                   | `http://127.0.0.1:4319/health` answered                     |
+
+Auth for the HTTP report route is `SERVICE_HEALTH_TOKEN` with a legacy fallback
+to `DATA_SERVICE_TOKEN`, isolated from search/capture/publication credentials.
+Missing token configuration fails closed (401). Unhealthy reports without
+`error.message` are 400; extra keys are 400. `lastSuccessAt` moves only on an
+observed success and is never cleared by a later failure; `lastError` keeps the
+last real failure text through a later success.
+
+Indexer heartbeats and the worker's receiver report are side observations: a
+heartbeat failure never fails an import pass, and a failed health write never
+fails a worker poll or moves a job. One-shot `import`/`publish` CLI commands
+do not heartbeat; only `watch` (`run_pass`) does. The local `bun run capture`
+receiver answers `/health` but does not forward it to Convex. Search is not
+probed if `SEARCH_API_URL` is unset (stays unknown, not unhealthy).
+
+x.md itself is not tracked here — it is a per-call third-party dependency,
+covered by `providerThrottleEvents`. Production token/setup and the "not yet
+observed on the live deployment" caveat live in `docs/production.md`.
 
 ## Dashboard-facing shapes
 
@@ -276,6 +303,19 @@ unit, value }` or `{ kind: "unknown", unit }`, where `unit` is `"jobs" | "captur
 consumer can read a bare number without also knowing what it counts. See the field
 comments in `convex/lib/contracts.ts` for exactly what each count means and how it is
 scoped; this document does not repeat them to avoid the two drifting apart.
+
+`queueBreakdownValidator` is work **this app can see**: waiting/active download
+jobs, failed/partial jobs a person can retry, and saved captures awaiting
+indexing. `dashboardSummaryValidator.providerQueuedWork` is **not** a fifth
+queue bucket. It is the indexer's own `pendingWork` for the caller's accounts,
+one `Count` per unit (`posts` / `captures` / `jobs`) so a file count is never
+labelled as posts. A unit is known only when at least one in-scope account
+reported that unit; silence is unknown, a reported 0 is known 0
+(`tests/queued-posts.test.ts`). `pendingWork` is sticky on apply: a later
+update that omits the field leaves the stored value (same rule as `lastError`
+in `convex/publication.ts`). `src/library/OverviewStats.tsx` renders those
+three tiles separately and never adds them together. The current Rust sender
+does not emit `pendingWork`, so the tiles stay unknown until it does.
 
 `queueBreakdownValidator.savedCapturesAwaitingIndexing` (unit `"captures"`) is the one
 bucket without a stored counter behind it: `convex/summary.ts`'s
@@ -331,7 +371,9 @@ For a reviewer checking this against the collaborator-dependency reader's findin
   `accounts.by_user_id` index.
 - `convex/lib/contracts.ts`: `publicationUpdateEnvelope` (+ `PublicationUpdateEnvelope`),
   `countValidator` (+ `Count`), `summaryScopeValidator` (+ `SummaryScope`),
-  `queueBreakdownValidator` (+ `QueueBreakdown`), `dashboardSummaryValidator`
-  (+ `DashboardSummary`), `nextActionValidator` (+ `NextAction`),
-  `accountLibraryRowValidator` (+ `AccountLibraryRow`), and the convenience aliases
-  `PublicationState`, `ReportedPublicationState`, `JobStatus`.
+  `queueBreakdownValidator` (+ `QueueBreakdown`),
+  `providerQueuedWorkValidator` (+ `ProviderQueuedWork`),
+  `dashboardSummaryValidator` (+ `DashboardSummary`), `nextActionValidator`
+  (+ `NextAction`), `accountLibraryRowValidator` (+ `AccountLibraryRow`), and
+  the convenience aliases `PublicationState`, `ReportedPublicationState`,
+  `JobStatus`.

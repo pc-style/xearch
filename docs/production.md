@@ -49,11 +49,11 @@ The dashboard reports two different things and must never confuse them:
 
 Three writers, one row per service:
 
-| Service | Written by | Observation |
-| --- | --- | --- |
-| `indexer` | the Rust indexer, once per poll pass (`search/crates/indexer/src/health.rs`) | the pass completed, or failed with its verbatim error |
-| `search` | a Convex cron every 2 minutes (`convex/crons.ts` → `health.probeSearch`) | `GET <SEARCH_API_URL origin>/health` answered `ok` |
-| `receiver` | the production download worker, on every poll (`scripts/production-worker.ts` → `worker:poll`) | `http://127.0.0.1:4319/health` answered |
+| Service    | Written by                                                                                     | Observation                                           |
+| ---------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `indexer`  | the Rust indexer, once per poll pass (`search/crates/indexer/src/health.rs`)                   | the pass completed, or failed with its verbatim error |
+| `search`   | a Convex cron every 2 minutes (`convex/crons.ts` → `health.probeSearch`)                       | `GET <SEARCH_API_URL origin>/health` answered `ok`    |
+| `receiver` | the production download worker, on every poll (`scripts/production-worker.ts` → `worker:poll`) | `http://127.0.0.1:4319/health` answered               |
 
 `lastSuccessAt` is only ever stamped from an observed success and is never
 erased by a later failure; `lastError` carries the reporter's real error text.
@@ -80,6 +80,22 @@ never fail a poll or move a job's status.
 Neither the indexer heartbeat nor the search cron has been observed running
 against the production deployment yet: `SERVICE_HEALTH_TOKEN` is not set there,
 and nothing in this change deploys itself.
+
+## Queued indexer work
+
+The dashboard Overview tiles split two queues that must not be added together:
+
+- **This app's queue** (waiting/active downloads, saved captures awaiting
+  indexing, failed & retryable) comes from our jobs and receipts.
+- **Indexer-reported queued work** (Queued posts / Queued captures / Queued
+  indexer jobs) comes from `accountPublications.pendingWork` on applied
+  publication updates, one labelled unit at a time. Silence is "not yet
+  known", not zero. A reported 0 is a real 0.
+
+The current Rust publication sender does not emit `pendingWork`, so those
+three tiles stay unknown even after heartbeats are wired. That is expected,
+not a missing Convex row. See `docs/publication-contract.md`
+"Dashboard-facing shapes".
 
 ## VM services
 

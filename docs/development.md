@@ -54,6 +54,39 @@ upstream request may still finish and already-written files remain. Technical
 details show up to 100 receipts per job. Older completed jobs with more history
 offer a continuation button; they are not silently restarted.
 
+Overview tiles are owner-scoped (your imports only) and labelled by unit.
+Waiting/active downloads and failed & retryable are job counts from this
+app. "Saved captures awaiting indexing" is a capture/file count, never
+posts. "Queued posts", "Queued captures", and "Queued indexer jobs" are
+the indexer's `pendingWork` from publication updates, shown as three
+tiles that are never added together. A tile that says "not yet known" means
+no in-scope account has reported that unit — the current Rust sender does
+not emit `pendingWork`, so those three stay unknown until it does. A known
+0 means someone actually reported zero. See
+[the publication contract](publication-contract.md).
+
+Dependency health is a different fact from Connections "configured". Health
+is an observed timestamped reading (`convex/summary.ts` `health`): indexer
+watch-pass heartbeats, a 2-minute Convex probe of the search `/health`
+body `ok`, and the production worker forwarding loopback receiver
+`/health`. A service that has never reported reads "No health report
+received yet"; a reading older than five minutes is labelled stale, never
+shown as a live zero. Local pitfalls:
+
+- `bun run capture` answers `http://127.0.0.1:4319/health` but does **not**
+  write a Convex `serviceHealth` row. Only `scripts/production-worker.ts`
+  forwards receiver liveness.
+- Search stays unknown unless `SEARCH_API_URL` is set on the Convex
+  deployment (the cron has nowhere to probe).
+- Indexer heartbeats need `SERVICE_HEALTH_URL` and `SERVICE_HEALTH_TOKEN`
+  in the watcher's environment, plus `SERVICE_HEALTH_TOKEN` on Convex.
+  One-shot `xearch-search import` does not heartbeat.
+
+`bun run env:sync` does not include `SERVICE_HEALTH_TOKEN` or
+`PUBLICATION_SERVICE_TOKEN`. Set those with `bunx convex env set NAME` on
+the local anonymous deployment if you are exercising those routes. Do not
+print the values.
+
 Put backend keys and `OPENAI_MODEL` in `.env.local`, then run `bun run env:sync`. The script only syncs allowlisted nonempty variables to the local anonymous deployment and never prints their values. AgentMail webhooks need a public deployment URL; leave the webhook secret unset during local work unless a public callback has separately been configured.
 
 Import controls work without `SEARCH_API_URL`. The separately owned search
@@ -64,21 +97,23 @@ service's application boundary is documented in the
 
 Use `bunx convex env set NAME` and supply the value through stdin/the prompt. Do not use `VITE_` variables for secrets.
 
-| Variable                   | Purpose                                                     |
-| -------------------------- | ----------------------------------------------------------- |
-| `X_MD_API_KEY`             | x.md acquisition credential                                 |
-| `X_MD_BASE_URL`            | Optional alternate official origin, `https://x.pcstyle.dev` |
-| `RAW_CAPTURE_URL`          | Durable raw-capture receiver                                |
-| `SEARCH_API_URL`           | Search service retrieval endpoint                           |
-| `SEARCH_SERVICE_TOKEN`     | Read-only credential for the search endpoint                |
-| `RAW_CAPTURE_TOKEN`        | Ingestion-only credential for the capture receiver          |
-| `DATA_SERVICE_TOKEN`       | Legacy shared fallback when a dedicated token is unset      |
-| `FIRECRAWL_API_KEY`        | Linked-page scraping and web-context search                 |
-| `OPENAI_API_KEY`           | Editable query interpretation                               |
-| `OPENAI_MODEL`             | Optional model override; default `gpt-5-mini`               |
-| `AGENTMAIL_API_KEY`        | Result-digest delivery                                      |
-| `AGENTMAIL_INBOX_ID`       | Existing sender inbox                                       |
-| `AGENTMAIL_WEBHOOK_SECRET` | Verification of delivery webhooks                           |
+| Variable                    | Purpose                                                          |
+| --------------------------- | ---------------------------------------------------------------- |
+| `X_MD_API_KEY`              | x.md acquisition credential                                      |
+| `X_MD_BASE_URL`             | Optional alternate official origin, `https://x.pcstyle.dev`      |
+| `RAW_CAPTURE_URL`           | Durable raw-capture receiver                                     |
+| `SEARCH_API_URL`            | Search service retrieval endpoint                                |
+| `SEARCH_SERVICE_TOKEN`      | Read-only credential for the search endpoint                     |
+| `RAW_CAPTURE_TOKEN`         | Ingestion-only credential for the capture receiver               |
+| `DATA_SERVICE_TOKEN`        | Legacy shared fallback when a dedicated token is unset           |
+| `PUBLICATION_SERVICE_TOKEN` | Indexer push to `POST /publication/update`; not in `env:sync`    |
+| `SERVICE_HEALTH_TOKEN`      | Indexer/worker push to `POST /service/health`; not in `env:sync` |
+| `FIRECRAWL_API_KEY`         | Linked-page scraping and web-context search                      |
+| `OPENAI_API_KEY`            | Editable query interpretation                                    |
+| `OPENAI_MODEL`              | Optional model override; default `gpt-5-mini`                    |
+| `AGENTMAIL_API_KEY`         | Result-digest delivery                                           |
+| `AGENTMAIL_INBOX_ID`        | Existing sender inbox                                            |
+| `AGENTMAIL_WEBHOOK_SECRET`  | Verification of delivery webhooks                                |
 
 Register AgentMail's webhook at `<deployment>.convex.site/agentmail/webhook` for delivery events. A send is queued only by the explicit Email → Send results action. The interface distinguishes queued/sent/delivered states.
 
@@ -108,12 +143,13 @@ that browser session; clearing its credentials loses access. Guest sessions are
 not verified email identities. Durable email sign-in exists (`convex/auth.ts`'s
 Email OTP provider, delivered through AgentMail) and gates sending a digest to a
 verified, matching address (`convex/email.ts` `send`); an anonymous guest session
-can search and import but can never pass that gate. The publication receiver and
-dashboard queries also exist (`convex/publication.ts`, `convex/summary.ts`,
-`convex/library.ts`, `convex/limits.ts` — see
+can search and import but can never pass that gate. The publication receiver, dashboard queries, and health writers also exist
+(`convex/publication.ts`, `convex/summary.ts`, `convex/library.ts`,
+`convex/limits.ts`, `convex/health.ts` — see
 [the publication contract](publication-contract.md)). None of this has been
-exercised against a real AgentMail send or a real indexer yet — only against
-mocks and a local convex-test deployment — which [the application
+exercised against a real AgentMail send or a real published account yet —
+only against mocks, a local convex-test deployment, and TLS 422/401 probes
+that mutated no state — which [the application
 backlog](../to-do.md) still tracks as open verification work. Raw acquisition
 receipts do not confirm downstream indexing. Search pages are short-lived UI
 snapshots, not a local corpus. Pronsh owns the corpus and search implementation.

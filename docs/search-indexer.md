@@ -7,17 +7,17 @@ imports only read local dump files.
 
 ## Crates
 
-| Crate            | Role                                                                   |
-| ---------------- | ---------------------------------------------------------------------- |
-| `search-model`   | Wire types: `Post`, `SearchRequest`/`SearchResponse`, `Sort`           |
-| `search-query`   | Google-style grammar → `Expr` AST; rejects conflicting author filters  |
-| `search-ranking` | Engagement + blend math used for sort keys                             |
-| `search-backend` | Traits only: `SearchBackend` (search) and `IndexSink` (upsert+commit)  |
-| `search-tantivy` | The index. mmap Tantivy store, cursors, five sorts                     |
-| `search-ingest`  | Retain-import: archive, quarantine, receipt, idempotent upserts        |
-| `search-indexer` | Drop-dir watcher, per-user retry registry (`users.json`), publication sender to Convex |
-| `search-api`     | Loopback HTTP: bearer `/search`, HMAC `/ticket-search`, signed cursors |
-| `xearch-search`  | The binary: `import`, `query`, `serve`, `watch`, `users`, `publish`    |
+| Crate            | Role                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| `search-model`   | Wire types: `Post`, `SearchRequest`/`SearchResponse`, `Sort`                                                  |
+| `search-query`   | Google-style grammar → `Expr` AST; rejects conflicting author filters                                         |
+| `search-ranking` | Engagement + blend math used for sort keys                                                                    |
+| `search-backend` | Traits only: `SearchBackend` (search) and `IndexSink` (upsert+commit)                                         |
+| `search-tantivy` | The index. mmap Tantivy store, cursors, five sorts                                                            |
+| `search-ingest`  | Retain-import: archive, quarantine, receipt, idempotent upserts                                               |
+| `search-indexer` | Drop-dir watcher, per-user retry registry (`users.json`), publication sender and liveness heartbeat to Convex |
+| `search-api`     | Loopback HTTP: bearer `/search`, HMAC `/ticket-search`, signed cursors                                        |
+| `xearch-search`  | The binary: `import`, `query`, `serve`, `watch`, `users`, `publish`                                           |
 
 ## Where postings actually live
 
@@ -167,10 +167,10 @@ move past zero — before this, nothing called that route at all.
 **Disabled by default.** Set both env vars to turn it on; either being
 absent leaves `run_once` behaving exactly as it always has:
 
-| Env var | Meaning |
-| --- | --- |
-| `PUBLICATION_UPDATE_URL` | Full URL of Convex's `POST /publication/update` route. Must be `https://`; plain `http://` is accepted only for a loopback host (see below). |
-| `PUBLICATION_SERVICE_TOKEN` | Bearer token; falls back to `DATA_SERVICE_TOKEN` if unset (same convention as `convex/publication.ts`). |
+| Env var                     | Meaning                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUBLICATION_UPDATE_URL`    | Full URL of Convex's `POST /publication/update` route. Must be `https://`; plain `http://` is accepted only for a loopback host (see below). |
+| `PUBLICATION_SERVICE_TOKEN` | Bearer token; falls back to `DATA_SERVICE_TOKEN` if unset (same convention as `convex/publication.ts`).                                      |
 
 **`http://` to anything but loopback is refused, not sent to.** Every update
 carries the token in an `Authorization: Bearer` header, so a cleartext
@@ -188,7 +188,7 @@ local test endpoint.
 
 Plain `http://` to `127.0.0.1`, `::1` or `localhost` keeps working, because
 those bytes never leave the machine — that is what this crate's own tests
-point at. A hostname that merely *resolves* to loopback is not accepted;
+point at. A hostname that merely _resolves_ to loopback is not accepted;
 what DNS answers is not something the sender can rely on.
 
 **Under systemd these go in exactly one file:
@@ -207,6 +207,8 @@ chmod 600 ~/xearch-data/search/publication.env
 # then edit it; one KEY=value per line, no quotes, no `export`:
 #   PUBLICATION_UPDATE_URL=https://<deployment>.convex.site/publication/update
 #   PUBLICATION_SERVICE_TOKEN=<the service token>
+#   SERVICE_HEALTH_URL=https://<deployment>.convex.site/service/health
+#   SERVICE_HEALTH_TOKEN=<the health token>
 systemctl --user restart xearch-search-indexer.service
 ```
 
@@ -214,7 +216,7 @@ The file holds a live bearer token. Keep it at mode `0600`, keep it outside
 any checkout, never commit it or paste it into an issue or a PR, and never
 write the token itself into this repository. Confirm which end the indexer
 picked up without ever reading the file back: the watcher logs
-`publish=enabled` or `publish=disabled` on startup.
+`publish=enabled|disabled` and `heartbeat=enabled|disabled` on startup.
 
 ```sh
 journalctl --user -u xearch-search-indexer.service | grep 'indexer resolved'
@@ -250,7 +252,7 @@ followed by one publish attempt for that handle:
   `transportRetryPending: true`, and stores the update itself under
   `publications.<handle>.pending`: reported state, `captureIds`, `runId`,
   `providerAccountId`, the count with its as-of stamp, any error text, and
-  the original `observedAt`. A later pass resends *those* fields at that
+  the original `observedAt`. A later pass resends _those_ fields at that
   same reserved generation, so the body — and therefore the
   `Idempotency-Key` — is identical to the attempt that never got an answer.
   Storing the update rather than just the fact of one is what makes the
@@ -292,7 +294,7 @@ followed by one publish attempt for that handle:
   the ids accumulate. Either way a deferred capture id is confirmed by
   the first update that actually goes out after it.
 - A permanent rejection (401/422/400) still advances the generation (a
-  request *was* delivered) but is not retried automatically — that would
+  request _was_ delivered) but is not retried automatically — that would
   spin on identical content, which `AGENTS.md` rules out.
 - A `users.json` written by a build that stored only
   `transportRetryPending` (no `pending` object) still loads, but nothing is
@@ -317,7 +319,7 @@ deliberately nonexistent handle so nothing could ever apply:
 
 - Correct token, nonexistent handle → HTTP 422
   `{"outcome":"rejected_invalid","rejectionReason":"No known account
-  matches this update's providerAccountId/handle."}`
+matches this update's providerAccountId/handle."}`
 - Deliberately wrong bearer token, same handle → HTTP 401
   `{"outcome":"rejected_unauthorized"}`
 
@@ -341,6 +343,75 @@ xearch-search --base-dir "$BASE" users list
 # Takes the indexer lock, so stop the watcher first if one is running.
 xearch-search --base-dir "$BASE" publish <handle>
 ```
+
+## Liveness heartbeat (`/service/health`)
+
+Publication says _what happened to one account_. The heartbeat says the
+simpler fact that _this watcher is running and its last pass did or did not
+complete_ — the difference between the dashboard reading "No health report
+received yet" forever and "Healthy, last success 40 seconds ago". Semantics
+and the Convex writers are in `docs/publication-contract.md` "Worker/indexer/
+service health" and `docs/production.md` "Service health".
+
+**Disabled by default, and a complete no-op when disabled.** Set both env
+vars; either being absent builds nothing, opens no socket, and leaves
+`run_once` / a one-shot `import` byte-for-byte as they were:
+
+| Env var                | Meaning                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SERVICE_HEALTH_URL`   | Full URL of Convex's `POST /service/health` route. Production: `https://<deployment>.convex.site/service/health` (`.convex.site`, not `.convex.cloud`). |
+| `SERVICE_HEALTH_TOKEN` | Bearer token; falls back to `DATA_SERVICE_TOKEN` if unset (same isolated-capability convention as `convex/health.ts`).                                  |
+
+Put them in the same `publication.env` file as the publication credentials
+(see the install block above). The systemd unit already loads that file.
+
+Unlike `PUBLICATION_UPDATE_URL`, the heartbeat config does **not** refuse a
+non-loopback `http://` URL before sending. The bearer token still goes in
+`Authorization`, so production must use `https://`. A mis-set cleartext URL
+is an operator footgun here, not a silent disable.
+
+Constraints, verified against `search/crates/indexer/src/health.rs` and
+`run_pass` in `search/crates/indexer/src/lib.rs`:
+
+- Only the watcher path heartbeats (`watch` → `run_pass`). One-shot
+  `import` and `publish` do not report standing liveness they do not have.
+- `healthy: true` is sent only for a pass that actually finished. A failed
+  pass sends `healthy: false` with the verbatim error as `error.message`.
+  Extra JSON keys are omitted: the Convex receiver 400s on an unlisted key.
+- One attempt per pass, not the publication sender's two. The poll loop
+  retries by existing.
+- A heartbeat that is unconfigured, rejected, or undeliverable cannot fail
+  or alter the import. Worst case is one log line.
+- Confirm without reading the env file: startup logs
+  `heartbeat=enabled` or `heartbeat=disabled` on the same
+  `indexer resolved …` line as `publish=`.
+
+Wire body the receiver accepts (`convex/health.ts` `parseReport`):
+
+```json
+{
+  "version": 1,
+  "service": "indexer",
+  "healthy": true,
+  "observedAt": 1789826880797
+}
+```
+
+An unhealthy report must include `"error": { "message": "…" }` or Convex
+returns 400. This crate only ever reports `service: "indexer"`.
+
+**Dashboard queued-work tiles are a different channel.** Those read
+`pendingWork` off publication updates (`docs/publication-contract.md`).
+This sender does not currently emit `pendingWork`, so "Queued posts" /
+"Queued captures" / "Queued indexer jobs" stay "not yet known" even when
+heartbeats are healthy.
+
+If the dashboard still says "No health report received yet" after a watcher
+restart: check `heartbeat=disabled` on the resolved line, that
+`SERVICE_HEALTH_TOKEN` is set on the Convex deployment (not only in
+`publication.env`), and that the URL is the HTTP-actions host
+(`*.convex.site/service/health`). Local `bun run capture` answering
+`/health` does not write an indexer or receiver row.
 
 ## Index corruption recovery
 
@@ -412,14 +483,14 @@ Precedence is flag > env > derived-from-`--base-dir`. All `SEARCH_*` env
 names mirror the flags, so a systemd unit or shell profile can carry the
 whole configuration.
 
-| Command                                                | Flags/env                                                 |
-| ------------------------------------------------------ | --------------------------------------------------------- |
-| `--index`/`SEARCH_INDEX`                               | overrides `"$BASE/index"`                                 |
-| `import --input --archive`                             | one-shot retained import                                  |
-| `query <q> [--sort …] [--stats]`                       | prints version-1 response JSON; `--stats` adds timings    |
-| `serve [--listen 127.0.0.1:4320]`                      | needs `SEARCH_LOCAL_SIGNING_KEY` + `SEARCH_SERVICE_TOKEN` |
-| `watch [--archive --drop-dir --state-dir --poll-secs]` | background indexer; resolves and logs its dirs at startup |
-| `users list [--status …]` / `users mark …`             | registry ops; `list` now also shows each account's publication state |
+| Command                                                | Flags/env                                                                                                                                                                                                       |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--index`/`SEARCH_INDEX`                               | overrides `"$BASE/index"`                                                                                                                                                                                       |
+| `import --input --archive`                             | one-shot retained import                                                                                                                                                                                        |
+| `query <q> [--sort …] [--stats]`                       | prints version-1 response JSON; `--stats` adds timings                                                                                                                                                          |
+| `serve [--listen 127.0.0.1:4320]`                      | needs `SEARCH_LOCAL_SIGNING_KEY` + `SEARCH_SERVICE_TOKEN`                                                                                                                                                       |
+| `watch [--archive --drop-dir --state-dir --poll-secs]` | background indexer; logs dirs plus `publish=`/`heartbeat=` at startup. Heartbeat needs `SERVICE_HEALTH_URL` + `SERVICE_HEALTH_TOKEN`/`DATA_SERVICE_TOKEN`; one-shot `import` never heartbeats                   |
+| `users list [--status …]` / `users mark …`             | registry ops; `list` now also shows each account's publication state                                                                                                                                            |
 | `publish <handle>`                                     | republish one handle's current live count by hand (sends any owed update first, unchanged, then anything deferred behind it); needs `PUBLICATION_UPDATE_URL` + `PUBLICATION_SERVICE_TOKEN`/`DATA_SERVICE_TOKEN` |
 
 ## Serving the app contract
@@ -441,4 +512,6 @@ left to the integration layer.
 1. Drop `<handle>.json` intake dumps into `$BASE/drop/`.
 2. Keep `search-index-ctl.sh continue` (or the systemd unit) running.
 3. Watch `users list --status error` and `search-index-ctl.sh logs`.
-4. Postings grow in `$BASE/index`; the app fetches results from `serve`.
+4. Confirm `indexer resolved … publish=… heartbeat=…` on watcher startup
+   before debugging empty dashboard health or publication counts.
+5. Postings grow in `$BASE/index`; the app fetches results from `serve`.
