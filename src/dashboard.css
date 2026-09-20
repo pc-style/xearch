@@ -329,6 +329,33 @@
   font-size: 12px;
   color: #8a8a8a;
 }
+.library-stat-caveat {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #8a8a8a;
+  font-style: italic;
+}
+/* A <Stat> rendered as a real <a> (e.g. "Indexed people" -> #account-library):
+   reset anchor defaults so it still reads as the same stat tile, plus a
+   visible affordance that it is clickable/focusable. */
+.library-stat-link {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+.library-stat-link:hover {
+  border-color: #565656;
+}
+.library-stat-link:focus-visible {
+  border-color: #565656;
+  outline: 2px solid #9ecbff;
+  outline-offset: 2px;
+}
+.library-stat-link .label {
+  text-decoration: underline;
+  text-decoration-color: #565656;
+  text-underline-offset: 3px;
+}
 .library-health-row {
   display: flex;
   flex-wrap: wrap;
