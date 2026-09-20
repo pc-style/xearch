@@ -4,7 +4,7 @@ import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
 import "./dashboard.css";
 import { indexingUnavailableMessage } from "./integrationStatus";
-import { describeError } from "./errors";
+import { describeError, useTask } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import Library from "./library/Library";
 
@@ -154,9 +154,8 @@ export default function Dashboard({
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
     [input, setInput] = useState(""),
     [since, setSince] = useState(""),
-    [refresh, setRefresh] = useState(false),
-    [busy, setBusy] = useState(false),
-    [message, setMessage] = useState("");
+    [refresh, setRefresh] = useState(false);
+  const { busy, message, setMessage, run } = useTask();
   return (
     <main className="control-room">
       <header className="control-header">
@@ -175,9 +174,7 @@ export default function Dashboard({
             className="control-form"
             onSubmit={async (e) => {
               e.preventDefault();
-              setBusy(true);
-              setMessage("");
-              try {
+              await run(async () => {
                 await ensureSession();
                 await start({
                   kind,
@@ -185,12 +182,7 @@ export default function Dashboard({
                   since: kind === "bulk" && since ? since : undefined,
                   refresh: kind === "bulk" && refresh,
                 });
-                setMessage("Import started. You can leave this page open or come back later.");
-              } catch (e) {
-                setMessage(describeError(e));
-              } finally {
-                setBusy(false);
-              }
+              }, "Import started. You can leave this page open or come back later.");
             }}
           >
             <h2>Start an import</h2>

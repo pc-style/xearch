@@ -40,7 +40,7 @@ import {
   receiverConnection,
   type Connection,
 } from "./integrationStatus";
-import { describeError } from "./errors";
+import { useTask } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -129,9 +129,13 @@ export default function App() {
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(null);
   const [view, setView] = useState<"search" | "bookmarks">("search"),
     [modal, setModal] = useState<"imports" | "saved" | "email" | "setup" | null>(null);
-  const [notice, setNotice] = useState(""),
-    [busy, setBusy] = useState(false),
-    [accountInput, setAccountInput] = useState(""),
+  // The busy flag and the one notice line live in src/errors.ts alongside
+  // `describeError`: the place that decides what a person is told when
+  // something throws also owns saying it. `task` is that module's runner,
+  // reached through the hook so this component never holds the setters the
+  // runner writes through.
+  const { busy, message: notice, setMessage: setNotice, run: task } = useTask();
+  const [accountInput, setAccountInput] = useState(""),
     [since, setSince] = useState("");
   const [dashboard, setDashboard] = useState(() =>
     new URLSearchParams(location.search).has("dashboard"),
@@ -230,22 +234,6 @@ export default function App() {
   const readLink = useAction(api.integrations.readLink),
     interpret = useAction(api.integrations.interpret);
 
-  // NB: `task` is deliberately a plain async function, not a useCallback: it
-  // only ever runs in event handlers, so the stable closure it needs is the
-  // one formed per render, and memoizing it would add a dependency without
-  // changing any behavior.
-  const task = async (fn: () => Promise<unknown>, success?: string) => {
-    setNotice("");
-    setBusy(true);
-    try {
-      await fn();
-      if (success) setNotice(success);
-    } catch (e) {
-      setNotice(describeError(e));
-    } finally {
-      setBusy(false);
-    }
-  };
   // Event-handler bodies, kept out of the JSX so the async state updates they
   // perform are plain functions instead of inline-updater closures.
   const submitImport = async () => {
@@ -407,21 +395,20 @@ export default function App() {
       await ensureSession();
       if (!active) return;
       const { raw: query, sort: requestedSort, includeStats } = searchRequest;
-      setBusy(true);
-      setNotice("");
-      try {
-        const id = await startSearch({ raw: query, sort: requestedSort, includeStats });
-        if (active) setSessionId(id);
-      } catch (e) {
-        if (active) setNotice(describeError(e));
-      } finally {
-        if (active) setBusy(false);
-      }
+      await task(
+        async () => {
+          const id = await startSearch({ raw: query, sort: requestedSort, includeStats });
+          if (active) setSessionId(id);
+        },
+        // A superseded search must not clear the newer one's spinner or
+        // overwrite its notice, so this run goes quiet once cleanup has run.
+        { alive: () => active },
+      );
     })();
     return () => {
       active = false;
     };
-  }, [searchRequest, configured?.search, queryError, ensureSession, startSearch]);
+  }, [searchRequest, configured?.search, queryError, ensureSession, startSearch, task]);
 
   if (dashboard)
     return (
