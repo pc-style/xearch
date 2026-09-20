@@ -169,6 +169,9 @@ fn config_in(
         state_dir: dir.join("state"),
         poll_interval: std::time::Duration::from_secs(1),
         publish,
+        // These tests exercise publication only; a heartbeat would add a
+        // second unrelated request per pass.
+        health: None,
     };
     std::fs::create_dir_all(&config.drop_dir)?;
     Ok(config)

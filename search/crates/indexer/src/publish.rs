@@ -44,7 +44,9 @@
 //! commands; no token or other secret is written anywhere in this
 //! repository or logged by this sender.
 
-mod transport;
+// Shared with `crate::health`, which sends its heartbeat over this exact
+// client rather than standing up a second HTTP stack.
+pub(crate) mod transport;
 
 use crate::users::{DeferredPublication, PendingPublication, Registry, ReportedState, now_ms};
 use search_model::{Error, Result};
@@ -124,7 +126,7 @@ impl PublishConfig {
     }
 }
 
-fn non_empty_env(name: &str) -> Option<String> {
+pub(crate) fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 

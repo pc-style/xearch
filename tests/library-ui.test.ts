@@ -60,7 +60,15 @@ function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummar
       savedCapturesAwaitingIndexing: { kind: "known", unit: "captures", value: 0 },
       failedRetryable: { kind: "known", unit: "jobs", value: 0 },
     },
-    scope: { kind: "global" },
+    // Nothing has told us about outstanding indexer work, which is
+    // "unknown" per unit — never a known zero. See convex/lib/contracts.ts
+    // providerQueuedWorkValidator.
+    providerQueuedWork: {
+      posts: { kind: "unknown", unit: "posts" },
+      captures: { kind: "unknown", unit: "captures" },
+      jobs: { kind: "unknown", unit: "jobs" },
+    },
+    scope: { kind: "owner" },
     observedAt: Date.now(),
     ...overrides,
   };

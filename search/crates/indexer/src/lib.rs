@@ -24,6 +24,7 @@
 //! All directories come from the caller (CLI flags or `SEARCH_*`
 //! environment); nothing here assumes which machine it runs on.
 
+pub mod health;
 pub mod publish;
 pub mod users;
 
@@ -61,6 +62,10 @@ pub struct Config {
     /// the sender entirely — `run_once` then behaves exactly as it did
     /// before this feature existed. See [`publish::PublishConfig::from_env`].
     pub publish: Option<publish::PublishConfig>,
+    /// Convex `/service/health` heartbeat configuration. `None` disables the
+    /// heartbeat entirely — [`run_pass`] is then byte-for-byte
+    /// [`run_once`]. See [`health::HealthConfig::from_env`].
+    pub health: Option<health::HealthConfig>,
 }
 
 impl Config {
@@ -500,6 +505,32 @@ fn replay_pending_publications(
     true
 }
 
+/// One watch pass: [`run_once`], then a liveness heartbeat reporting
+/// whether it completed (see [`health`]).
+///
+/// The heartbeat is strictly an observation about the pass that already
+/// happened. It cannot change the pass's result: this returns exactly what
+/// [`run_once`] returned, and a heartbeat that is unconfigured, rejected, or
+/// undeliverable is invisible here. [`run_once`] itself stays heartbeat-free
+/// so a one-shot CLI import never reports standing liveness it does not have.
+///
+/// # Errors
+/// Returns whatever [`run_once`] returned, unchanged.
+pub fn run_pass(config: &Config) -> Result<Registry> {
+    let result = run_once(config);
+    // Bound before the match so the borrowed message outlives `outcome`.
+    let failure = result.as_ref().err().map(std::string::ToString::to_string);
+    let outcome = failure
+        .as_deref()
+        .map_or(health::PassOutcome::Completed, |message| {
+            health::PassOutcome::Failed(message)
+        });
+    // Deliberately discarded: see this function's contract. Nothing about
+    // the heartbeat may reach the caller.
+    let _ = health::report_pass(config.health.as_ref(), &outcome);
+    result
+}
+
 fn run_capture(
     config: &Config,
     engine: &search_tantivy::Engine,
@@ -702,7 +733,7 @@ async fn terminated() {
 
 async fn watch_loop(config: &Config) -> Result<()> {
     // Immediate first pass so restarts pick up waiting dumps at once.
-    if let Err(error) = run_once(config) {
+    if let Err(error) = run_pass(config) {
         eprintln!(
             "indexer pass failed (index open errors repeating usually mean a corrupt \
              index directory: rebuild it from the archive; see docs/search-indexer.md): {error}"
@@ -720,7 +751,7 @@ async fn watch_loop(config: &Config) -> Result<()> {
                 return Ok(());
             }
             () = tokio::time::sleep(config.poll_interval) => {
-                if let Err(error) = run_once(config) {
+                if let Err(error) = run_pass(config) {
                     eprintln!("indexer pass failed: {error}");
                 }
             }
@@ -741,6 +772,7 @@ mod tests {
             state_dir: dir.join("state"),
             poll_interval: Duration::from_secs(1),
             publish: None,
+            health: None,
         };
         std::fs::create_dir_all(&config.drop_dir).expect("drop dir");
         config
@@ -768,8 +800,72 @@ mod tests {
             state_dir: PathBuf::from("s"),
             poll_interval: Duration::ZERO,
             publish: None,
+            health: None,
         };
         assert!(config.validate().is_err());
+    }
+
+    /// A port nothing is listening on, so a heartbeat attempt fails at
+    /// connect time instead of hanging.
+    fn dead_health_config() -> health::HealthConfig {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe");
+        let addr = probe.local_addr().expect("addr");
+        drop(probe);
+        health::HealthConfig {
+            url: format!("http://{addr}/service/health"),
+            token: "test-token".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_heartbeat_failure_never_fails_or_alters_an_import_pass() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = config_in(dir.path());
+        config.health = Some(dead_health_config());
+        std::fs::write(
+            config.drop_dir.join("TestUser.json"),
+            user_dump("2001", "TestUser"),
+        )
+        .expect("write dump");
+        let registry = run_pass(&config).expect("an undeliverable heartbeat must not fail a pass");
+        let record = registry.users.get("testuser").expect("record");
+        assert_eq!(record.status, UserStatus::Complete);
+        assert_eq!(record.accepted, 1);
+    }
+
+    #[test]
+    fn a_pass_with_no_heartbeat_configuration_behaves_exactly_like_run_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = config_in(dir.path());
+        assert!(config.health.is_none());
+        std::fs::write(
+            config.drop_dir.join("TestUser.json"),
+            user_dump("3001", "TestUser"),
+        )
+        .expect("write dump");
+        let registry = run_pass(&config).expect("pass");
+        let record = registry.users.get("testuser").expect("record");
+        assert_eq!(record.status, UserStatus::Complete);
+        assert_eq!(record.attempts, 1);
+        // Second pass: still the no-op an unchanged file always was.
+        let registry = run_pass(&config).expect("second pass");
+        assert_eq!(
+            registry.users.get("testuser").expect("record").attempts,
+            1,
+            "the heartbeat path must not make an unchanged file reimport"
+        );
+    }
+
+    #[test]
+    fn a_failing_pass_still_returns_its_own_error_through_run_pass() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = config_in(dir.path());
+        config.health = Some(dead_health_config());
+        // An unwritable index directory makes run_once itself fail; the
+        // heartbeat must neither hide nor replace that error.
+        config.index = dir.path().join("drop").join("TestUser.json");
+        std::fs::write(&config.index, "not an index directory").expect("write");
+        assert!(run_pass(&config).is_err());
     }
 
     #[test]

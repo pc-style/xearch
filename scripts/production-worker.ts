@@ -14,15 +14,25 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     stopping = true;
   });
-async function healthy() {
+// One real observation of the loopback capture receiver, with the failure
+// text kept verbatim: it is both this worker's own "can I still save
+// anything" check AND, forwarded through worker:poll, the only thing that
+// ever observes the receiver for the dashboard's service-health panel
+// (convex/health.ts). `healthy: true` here always means a response was
+// actually received — never that a setting is present.
+async function receiverHealth(): Promise<{ healthy: boolean; error?: string }> {
   try {
-    return (
-      await fetch("http://127.0.0.1:4319/health", {
-        signal: AbortSignal.timeout(3000),
-      })
-    ).ok;
-  } catch {
-    return false;
+    const response = await fetch("http://127.0.0.1:4319/health", {
+      signal: AbortSignal.timeout(3000),
+    });
+    return response.ok
+      ? { healthy: true }
+      : { healthy: false, error: `Capture receiver answered HTTP ${response.status}.` };
+  } catch (error) {
+    return {
+      healthy: false,
+      error: error instanceof Error ? error.message : "Capture receiver did not respond.",
+    };
   }
 }
 console.log(
@@ -33,8 +43,12 @@ console.log(
 for (;;) {
   if (stopping) break;
   try {
-    const online = await healthy();
-    const job = await client.action("worker:poll" as any, { token, online });
+    const receiver = await receiverHealth();
+    const job = await client.action("worker:poll" as any, {
+      token,
+      online: receiver.healthy,
+      receiver,
+    });
     if (job) {
       console.log(`Downloading ${job.kind} for ${job.input}`);
       const report = (args: Record<string, unknown>) =>
@@ -45,12 +59,13 @@ for (;;) {
           ...args,
         });
       const heartbeat = setInterval(() => {
-        void healthy()
-          .then((online) =>
+        void receiverHealth()
+          .then((receiver) =>
             client.action("worker:poll" as any, {
               token,
               heartbeatOnly: true,
-              online,
+              online: receiver.healthy,
+              receiver,
             }),
           )
           .catch(() => {});
@@ -131,6 +146,9 @@ for (;;) {
   }
   if (!stopping) await new Promise((resolve) => setTimeout(resolve, 5000));
 }
+// Shutdown: `online: false` is a statement about this worker, not about the
+// receiver, so no `receiver` field goes with it. Claiming the receiver is
+// down because we are stopping would be an observation we never made.
 await client
   .action("worker:poll" as any, { token, heartbeatOnly: true, online: false })
   .catch(() => {});

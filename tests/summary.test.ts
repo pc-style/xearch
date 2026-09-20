@@ -183,7 +183,7 @@ async function insertServiceHealth(
 }
 
 describe("summary.summary", () => {
-  it("reports known zeroes for an empty corpus, never unknown and never omitted", async () => {
+  it("reports known zeroes for an empty corpus (never omitted), and unknown only where nothing was ever reported", async () => {
     const { a } = await setup();
     const result = await a.query(summaryQuery, { now: Date.now() });
     expect(result.scope).toEqual({ kind: "owner" });
@@ -194,6 +194,18 @@ describe("summary.summary", () => {
       activeDownloads: { kind: "known", unit: "jobs", value: 0 },
       savedCapturesAwaitingIndexing: { kind: "known", unit: "captures", value: 0 },
       failedRetryable: { kind: "known", unit: "jobs", value: 0 },
+    });
+    // The one figure on an empty corpus that is honestly UNKNOWN rather than
+    // a known zero: the four buckets above are things this app can check for
+    // itself (it has no jobs, no receipts — a checked zero), whereas
+    // providerQueuedWork only ever repeats what the indexer reported through
+    // pendingWork. Nobody has reported anything, in any unit, so there is
+    // nothing to state. "Unknown provider history size is 'unknown,' not
+    // zero or an invented estimate" (to-do.md).
+    expect(result.providerQueuedWork).toEqual({
+      posts: { kind: "unknown", unit: "posts" },
+      captures: { kind: "unknown", unit: "captures" },
+      jobs: { kind: "unknown", unit: "jobs" },
     });
     expect(typeof result.observedAt).toBe("number");
   });

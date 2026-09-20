@@ -71,6 +71,27 @@ export default function OverviewStats({
             label="Saved captures awaiting indexing"
             count={summary.queue.savedCapturesAwaitingIndexing}
           />
+          {/* The indexer's own backlog for your accounts, one tile per unit
+              it can report in (convex/lib/contracts.ts
+              providerQueuedWorkValidator). Never added together: a capture
+              is a file and a job is a run, and neither is a post. A unit no
+              account has reported reads "not yet known" — an indexer that
+              has said nothing is not an indexer with nothing left to do. */}
+          <Stat
+            label="Queued posts"
+            count={summary.providerQueuedWork.posts}
+            caveat="reported by the indexer; work reported in other units is in its own tile"
+          />
+          <Stat
+            label="Queued captures"
+            count={summary.providerQueuedWork.captures}
+            caveat="files the indexer has still to process — not a count of posts"
+          />
+          <Stat
+            label="Queued indexer jobs"
+            count={summary.providerQueuedWork.jobs}
+            caveat="runs outstanding on the indexer's side, not downloads on ours"
+          />
           <Stat label="Failed & retryable" count={summary.queue.failedRetryable} />
         </div>
       )}

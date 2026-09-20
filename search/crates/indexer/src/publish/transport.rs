@@ -35,7 +35,7 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 /// Reporting that as `Err` would contradict the contract above and, worse,
 /// leave the generation unspent and the account flagged for retry forever
 /// while the receiver has in fact already applied the update.
-pub(super) fn send_once(
+pub fn send_once(
     url: &str,
     token: &str,
     idempotency_key: &str,
