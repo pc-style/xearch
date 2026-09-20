@@ -1,0 +1,67 @@
+name: Deploy
+
+# Production deploy, only from main, only after Check passes, and only when a
+# deploy key exists. Without CONVEX_DEPLOY_KEY the job reports a notice and
+# exits clean rather than failing red on every push.
+on:
+  workflow_run:
+    workflows: ["Check"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  production:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Check for a deploy key
+        id: key
+        env:
+          DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          if [ -n "$DEPLOY_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CONVEX_DEPLOY_KEY is not set; skipping the deploy."
+          fi
+
+      - if: steps.key.outputs.present == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - if: steps.key.outputs.present == 'true'
+        run: bun install --frozen-lockfile
+
+      - if: steps.key.outputs.present == 'true'
+        name: Deploy backend and static hosting
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: bunx @convex-dev/static-hosting deploy --build-command 'bun run build'
+
+      # A deploy that "succeeded" but serves nothing is not a deploy. Set the
+      # PRODUCTION_URL repo variable to turn this into a real gate.
+      - if: steps.key.outputs.present == 'true'
+        name: Verify the deployed site serves
+        env:
+          PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
+        run: |
+          if [ -z "$PRODUCTION_URL" ]; then
+            echo "::warning::PRODUCTION_URL is not set; the deploy was not verified."
+            exit 0
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$PRODUCTION_URL")
+          echo "GET $PRODUCTION_URL -> $code"
+          if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
+            echo "::error::Production returned $code after deploy."
+            exit 1
+          fi
