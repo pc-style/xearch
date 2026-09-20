@@ -1,5 +1,6 @@
 import type { ProviderLimit } from "../../convex/limits";
-import { Badge, formatRelative } from "./format";
+import { formatRelative } from "./format";
+import { Badge } from "./format.tsx";
 
 const PROVIDER_DISPLAY_NAME: Record<ProviderLimit["provider"], string> = {
   xmd: "x.md",

@@ -95,7 +95,7 @@ Set `SEARCH_API_URL` to the exact retrieval endpoint and `SEARCH_SERVICE_TOKEN` 
 }
 ```
 
-Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. Omitted author means all indexed accounts. The provider owns the cursor and its relationship to query and sort.
+Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. Omitted author means all indexed accounts. The provider owns the cursor and its relationship to query and sort. The Rust API returns HTTP 409 Conflict for a stale cursor; on a paginated request the app asks the user to restart the search rather than treating it as a service outage.
 
 ```json
 {

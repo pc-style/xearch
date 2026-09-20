@@ -66,15 +66,9 @@ export function assertAuthorizedScope(scope: SummaryScope | undefined): void {
 }
 
 // --- Stale search cursor ------------------------------------------------------
-// Cursors are opaque per docs/integration-contract.md ("The provider owns
-// the cursor and its relationship to query and sort") — this app never
-// inspects cursor contents, only reacts to the search service's own response
-// status. HTTP 410 Gone is this app's assumption for "this cursor's page
-// window is gone" (not yet confirmed with Pronsh; see handoff notes), kept
-// here as one named constant so the response-status check and its test stay
-// in sync with a single source of truth instead of a magic number repeated
-// in both places.
-export const STALE_CURSOR_STATUS = 410;
+// The Rust API maps StaleCursor to HTTP 409 Conflict. Keep cursors opaque:
+// only interpret this status as expired pagination when a cursor was sent.
+export const STALE_CURSOR_STATUS = 409;
 export class StaleSearchCursorError extends Error {
   constructor() {
     super("The search cursor is no longer valid.");

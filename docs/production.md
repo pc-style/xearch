@@ -10,7 +10,11 @@ Convex project: `xearch/xearch-next`. Deployment: `utmost-kudu-321` (production)
 
 The pre-existing `xearch/xearch` production app was not changed. `.env.local` still selects local development. Production has separate auth keys and user records; local downloads and sessions were not migrated.
 
-Deploy backend and frontend explicitly:
+Deploy backend before publishing a matching frontend, with explicit production approval. Current main sends `includeStats` even when false; the older deployed backend does not accept that argument. Publishing only the new UI would break search.
+
+A push to `main` also triggers the repository's deployment workflow after `Check` succeeds when `CONVEX_DEPLOY_KEY` is configured. Pushing, merging, and deploying are distinct authorizations; check this before pushing production changes.
+
+For an approved manual deployment:
 
 ```sh
 CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex deploy
@@ -21,9 +25,13 @@ CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx @convex-dev/static-hosting upload --
 
 AgentMail delivery events for the configured sender inbox are registered at `https://utmost-kudu-321.convex.site/agentmail/webhook`. The inbox-scoped API succeeded; the organization-level create route rejected the key. `AGENTMAIL_WEBHOOK_SECRET` is configured in production. Incoming email processing is not registered. No email was sent during setup.
 
-Production imports use an outbound worker. The VM worker unit is installed but was inactive at the September 19 cleanup check; the frontend and capture receiver were active. This does not confirm whether the old Mac worker has stopped. Follow the coordinated cutover steps below before starting the VM worker. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata and receipts return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. `scripts/setup-worker.mjs` configures its production credential without printing it.
+Production imports use an outbound worker. At the September 20 integration check the VM worker, capture receiver, search API, continuous indexer, and nginx were running. Do not start a second worker or restart the active worker as routine verification. Follow the coordinated cutover steps below for any future worker move. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata and receipts return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. `scripts/setup-worker.mjs` configures its production credential without printing it.
 
-Search remains disconnected until the collaborator provides retrieval. Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; the current guest-only login cannot send production email.
+Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
+
+The hosted frontend and Convex backend were still older than main `e98e093`; a full authenticated UI journey with the new diagnostics is not yet verified. Main's indexer also lacks the publication sender: `publication.env` alone cannot update dashboard publication counts. Coordinate the existing collaborator implementation rather than building a second sender. See `to-do.md` for the rollout and branch handoff.
+
+Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; a guest session cannot send production email.
 
 Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. Browser visual checks were unavailable during deployment.
 
@@ -31,11 +39,22 @@ Verified public HTML/assets, production guest authentication plus saved-search c
 
 The VM runs the static frontend and raw capture receiver and, after a coordinated
 cutover from the Mac, the outbound production worker as user-level systemd
-services. Convex stays on the existing hosted production deployment. These
-services do not host a development server, Convex, Elasticsearch, or another
-search engine.
+services, alongside the Rust Tantivy API and continuous indexer. Convex stays on
+the existing hosted production deployment; the VM does not host local Convex or
+Elasticsearch.
 
-Install the unit files from the repository and create the private log directory:
+Production code lives in `/home/exedev/xearch-worker`; persistent captures, index,
+archive, and registry live under `/home/exedev/xearch-data`. Preserve them across
+updates. The API listens on `127.0.0.1:4320`; nginx proxies search on port 4321.
+
+The unsafe installed updater was disabled/stopped on September 20. Install and
+verify the corrected `scripts/vm-update.sh` before re-enabling
+`xearch-update.timer`. The corrected updater only restarts already-active search
+services, disables legacy reindex triggers, and records successful application
+for retries. It does not deploy Convex/frontend or restart worker/capture.
+Never run legacy reindexing alongside the continuous watcher.
+
+The following unit installation commands are for initial provisioning only. Do not overwrite the existing production units or their operator-configured paths/drop-ins during routine updates:
 
 ```sh
 install -d -m 700 ~/.config/systemd/user .local-captures/logs
@@ -52,25 +71,31 @@ confirmed stopped and any final capture sync is complete. At cutover:
 systemctl --user enable --now xearch-production-worker.service
 ```
 
-Build the frontend against the existing production Convex deployment without
-editing the existing environment files, then install its service:
+Verify a production-bound frontend build without changing existing environment
+files or overwriting a live `dist/`:
 
 ```sh
-VITE_CONVEX_URL=https://utmost-kudu-321.convex.cloud bun run build
-install -d -m 700 .local-hosting/logs
-install -m 600 deploy/systemd/xearch-frontend.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now xearch-frontend.service
+VITE_CONVEX_URL=https://utmost-kudu-321.convex.cloud bun run build --outDir .local-hosting/build-check/dist
 ```
+
+This only builds; it does not publish. Installed nginx uses the prefix
+`/home/exedev/xearch-data/hosting/`, so its `root dist` resolves to
+`/home/exedev/xearch-data/hosting/dist`, not either checkout's `dist/`. That document
+root was absent at the September 20 check and the documented VM frontend URL
+returned 404. After approved backend deployment, publish the matching build to
+that root and verify HTML and assets separately. Convex static-hosting publication
+does not update nginx's files.
 
 The frontend listens on port 8080 for the exe.dev HTTPS proxy. Configure the
 documented private proxy with `ssh exe.dev share port exp-xearch 8080`. Do not
 make the proxy public without an explicit launch decision. The resulting private
 URL is `https://exp-xearch.exe.xyz/`.
 
-All services restart automatically. The receiver listens only on
-`127.0.0.1:4319`. Worker/capture logs are written beneath
-`.local-captures/logs/`; nginx logs are under `.local-hosting/logs/`. These
+Long-running services have restart policies; this does not prove health or
+frontend publication. The receiver listens only on `127.0.0.1:4319`.
+Production worker/capture logs are under
+`/home/exedev/xearch-data/.local-captures/logs/`; nginx logs are under
+`/home/exedev/xearch-data/hosting/logs/`. These
 directories and their files must remain owner-only. Inspect status without
 printing credentials:
 

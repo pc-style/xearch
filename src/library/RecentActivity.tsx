@@ -1,6 +1,7 @@
 import type { AccountLibraryRow } from "../../convex/lib/contracts";
 import { acquisitionStatusLabel } from "../jobText";
-import { Badge, acquisitionStatusTone, formatRelative } from "./format";
+import { acquisitionStatusTone, formatRelative } from "./format";
+import { Badge } from "./format.tsx";
 
 const RECENT_LIMIT = 8;
 

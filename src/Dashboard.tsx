@@ -244,7 +244,7 @@ export default function Dashboard({
                 </label>
               </>
             )}
-            <button className="control-start" disabled={busy || !config?.indexing}>
+            <button type="submit" className="control-start" disabled={busy || !config?.indexing}>
               {busy
                 ? "Starting..."
                 : kind === "bulk"

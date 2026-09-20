@@ -1,6 +1,66 @@
 # Xearch to-do
 
-Updated September 19, 2026. Planning only: this list does not authorize implementation, paid imports, merging, or deployment.
+Updated September 20, 2026. Planning only: this list does not authorize implementation, paid imports, merging, or deployment.
+
+## Urgent handoff — production integration (September 20)
+
+This section supersedes older runtime/branch claims below. Production checkout
+`/home/exedev/xearch-worker` is on main `e98e093`; the editor checkout is based on
+that same commit. The fixes in this handoff are not deployed to Convex or installed
+in the production checkout yet.
+
+- [x] Verify live retrieval, not just health: authenticated search and pagination
+      passed through Rust :4320, nginx :4321, and the configured HTTPS endpoint.
+      Twelve pages validated against the current app decoder; decimal-string IDs,
+      no overlap across paired pages, stats opt-in works. Index reported 48,331 docs.
+      All 321 retained raw captures had archive receipts; no local capture backlog.
+- [x] Correct the app's stale-cursor handling to HTTP 409, matching Rust. Regression
+      reproduced before fixing; first-page 409 remains a generic service failure.
+- [x] Fix updater code to retire competing legacy reindex triggers, update the
+      watcher binary, retry failed updates using a successful-application marker, and
+      leave worker/capture/cloud deployment alone. Add 20 isolated regression tests.
+      Manual reindex now refuses to compete with a running watcher.
+- [ ] **P0: Install the reviewed updater fixes into the production checkout before
+      re-enabling `xearch-update.timer`.** The unsafe live timer was disabled/stopped
+      during this handoff. Search, indexer, and download worker remain running.
+      Do not run the old `vm-update.sh --force`: it restarts the worker and enables
+      competing legacy writers. Promote this commit without overwriting other work;
+      verify the fixed updater, then `systemctl --user enable --now xearch-update.timer`.
+- [ ] **P0: Obtain explicit production deployment approval, then deploy backend
+      and frontend together to `prod:utmost-kudu-321`.** The live backend lacks
+      `search:start.includeStats`; the new UI sends it even when false. Do not publish
+      the new UI first. `bun run deploy:prod` builds, deploys backend, then uploads
+      static assets. Both checkouts' `.env.local` select dev, so retain the script's
+      explicit production target; do not alter auth keys or AgentMail webhook.
+- [ ] **P0: Repair the VM frontend publication.** nginx's document root is
+      `/home/exedev/xearch-data/hosting/dist`, currently absent, not the checkout's
+      `dist/`. After backend deployment, publish a production-bound build there;
+      verify HTML and assets at the existing exe.dev URL without changing access
+      controls. Convex-hosted frontend is `https://utmost-kudu-321.convex.site/`.
+- [ ] **P0 collaborator dependency: integrate the existing publication sender,
+      not another implementation.** Main has no consumer of `PUBLICATION_UPDATE_URL`
+      or `PUBLICATION_SERVICE_TOKEN`; loading `publication.env` alone does nothing.
+      Existing implementation is on `adam/known-open-issues` at `ed94e0c` (sender
+      `4d9641a`, credential wiring `c83954e`, replay fix `1bb40ed`, main compatibility
+      `ed94e0c`). Coordinate review/merge; do not silently cherry-pick others' work.
+      `adam/dashboard-truth-gaps` at `2183b60` adds further health/queue work and has
+      diverged. After approved integration, install the sender-capable watcher and
+      reconcile already-indexed accounts using its explicit `publish <handle>` flow
+      with the watcher stopped. Preserve registry generations; this writes Convex
+      publication state but must not re-download captures. Pending publication state
+      lives inside `state/users.json`, not a separate outbox file.
+- [ ] After approved deployment, exercise authenticated UI search with stats off/on,
+      sort and pagination, and confirm dashboard published counts against Tantivy.
+      Successful Rust retrieval alone does not prove the full Convex/UI journey.
+- [ ] Only with paid-import approval: investigate incomplete acquisition for
+      `xai`, `lauren_tan`, and Theo; confirm `jarredsumner` versus `jaredsumner` before
+      retrying. Text matches/accepted records are not proof of complete author history.
+
+Validation for this handoff: 201 tests passed, typecheck passed, production-bound
+frontend build passed into `.local-hosting/integration-check/dist` (not live
+`dist/`). Full lint remains blocked by 41 existing React Doctor findings; Oxlint
+reported zero errors and one existing memo-dependency warning. No production
+Convex deployment, paid import, data deletion, or worker restart was performed.
 
 Ownership: Pronsh owns search and indexing. Our backlog covers the application, acquisition, Convex integration, and UI. Do not assign search-engine, ranking, replay, indexer, or cursor implementation to our agents. Mention collaborator work only as dependency context, not as our tasks.
 
@@ -28,7 +88,7 @@ Fix the import/library dashboard and its underlying data before adding discovery
 - [ ] Show queued-post counts only when known. Unknown provider history size is "unknown," not zero or an invented estimate. Do not label a count of files as a count of posts. Not closed: `publicationUpdateFields.pendingWork` exists and round-trips onto `accountPublications` (`convex/publication.ts`; `tests/publication.test.ts` "round-trips an accepted update's pendingWork onto the accountPublications row" — passing this run), but `convex/lib/contracts.ts`'s `dashboardSummaryValidator`/`queueBreakdownValidator` has no field carrying it to the dashboard, and `OverviewStats.tsx` has no such tile — confirmed by `convex/summary.ts:69-73`'s own comment and by reading `contracts.ts` this run. No queued-post count reaches the UI today.
 - [x] **Provider limits:** show provider-reported throttling, remaining allowance/reset when actually supplied, the affected operation, and the next retry time. If remaining allowance is unavailable, say so. Closed: the write path now exists. `convex/lib/xmd.ts` parses the provider's own IETF `RateLimit` allowance headers (with `X-RateLimit-*` as fallback), taking the most constraining of the several allowances x.md reports at once, and the problem body's `retry_after`, onto `ProviderError.throttle`; `convex/importer.ts` and — for production, where `COLLECTOR_MODE=outbound` means the VM worker is the only thing that calls x.md — `scripts/production-worker.ts` via `worker.report`'s new `"throttle"` event both record it through `convex/jobs.recordThrottle`. `tests/provider-limits-writepath.test.ts` drives the real acquisition path with a stubbed transport returning the exact 429 body production retained on disk and asserts the reading that reaches the dashboard. Known limit, stated rather than hidden: facts are captured on ERROR responses only, so a successful call's remaining allowance is still invisible and `{ kind: "none" }` still means "nothing observed", never "not throttled".
 - [x] Respect provider `Retry-After`/`retryAfter`. Do not reintroduce application daily caps, quotas, or usage budgets; their removal is already merged in PR #12. Closed: `convex/lib/xmd.ts:57-64` `retryDelay` parses `Retry-After`, used at `convex/lib/handoff.ts:75` and `convex/lib/xmd.ts:111`; `tests/indexing.test.ts` confirms the parsing. fff grep for "budget" this run finds zero matches under `convex/` (only doc/history mentions), matching `convex/limits.ts:18-21`'s own self-check comment.
-- [x] Separate current provider throttling from historical "today's import limit" errors left on old jobs. Do not present an old error as the current account limit. Closed by design, live-verified this run: scenario-provider-throttling part 1 — a stale `jobs.error` string never renders as a current limit; UI shows "No throttling reported" instead. (The real-world write path for a *live* throttle event has the same gap noted two bullets up.)
+- [x] Separate current provider throttling from historical "today's import limit" errors left on old jobs. Do not present an old error as the current account limit. Closed by design, live-verified this run: scenario-provider-throttling part 1 — a stale `jobs.error` string never renders as a current limit; UI shows "No throttling reported" instead. (The real-world write path for a _live_ throttle event has the same gap noted two bullets up.)
 - [x] Expose safe summary data through authenticated backend contracts. Do not expose raw state files, service credentials, private logs, or another user's data to the browser. Closed: `convex/access.ts`'s `user()` gates every query touched this run (`summary.ts`, `limits.ts`, `library.ts`, `email.ts`, `search.ts`, `jobs.ts`, `integrations.ts` — confirmed by grep this run); every return type is a narrow validator (`Count`, `AccountLibraryRow`, etc.), never a raw document.
 - [ ] Report worker/indexer health and last successful activity separately from "configured." Stale or unavailable stats must not look like live zeroes. Partial: query+UI distinction is real and correct, live-verified this run (scenario-screenshot-cases case 5 — a stale indexer heartbeat shows caution text and never plain "Healthy"; an offline receiver shows "Unhealthy"; a service with no report ever shows "No health report received yet", never a live zero); also visually confirmed in `scratchpad/11-dashboard-desktop-full.png`'s "Dependency health" panel. Remaining: fff grep for `serviceHealth` this run shows only test files insert rows — nothing in `convex/` writes a real heartbeat, so all three services will read "unknown" in production until a writer exists.
 
@@ -48,7 +108,7 @@ Fix the import/library dashboard and its underlying data before adding discovery
 - [x] Tantivy retrieval, a backend-neutral search interface, five sorts, bounded 20-result pages, authenticated HTTP API, and automatic capture indexing are merged into `main`.
 - [x] Firecrawl and AgentMail Convex components are integrated; OpenAI query assistance exists.
 - [x] Public GitHub repository and hosted app exist. Earlier checks in this session returned HTTP 200 for the hosted app and `ok` for local search health; these do not prove the complete product journey.
-- [ ] Refresh stale production documentation after the actual integration is verified; it still says search is disconnected. No change made: `docs/production.md`'s "search remains disconnected" line is still accurate — Pronsh's indexer PR #13 is still open (not merged to `main`), `search/` is untouched by this branch (confirmed this run: `git diff origin/main...HEAD --name-only | grep -c '^search/'` → 0), and nothing has been deployed to production. `docs/publication-contract.md` and `docs/development.md`'s stale "not wired up yet" claims about the *application-side* receiver were already corrected in an earlier commit on this branch (confirmed by reading both this run).
+- [x] Refresh stale production documentation against observed integration state. Updated `docs/production.md` on September 20: authenticated Tantivy retrieval/pagination verified; hosted frontend/backend version skew, missing nginx document root, and absent publication sender remain explicitly unresolved. Corrected service/data/log paths, documented the paused updater and safe build output, and warned that a main push can deploy through CI. This closes documentation only, not the production rollout.
 
 ### Collaborator dependency context — not our implementation backlog
 
@@ -68,7 +128,7 @@ Other branches on `pc-style/xearch` (`adam/repo-cleanup`, `adam/rewrite-foundati
 
 - [ ] Agree ownership/deletion metadata with Pronsh before adding collection memberships and scoped tombstones to Convex. Our part is durable product visibility state and its authenticated handoff, not search deletion/rebuild implementation. Not attempted, correctly: no such tables exist in `convex/schema.ts` (confirmed this run) — building them without the stated agreement would itself violate this bullet.
 - [ ] Derive authorized collection scope server-side in Convex and pass it through the agreed search contract. Reject unauthorized application requests; verify integration with Pronsh's enforcement. Partial: our fail-closed gate is real and tested — `convex/lib/search.ts:39-42` `assertAuthorizedScope` rejects anything but `{kind:"global"}`, used at `convex/search.ts:47`; `tests/search-contract.test.ts` "rejects a client-requested account scope" passes this run. Remaining: "verify integration with Pronsh's enforcement" needs Pronsh's live side, which doesn't exist yet.
-- [x] Surface the service's stale-cursor response as "restart search" rather than a generic failure. Treat cursors as opaque; signing and generation binding stay in the search service. Closed: `convex/lib/search.ts` `STALE_CURSOR_STATUS`/`StaleSearchCursorError`; `convex/search.ts:134-135,146` maps HTTP 410 (only when a cursor was sent) to "This search expired. Restart your search."; `tests/search-contract.test.ts`'s three stale-cursor tests pass this run (verbose re-run).
+- [x] Surface the service's stale-cursor response as "restart search" rather than a generic failure. Treat cursors as opaque; signing and generation binding stay in the search service. Closed: `convex/lib/search.ts` `STALE_CURSOR_STATUS`/`StaleSearchCursorError`; `convex/search.ts:134-135,146` maps HTTP 409 (only when a cursor was sent) to "This search expired. Restart your search."; `tests/search-contract.test.ts`'s three stale-cursor tests pass this run (verbose re-run).
 - [x] Freeze application request/response/error fixtures against the agreed service contract. Keep normalization and ranking implementation with Pronsh. Closed: `tests/search-contract.test.ts` "builds the outbound request from the documented example, field for field" and "decodes the documented example response exactly as published" both pass this run.
 - [x] Preserve the existing service boundary so search changes do not require replacing application state or acquisition history. Closed: read `convex/search.ts` in full this run — it only touches `accounts` (read-only), `sessions`, `saved`, and `bookmarks`; it never touches `jobs`, `accountPublications`, or `publicationUpdates`.
 

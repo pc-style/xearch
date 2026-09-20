@@ -4,16 +4,16 @@ import {
   useId,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type ReactNode,
-  type CSSProperties,
 } from "react";
 import {
   useAction,
   useConvexAuth,
+  useConvexConnectionState,
   useMutation,
   useQuery,
-  useConvexConnectionState,
 } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import {
@@ -23,21 +23,17 @@ import {
   Clock3,
   Download,
   ExternalLink,
-  Heart,
-  Link2,
   LayoutDashboard,
-  Mail,
-  MessageCircle,
   Plus,
-  Repeat2,
   Search,
   SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
 import Dashboard from "./Dashboard";
-import { EmailSignIn } from "./auth/EmailSignIn";
+import { ResultsSection, Avatar } from "./ResultsSection";
 import { AccountBadge } from "./auth/AccountBadge";
+import { EmailSignIn } from "./auth/EmailSignIn";
 import { handoffReady, indexingUnavailableMessage } from "./integrationStatus";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
@@ -61,17 +57,6 @@ const fromLocation = () => {
     includeStats: params.get("stats") === "1",
   };
 };
-const compactNumber = new Intl.NumberFormat("en", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-const postDate = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  year: "numeric",
-});
-const compact = (n: number) => compactNumber.format(n);
-const formatDuration = (microseconds: number) => `${(microseconds / 1000).toFixed(2)} ms`;
 export type Connection = {
   name: string;
   ready: boolean | undefined;
@@ -121,24 +106,6 @@ const safeHostname = (url: string) => {
     return "Linked page";
   }
 };
-function Avatar({ name, url }: { name: string; url?: string }) {
-  const [failedUrl, setFailedUrl] = useState<string>();
-  return (
-    <span className="avatar">
-      {url && url !== failedUrl ? (
-        <img
-          src={url}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={() => setFailedUrl(url)}
-        />
-      ) : (
-        name.slice(0, 2).toUpperCase()
-      )}
-    </span>
-  );
-}
 function Modal({
   title,
   children,
@@ -160,9 +127,10 @@ function Modal({
       ref={ref}
       aria-labelledby={titleId}
       onCancel={close}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) close();
+      onClose={(e) => {
+        if (e.nativeEvent.target === e.currentTarget) close();
       }}
+      aria-modal="true"
     >
       <div className="modal-inner">
         <header>
@@ -179,132 +147,7 @@ function Modal({
     </dialog>
   );
 }
-function Highlight({ text, query }: { text: string; query: string }) {
-  const words = query
-    .split(/\s+/)
-    .filter((w) => w.length > 2 && !w.startsWith("@"))
-    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  if (!words.length) return <>{text}</>;
-  const pattern = new RegExp(`(${words.join("|")})`, "gi");
-  const parts: { key: string; text: string; mark: boolean }[] = [];
-  let cursor = 0;
-  for (const match of text.matchAll(pattern)) {
-    const start = match.index ?? 0;
-    if (start > cursor)
-      parts.push({ key: `text-${cursor}`, text: text.slice(cursor, start), mark: false });
-    parts.push({ key: `mark-${start}`, text: match[0], mark: true });
-    cursor = start + match[0].length;
-  }
-  if (cursor < text.length)
-    parts.push({ key: `text-${cursor}`, text: text.slice(cursor), mark: false });
-  return (
-    <>
-      {parts.map((part) =>
-        part.mark ? (
-          <mark key={part.key}>{part.text}</mark>
-        ) : (
-          <span key={part.key}>{part.text}</span>
-        ),
-      )}
-    </>
-  );
-}
-function PostCard({
-  post,
-  query,
-  bookmarked,
-  onBookmark,
-  onThread,
-  onRead,
-  onAuthor,
-}: {
-  post: ResultPost;
-  query: string;
-  bookmarked: boolean;
-  onBookmark: () => void;
-  onThread: () => void;
-  onRead: (url: string) => void;
-  onAuthor: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const createdAt = post.createdAt === undefined ? null : new Date(post.createdAt);
-  const hasValidDate = createdAt !== null && !Number.isNaN(createdAt.getTime());
-  return (
-    <article className="post">
-      <header>
-        <button className="author" onClick={onAuthor}>
-          <Avatar name={post.author} url={post.avatar} />
-          <span>
-            <strong>{post.displayName ?? post.author}</strong>
-            <small>@{post.author}</small>
-          </span>
-        </button>
-        <div className="post-meta">
-          {hasValidDate ? (
-            <time dateTime={createdAt.toISOString()}>{postDate.format(createdAt)}</time>
-          ) : null}
-          <button
-            className={`icon ${bookmarked ? "accent" : ""}`}
-            aria-label={bookmarked ? "Remove bookmark" : "Bookmark post"}
-            onClick={onBookmark}
-          >
-            <Bookmark size={17} fill={bookmarked ? "currentColor" : "none"} />
-          </button>
-        </div>
-      </header>
-      <p className="post-text">
-        <Highlight
-          text={!expanded && post.text.length > 700 ? `${post.text.slice(0, 700)}…` : post.text}
-          query={query}
-        />
-      </p>
-      {post.text.length > 700 && (
-        <button className="text-button" onClick={() => setExpanded(!expanded)}>
-          {expanded ? "Show less" : "Read full post"}
-        </button>
-      )}
-      {post.links.length > 0 && (
-        <div className="links">
-          {post.links.slice(0, 3).map((url) => (
-            <button key={url} onClick={() => onRead(url)} title={url}>
-              <Link2 size={14} />
-              <span>{safeHostname(url)}</span>
-              <ArrowUpRight size={13} />
-            </button>
-          ))}
-        </div>
-      )}
-      <footer>
-        <div className="metrics">
-          {post.likes !== undefined && (
-            <span title="Likes at collection time">
-              <Heart size={14} />
-              {compact(post.likes)}
-            </span>
-          )}
-          {post.reposts !== undefined && (
-            <span title="Reposts at collection time">
-              <Repeat2 size={14} />
-              {compact(post.reposts)}
-            </span>
-          )}
-          {post.replies !== undefined && (
-            <span title="Replies at collection time">
-              <MessageCircle size={14} />
-              {compact(post.replies)}
-            </span>
-          )}
-        </div>
-        <div className="post-actions">
-          <button onClick={onThread}>Conversation</button>
-          <a href={post.url} target="_blank" rel="noreferrer">
-            Open on X <ArrowUpRight size={14} />
-          </a>
-        </div>
-      </footer>
-    </article>
-  );
-}
+
 export default function App() {
   const initial = fromLocation();
   const [draft, setDraft] = useState(initial.raw),
@@ -358,7 +201,7 @@ export default function App() {
   }, [isAuthenticated]);
   const ensureSession = useCallback(async () => {
     if (authReady.current) return;
-    session.current ??= (async () => {
+    const pending = (async () => {
       await signIn("anonymous");
       // signIn stores tokens before the Convex websocket confirms authentication.
       if (!authReady.current)
@@ -373,10 +216,12 @@ export default function App() {
           }, 20_000);
           authWaiters.current.push(done);
         });
-    })().finally(() => {
+    })();
+    pending.finally(() => {
       session.current = null;
     });
-    await session.current;
+    session.current = pending;
+    await pending;
   }, [signIn]);
   const accountResults = useQuery(api.search.accounts);
   const accounts = accountResults ?? [];
@@ -421,6 +266,11 @@ export default function App() {
   const webContext = useAction(api.integrations.webContext);
   const readLink = useAction(api.integrations.readLink),
     interpret = useAction(api.integrations.interpret);
+
+  // NB: `task` is deliberately a plain async function, not a useCallback: it
+  // only ever runs in event handlers, so the stable closure it needs is the
+  // one formed per render, and memoizing it would add a dependency without
+  // changing any behavior.
   const task = async (fn: () => Promise<unknown>, success?: string) => {
     setNotice("");
     setBusy(true);
@@ -433,94 +283,67 @@ export default function App() {
       setBusy(false);
     }
   };
-  const search = (query: string, nextSort: Sort = sort) => {
-    setRaw(query.trim());
-    setDraft(query.trim());
-    setSort(nextSort);
-    setSessionId(null);
-    setSearchRequest({ raw: query.trim(), sort: nextSort, includeStats: statsForNerds });
-    setView("search");
-    setProposal(null);
-    const url = new URL(location.href);
-    if (query.trim()) url.searchParams.set("q", query.trim());
-    else url.searchParams.delete("q");
-    url.searchParams.set("sort", nextSort);
-    if (statsForNerds) url.searchParams.set("stats", "1");
-    else url.searchParams.delete("stats");
-    history.pushState(null, "", url);
+  // Event-handler bodies, kept out of the JSX so the async state updates they
+  // perform are plain functions instead of inline-updater closures.
+  const submitImport = async () => {
+    await ensureSession();
+    await start({ kind: "bulk", input: accountInput, since: since || undefined });
+    setAccountInput("");
   };
-  useEffect(() => {
-    const pop = () => {
-      const state = fromLocation();
-      setRaw(state.raw);
-      setDraft(state.raw);
-      setSort(state.sort);
-      setStatsForNerds(state.includeStats);
-      setSessionId(null);
-      setSearchRequest(
-        state.raw.trim()
-          ? { raw: state.raw, sort: state.sort, includeStats: state.includeStats }
-          : null,
-      );
-      setView("search");
-    };
-    addEventListener("popstate", pop);
-    return () => removeEventListener("popstate", pop);
-  }, []);
-  useEffect(() => {
-    if (!searchRequest || queryError || !configured?.search) return;
-    const { raw: query, sort: requestedSort, includeStats } = searchRequest;
-    let active = true;
-    // Every setState here runs after an await, never synchronously in the effect body.
-    void (async () => {
-      await ensureSession();
-      if (!active) return;
-      setBusy(true);
-      setNotice("");
-      try {
-        const id = await startSearch({
-          raw: query,
-          sort: requestedSort,
-          includeStats,
-        });
-        if (active) setSessionId(id);
-      } catch (e) {
-        if (active) setNotice(describeError(e));
-      } finally {
-        if (active) setBusy(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [searchRequest, configured?.search, queryError, ensureSession, startSearch]);
+  const runLoadLive = async () => {
+    await ensureSession();
+    await start({ kind: "live", input: raw.replace(/(^|\s)@([\w]+)/g, "$1from:$2") });
+    setModal("imports");
+  };
+  const runRead = async (url: string) => {
+    await ensureSession();
+    setPage(await readLink({ url }));
+  };
+  const proposeSearch = async () => {
+    await ensureSession();
+    setProposal(await interpret({ raw: draft }));
+  };
+  const runWebContext = async () => {
+    await ensureSession();
+    setContextPages(await webContext({ query: raw }));
+  };
+  const runThread = async (url: string) => {
+    await ensureSession();
+    await start({ kind: "post", input: url });
+    setModal("imports");
+  };
+  const runLoadMore = async () => {
+    const next = result?.nextCursor;
+    if (!next) return;
+    const id = await startSearch({
+      raw,
+      sort,
+      cursor: next,
+      includeStats: result.includeStats === true,
+    });
+    setSessionId(id);
+    window.scrollTo({ top: 0 });
+  };
+  const runSave = async () => {
+    await ensureSession();
+    await save({ raw, sort });
+  };
+  const runBookmark = async (post: ResultPost) => {
+    await ensureSession();
+    await bookmark({ tweetId: post.tweetId, sessionId: sessionId ?? undefined });
+  };
+  const runRemoveSaved = async (id: Id<"saved">) => {
+    await removeSaved({ id });
+  };
   const importAccount = (e: FormEvent) => {
     e.preventDefault();
-    void task(async () => {
-      await ensureSession();
-      await start({
-        kind: "bulk",
-        input: accountInput,
-        since: since || undefined,
-      });
-      setAccountInput("");
-    }, "Indexing started. Raw captures are handed to your data service.");
+    void task(submitImport, "Indexing started. Raw captures are handed to your data service.");
   };
   const loadLive = () =>
-    task(async () => {
-      await ensureSession();
-      await start({
-        kind: "live",
-        input: raw.replace(/(^|\s)@([\w]+)/g, "$1from:$2"),
-      });
-      setModal("imports");
-    }, "Looking for more posts on X.");
+    void task(runLoadLive, "Looking for more posts on X.");
   const read = (url: string) => {
     setReading(true);
-    void task(async () => {
-      await ensureSession();
-      setPage(await readLink({ url }));
-    }).finally(() => setReading(false));
+    void task(() => runRead(url)).finally(() => setReading(false));
   };
   // Worker liveness is judged against this clock, not inside the Convex
   // query — a query re-runs when a document changes, never because time
@@ -572,12 +395,6 @@ export default function App() {
   ];
   const visible = view === "bookmarks" ? bookmarks : (result?.rows ?? []);
   const home = !raw && view === "search";
-  const resultsTitle = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {
-    if (view !== "bookmarks") return;
-    resultsTitle.current?.scrollIntoView({ block: "start" });
-    resultsTitle.current?.focus({ preventScroll: true });
-  }, [view]);
   const openDashboard = () => {
     setModal(null);
     setDashboard(true);
@@ -585,6 +402,63 @@ export default function App() {
     url.searchParams.set("dashboard", "1");
     history.replaceState(null, "", url);
   };
+  const search = (query: string, nextSort: Sort = sort) => {
+    setRaw(query.trim());
+    setDraft(query.trim());
+    setSort(nextSort);
+    setSessionId(null);
+    setSearchRequest({ raw: query.trim(), sort: nextSort, includeStats: statsForNerds });
+    setView("search");
+    setProposal(null);
+    const url = new URL(location.href);
+    if (query.trim()) url.searchParams.set("q", query.trim());
+    else url.searchParams.delete("q");
+    url.searchParams.set("sort", nextSort);
+    if (statsForNerds) url.searchParams.set("stats", "1");
+    else url.searchParams.delete("stats");
+    history.pushState(null, "", url);
+  };
+  useEffect(() => {
+    const pop = () => {
+      const state = fromLocation();
+      setRaw(state.raw);
+      setDraft(state.raw);
+      setSort(state.sort);
+      setStatsForNerds(state.includeStats);
+      setSessionId(null);
+      setSearchRequest(
+        state.raw.trim()
+          ? { raw: state.raw, sort: state.sort, includeStats: state.includeStats }
+          : null,
+      );
+      setView("search");
+    };
+    addEventListener("popstate", pop);
+    return () => removeEventListener("popstate", pop);
+  }, []);
+  useEffect(() => {
+    if (!searchRequest || queryError || !configured?.search) return;
+    let active = true;
+    // Every setState here runs after an await, never synchronously in the effect body.
+    void (async () => {
+      await ensureSession();
+      if (!active) return;
+      const { raw: query, sort: requestedSort, includeStats } = searchRequest;
+      setBusy(true);
+      setNotice("");
+      try {
+        const id = await startSearch({ raw: query, sort: requestedSort, includeStats });
+        if (active) setSessionId(id);
+      } catch (e) {
+        if (active) setNotice(describeError(e));
+      } finally {
+        if (active) setBusy(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [searchRequest, configured?.search, queryError, ensureSession, startSearch]);
 
   if (dashboard)
     return (
@@ -601,15 +475,16 @@ export default function App() {
   return (
     <div className={`app ${home ? "is-home" : "has-results"}`}>
       <header className="topbar">
-        <button className="wordmark" onClick={() => search("")} aria-label="Xearch home">
+        <button type="button" className="wordmark" onClick={() => search("")} aria-label="Xearch home">
           xearch<span className="wordmark-dot">.</span>
         </button>
         <nav aria-label="Main navigation">
-          <button aria-label="Import dashboard" onClick={openDashboard}>
+          <button type="button" aria-label="Import dashboard" onClick={openDashboard}>
             <LayoutDashboard size={15} />
             <span>Dashboard</span>
           </button>
           <button
+            type="button"
             aria-label="Saved searches"
             onClick={() => {
               setModal("saved");
@@ -619,6 +494,7 @@ export default function App() {
             <span>Saved searches</span>
           </button>
           <button
+            type="button"
             aria-label="Bookmarks"
             aria-pressed={view === "bookmarks"}
             onClick={() => setView(view === "bookmarks" ? "search" : "bookmarks")}
@@ -628,6 +504,7 @@ export default function App() {
             {bookmarks.length > 0 && <small>{bookmarks.length}</small>}
           </button>
           <button
+            type="button"
             aria-label="Import account"
             className="import-nav"
             onClick={() => setModal("imports")}
@@ -654,6 +531,7 @@ export default function App() {
                   const angle = (i / all.length) * Math.PI * 2 - Math.PI / 2;
                   return (
                     <button
+                      type="button"
                       title={`Search @${a.handle}`}
                       aria-label={`Search @${a.handle}`}
                       key={a._id}
@@ -740,10 +618,7 @@ export default function App() {
                   disabled={busy || !draft.trim()}
                   title="Suggest a clearer search"
                   onClick={() =>
-                    void task(async () => {
-                      await ensureSession();
-                      setProposal(await interpret({ raw: draft }));
-                    })
+                    void task(proposeSearch)
                   }
                 >
                   <Sparkles size={13} />
@@ -759,6 +634,7 @@ export default function App() {
                 <p>{proposal.explanation}</p>
               </div>
               <button
+                type="button"
                 onClick={() => {
                   setDraft(proposal.query);
                   setProposal(null);
@@ -785,7 +661,11 @@ export default function App() {
                 <>
                   <span className="status-dot muted" />
                   Connect your sources to start searching.
-                  <button className="text-button" onClick={() => setModal("imports")}>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setModal("imports")}
+                  >
                     Import an account <Plus size={13} />
                   </button>
                 </>
@@ -796,7 +676,7 @@ export default function App() {
         {notice && (
           <div className="notice" role="status">
             <span>{notice}</span>
-            <button className="icon" aria-label="Dismiss message" onClick={() => setNotice("")}>
+            <button type="button" className="icon" aria-label="Dismiss message" onClick={() => setNotice("")}>
               <X size={16} />
             </button>
           </div>
@@ -807,233 +687,30 @@ export default function App() {
           </div>
         )}
         {!home && (
-          <section className="results">
-            <header className="results-header">
-              <div>
-                <h1 ref={resultsTitle} tabIndex={-1}>
-                  {view === "bookmarks" ? "Bookmarks" : raw}
-                </h1>
-                <p>
-                  {view === "bookmarks"
-                    ? `${bookmarks.length} saved posts in this browser's session`
-                    : configured === undefined
-                      ? "Checking your search service connection"
-                      : !configured.search
-                        ? "Waiting for the search service connection"
-                        : result?.status === "complete"
-                          ? `${result.rows.length} posts on this page`
-                          : result?.status === "failed"
-                            ? "Search could not complete"
-                            : "Finding matching posts…"}
-                </p>
-              </div>
-              {view === "search" && (
-                <div className="result-tools">
-                  <button
-                    title="Save search"
-                    disabled={busy || !!queryError}
-                    onClick={() =>
-                      void task(async () => {
-                        await ensureSession();
-                        await save({ raw, sort });
-                      }, "Search saved.")
-                    }
-                  >
-                    <Bookmark size={15} />
-                    Save search
-                  </button>
-                  <button
-                    disabled={busy || !configured?.firecrawl}
-                    onClick={() =>
-                      void task(async () => {
-                        await ensureSession();
-                        setContextPages(await webContext({ query: raw }));
-                      })
-                    }
-                  >
-                    <Link2 size={15} />
-                    Web context
-                  </button>
-                  <button
-                    title="Email top results"
-                    disabled={!visible.length || !configured?.email}
-                    onClick={() => setModal("email")}
-                  >
-                    <Mail size={15} />
-                    Email
-                  </button>
-                  <button disabled={busy || !configured?.indexing} onClick={() => void loadLive()}>
-                    <Search size={15} />
-                    Find on X
-                  </button>
-                </div>
-              )}
-            </header>
-            {queryError ? (
-              <div className="empty">
-                <h2>Adjust your search</h2>
-                <p>{queryError}</p>
-              </div>
-            ) : view === "search" && configured === undefined ? (
-              <div className="empty" role="status">
-                Checking your connections…
-              </div>
-            ) : view === "search" && configured?.search === false ? (
-              <div className="empty">
-                <Search size={30} />
-                <h2>Connect the search service.</h2>
-                <p>
-                  The interface is ready. Your data service supplies the corpus and search results.
-                </p>
-                <button onClick={() => setModal("setup")}>View connections</button>
-              </div>
-            ) : result?.status === "failed" ? (
-              <div className="empty">
-                <h2>Search could not complete</h2>
-                <p>{result.error}</p>
-                <button
-                  onClick={() => setSearchRequest({ raw, sort, includeStats: statsForNerds })}
-                >
-                  Retry search
-                </button>
-              </div>
-            ) : view === "search" && (!result || result.status !== "complete") ? (
-              <div className="empty" role="status">
-                Finding matching posts…
-              </div>
-            ) : !visible.length ? (
-              <div className="empty">
-                <Search size={30} />
-                <h2>
-                  {view === "bookmarks"
-                    ? "Keep the posts worth finding again."
-                    : "No matches in your library yet."}
-                </h2>
-                <p>
-                  {view === "bookmarks"
-                    ? "Use the bookmark button on any result."
-                    : "Import an account's history, try fewer keywords, or find more posts on X."}
-                </p>
-                {view === "search" && (
-                  <button onClick={() => setModal("imports")}>
-                    <Plus size={15} />
-                    Import an account
-                  </button>
-                )}
-              </div>
-            ) : (
-              <>
-                <p className="scope-note">
-                  Results and ordering come from your search service. Engagement reflects the source
-                  snapshot.
-                </p>
-                {result?.stats && (
-                  <details className="stats-panel">
-                    <summary>
-                      Stats for nerds —{" "}
-                      {formatDuration(result.stats.api?.totalUs ?? result.stats.backend.totalUs)}
-                    </summary>
-                    <div className="stats-grid">
-                      <strong>Backend</strong>
-                      <span>Total</span>
-                      <span>{formatDuration(result.stats.backend.totalUs)}</span>
-                      <span>Reload index</span>
-                      <span>{formatDuration(result.stats.backend.reloadUs)}</span>
-                      <span>Fingerprint</span>
-                      <span>{formatDuration(result.stats.backend.fingerprintUs)}</span>
-                      <span>Compile query</span>
-                      <span>{formatDuration(result.stats.backend.compileUs)}</span>
-                      <span>Retrieve</span>
-                      <span>{formatDuration(result.stats.backend.retrieveUs)}</span>
-                      <span>Retrieve + rank candidates</span>
-                      <span>{result.stats.backend.rankingCalls} calls</span>
-                      <span>Materialize rows</span>
-                      <span>{formatDuration(result.stats.backend.materializeUs)}</span>
-                      <span>Hits / returned</span>
-                      <span>
-                        {result.stats.backend.candidateHits} / {result.stats.backend.returnedRows}
-                      </span>
-                      <span>Index</span>
-                      <span>
-                        {result.stats.backend.indexDocs} docs / {result.stats.backend.segments}{" "}
-                        segments
-                      </span>
-                      {result.stats.api && (
-                        <>
-                          <strong>API</strong>
-                          <span>Auth</span>
-                          <span>{formatDuration(result.stats.api.authUs)}</span>
-                          <span>Parse</span>
-                          <span>{formatDuration(result.stats.api.parseUs)}</span>
-                          <span>Queue</span>
-                          <span>{formatDuration(result.stats.api.queueUs)}</span>
-                          <span>Engine wall</span>
-                          <span>{formatDuration(result.stats.api.engineUs)}</span>
-                          <span>Post-process</span>
-                          <span>{formatDuration(result.stats.api.postprocessUs)}</span>
-                          <span>API total</span>
-                          <span>{formatDuration(result.stats.api.totalUs)}</span>
-                        </>
-                      )}
-                    </div>
-                  </details>
-                )}
-                {result?.warnings.map((warning) => (
-                  <p className="scope-note" key={warning}>
-                    {warning}
-                  </p>
-                ))}
-                <div className="post-list">
-                  {visible.map((post) => (
-                    <PostCard
-                      key={post.tweetId}
-                      post={post}
-                      query={raw}
-                      bookmarked={bookmarks.some((b) => b.tweetId === post.tweetId)}
-                      onAuthor={() => search(`@${post.author}`)}
-                      onBookmark={() =>
-                        void task(async () => {
-                          await ensureSession();
-                          await bookmark({
-                            tweetId: post.tweetId,
-                            sessionId: sessionId ?? undefined,
-                          });
-                        })
-                      }
-                      onThread={() =>
-                        void task(async () => {
-                          await ensureSession();
-                          await start({ kind: "post", input: post.url });
-                          setModal("imports");
-                        }, "Fetching available conversation posts.")
-                      }
-                      onRead={read}
-                    />
-                  ))}
-                </div>
-                {view === "search" && result?.nextCursor && (
-                  <button
-                    className="load-more"
-                    disabled={busy}
-                    onClick={() =>
-                      void task(async () => {
-                        const id = await startSearch({
-                          raw,
-                          sort,
-                          cursor: result.nextCursor,
-                          includeStats: result.includeStats === true,
-                        });
-                        setSessionId(id);
-                        window.scrollTo({ top: 0 });
-                      })
-                    }
-                  >
-                    Next page
-                  </button>
-                )}
-              </>
-            )}
-          </section>
+          <ResultsSection
+            view={view}
+            raw={raw}
+            configured={configured}
+            result={result}
+            queryError={queryError}
+            visible={visible}
+            bookmarkedIds={new Set(bookmarks.map((b) => b.tweetId))}
+            busy={busy}
+            onSearch={search}
+            onSave={() => void task(runSave, "Search saved.")}
+            onLiveSearch={loadLive}
+            onOpenModal={(which) => setModal(which)}
+            onRetry={() => setSearchRequest({ raw, sort, includeStats: statsForNerds })}
+            onWebContext={runWebContext}
+            onLoadMore={runLoadMore}
+            onRead={read}
+            onBookmark={(post) =>
+              void task(() => runBookmark(post))
+            }
+            onThread={(post) =>
+              void task(() => runThread(post.url))
+            }
+          />
         )}
       </main>
       <footer className="site-footer">
@@ -1042,7 +719,7 @@ export default function App() {
           <a href="https://mdfromx.com" target="_blank" rel="noreferrer">
             Powered by x.md <ArrowUpRight size={12} />
           </a>
-          <button onClick={() => setModal("setup")}>
+          <button type="button" onClick={() => setModal("setup")}>
             <SlidersHorizontal size={13} />
             Connections
           </button>
@@ -1075,7 +752,7 @@ export default function App() {
               value={since}
               onChange={(e) => setSince(e.target.value)}
             />
-            <button className="primary" disabled={busy || !configured?.indexing}>
+            <button className="primary" type="submit" disabled={busy || !configured?.indexing}>
               <Download size={16} />
               Import posts
             </button>
@@ -1111,6 +788,7 @@ export default function App() {
                     job.nextUntil ||
                     job.nextCursor) && (
                     <button
+                      type="button"
                       disabled={busy}
                       onClick={() =>
                         void task(async () => {
@@ -1148,6 +826,7 @@ export default function App() {
           {saved.map((item) => (
             <div className="saved-row" key={item._id}>
               <button
+                type="button"
                 onClick={() => {
                   search(item.query, item.sort);
                   setModal(null);
@@ -1157,9 +836,10 @@ export default function App() {
                 {item.query}
               </button>
               <button
+                type="button"
                 className="icon"
                 aria-label={`Remove ${item.query}`}
-                onClick={() => void task(() => removeSaved({ id: item._id }))}
+                onClick={() => void task(() => runRemoveSaved(item._id))}
               >
                 <X size={16} />
               </button>
@@ -1204,7 +884,7 @@ export default function App() {
                 <p>
                   Sends to your verified address: <strong>{verifiedEmail}</strong>
                 </p>
-                <button className="primary" disabled={busy || !sessionId}>
+                <button className="primary" type="submit" disabled={busy || !sessionId}>
                   Send results
                 </button>
               </form>
@@ -1220,111 +900,63 @@ export default function App() {
       {modal === "setup" && (
         <Modal notice={notice} title="Connections" close={() => setModal(null)}>
           <p className="muted-copy">
-            Configured on the backend by the operator. Nothing here is stored in your browser.
+            Search is live once your data service returns results. The remaining connections are
+            optional improvements.
           </p>
-          <div className="connection-row">
-            <div>
-              <strong>Account</strong>
-              <AccountBadge />
-            </div>
-            {!verifiedEmail && (
-              <>
-                <p>
-                  Sign in with a verified email to send digest emails to yourself. Search and every
-                  other feature stay available as a guest.
-                </p>
-                <EmailSignIn
-                  className="stack-form"
-                  onSignedIn={() => setNotice("Signed in with a verified email address.")}
-                />
-              </>
-            )}
-          </div>
           {connections.map((c) => (
             <div className="connection-row" key={c.name}>
               <div>
                 <strong>{c.name}</strong>
-                <span className={c.ready ? "is-ready" : ""}>
+                <p>{c.purpose}</p>
+                <small>
                   {configured === undefined ? (
                     "Checking…"
-                  ) : c.ready ? (
-                    <>
-                      <Check size={13} />
-                      {c.proves === "live" ? "Connected" : "Configured"}
-                    </>
-                  ) : c.proves === "live" ? (
-                    "Not connected"
                   ) : (
-                    "Not configured"
+                    <>
+                      {c.ready ? <Check size={12} /> : <span className="status-dot" />}{" "}
+                      {c.ready
+                        ? c.proves === "live"
+                          ? "Connected"
+                          : "Configured"
+                        : c.proves === "live"
+                          ? "Not connected"
+                          : "Not configured"}
+                      {c.env ? ` · ${c.env}` : ""}
+                    </>
                   )}
-                </span>
+                </small>
+                {c.note && <small>{c.note}</small>}
               </div>
-              <p>{c.purpose}</p>
-              {c.note && <p>{c.note}</p>}
             </div>
           ))}
-          <details className="local-setup">
-            <summary>Local setup</summary>
-            <p className="muted-copy">
-              <code>bunx convex env set NAME</code> prompts for each value. Webhook and production
-              steps are in the README.
-            </p>
-            {/* Only rows that actually have variables to set belong here.
-                A row with nothing to configure already explains itself on
-                its own card above; repeating that sentence inside a section
-                titled "Local setup" told people to set up something that
-                needs no setting up. */}
-            {connections
-              .filter((c) => c.env)
-              .map((c) => (
-                <p key={c.name}>
-                  {c.name}: <code>{c.env}</code>
-                </p>
-              ))}
-          </details>
-        </Modal>
-      )}
-      {contextPages && (
-        <Modal title="Web context" close={() => setContextPages(null)}>
-          <p className="muted-copy">
-            Related pages found and read by Firecrawl. These are web results, separate from the X
-            corpus.
-          </p>
-          {contextPages.length === 0 ? (
-            <p>No related pages returned.</p>
-          ) : (
-            contextPages.map((p) => (
-              <div className="job" key={p.url}>
-                <strong>{p.title}</strong>
-                <p>
-                  {p.text.slice(0, 350)}
-                  {p.text.length > 350 ? "…" : ""}
-                </p>
-                <button
-                  onClick={() => {
-                    setContextPages(null);
-                    setPage(p);
-                  }}
-                >
-                  Read page
-                </button>
-              </div>
-            ))
-          )}
+          {configured?.collectorMode === "outbound" && <AccountBadge />}
         </Modal>
       )}
       {page && (
         <Modal title={page.title} close={() => setPage(null)}>
-          <p className="muted-copy">
-            Collected {new Date(page.collectedAt).toLocaleString()}. This is a current-source
-            preview, not an archive of the page when the post was written.
-          </p>
-          <a className="source-link" href={page.url} target="_blank" rel="noreferrer">
-            Open original <ExternalLink size={14} />
-          </a>
+          <p className="muted-copy">Collected {new Date(page.collectedAt).toLocaleString()}</p>
           <p className="page-text">{page.text}</p>
+          <a href={page.url} target="_blank" rel="noreferrer">
+            <ExternalLink size={14} />
+            Open original page
+          </a>
         </Modal>
       )}
+      {contextPages &&
+        (contextPages.length ? (
+          <Modal title="Web context" close={() => setContextPages(null)}>
+            {contextPages.map((p) => (
+              <div className="page-text" key={p.url}>
+                <strong>{p.title}</strong>
+                <p>{p.text}</p>
+              </div>
+            ))}
+          </Modal>
+        ) : (
+          <Modal title="Web context" close={() => setContextPages(null)}>
+            <p className="muted-copy">No linked pages found for this search.</p>
+          </Modal>
+        ))}
     </div>
   );
 }
