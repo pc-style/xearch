@@ -153,17 +153,13 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
 });
 
 describe("stale search cursor — restart search, not a generic failure", () => {
-  // Assumption pending confirmation with Pronsh (see handoff notes and the
-  // comment on STALE_CURSOR_STATUS in convex/lib/search.ts): HTTP 410 Gone
-  // is this app's signal for "this cursor's page window is gone". This test
-  // exists so that assumption, once confirmed or corrected, is a one-line
-  // fix here rather than a silent behavior change.
-  it("surfaces a 410 on a request that carried a cursor as 'restart your search'", async () => {
+  // The Rust API maps StaleCursor to HTTP 409 Conflict.
+  it("surfaces a 409 on a request that carried a cursor as 'restart your search'", async () => {
     const { t, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 410 })),
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 409 })),
     );
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
@@ -183,12 +179,12 @@ describe("stale search cursor — restart search, not a generic failure", () => 
     });
   });
 
-  it("does not call a first-page 410 (no cursor sent) a stale cursor", async () => {
+  it("does not call a first-page 409 (no cursor sent) a stale cursor", async () => {
     const { t, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 410 })),
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 409 })),
     );
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
