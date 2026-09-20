@@ -182,11 +182,24 @@ export const history = query({
     // this from the page meant an owner with more imports than it holds was
     // told "not found" for an account they genuinely own, and lost both its
     // run history and the evidence behind a dismissed run.
-    const jobs = await ownerJobsForAccount(ctx.db, owner, args.accountId, MAX_HISTORY_JOBS);
-    // Same "not found" message whether the account does not exist or simply
-    // is not this owner's — never confirm another user's account exists.
-    if (jobs.length === 0) throw new ConvexError("Account not found.");
-    const sorted = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt);
+    const { jobs, exhausted } = await ownerJobsForAccount(ctx.db, owner, args.accountId);
+    if (jobs.length === 0) {
+      // "Not found" is a claim, and it is only true once the owner's imports
+      // have actually been searched through. If the search stopped early it
+      // proves nothing about whether this account is theirs, so say that
+      // instead of asserting an absence never established.
+      if (!exhausted)
+        throw new ConvexError(
+          "Could not check this account against your imports — there are too many to search in one request.",
+        );
+      // Same message whether the account does not exist or simply is not
+      // this owner's — never confirm another user's account exists.
+      throw new ConvexError("Account not found.");
+    }
+    // Exact over the scanned window: every match was collected before
+    // sorting, so ordering by updatedAt cannot drop a job that the index's
+    // own _creationTime order happened to place later.
+    const sorted = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_HISTORY_JOBS);
     const out: Infer<typeof historyRunValidator>[] = [];
     for (const job of sorted) {
       const receipts = await ctx.db

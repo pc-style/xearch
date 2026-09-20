@@ -125,40 +125,48 @@ export async function ownedAccountJobs(
   return { jobs: truncated ? scanned.slice(0, MAX_OWNED_ACCOUNT_JOBS) : scanned, truncated };
 }
 
-// How far a targeted lookup will walk an owner's account imports to decide
-// whether one specific account is theirs. Much larger than the page the
-// library lists, because this answers a yes/no ownership question about one
-// named account rather than building a list — and an owner must not be
-// refused their own account's history merely for having imported a lot.
+// How far a targeted lookup will walk an owner's account imports, and how
+// many matching runs it will keep. Both are bounds on work, and reaching
+// either one means the answer is incomplete — which the caller is told,
+// rather than left to mistake for a finished search.
 const MAX_OWNERSHIP_SCAN = 20_000;
+const MAX_ACCOUNT_RUNS = 1_000;
 
 /**
- * Every job this owner ran for ONE account, newest first.
+ * Every job this owner ran for ONE account, newest first, plus whether the
+ * search actually finished.
  *
  * Deliberately not derived from the bounded library page: an owner with more
  * imports than that page holds would be told "not found" for an account they
- * genuinely own, losing its run history and its dismissal evidence. Streams
- * the owner's account jobs and keeps only the ones resolving to this
- * account, stopping as soon as it has enough to answer with.
+ * genuinely own, losing its run history and its dismissal evidence.
+ *
+ * `exhausted` is the honest part. These bounds exist so one request cannot
+ * read unboundedly, but hitting one does NOT mean the account is absent — it
+ * means we stopped looking. A caller must not turn that into "not found".
+ *
+ * No early exit once enough runs are found, either: this index orders by
+ * `_creationTime`, while history is presented newest-by-`updatedAt`. Stopping
+ * at the first N matches could drop a job created earlier and updated since.
+ * Every match inside the scanned window is collected, so the ordering the
+ * caller applies is exact over that window.
  */
 export async function ownerJobsForAccount(
   db: Db,
   owner: Id<"users">,
   accountId: Id<"accounts">,
-  limit: number,
-): Promise<Doc<"jobs">[]> {
+): Promise<{ jobs: Doc<"jobs">[]; exhausted: boolean }> {
   const cache = new Map<string, Doc<"accounts"> | null>();
-  const out: Doc<"jobs">[] = [];
+  const jobs: Doc<"jobs">[] = [];
   let scanned = 0;
   for await (const job of db
     .query("jobs")
     .withIndex("by_owner_and_kind", (q) => q.eq("owner", owner).eq("kind", ACCOUNT_JOB_KIND))
     .order("desc")) {
-    if (++scanned > MAX_OWNERSHIP_SCAN) break;
+    if (++scanned > MAX_OWNERSHIP_SCAN) return { jobs, exhausted: false };
     const account = await resolveJobAccount(db, job, cache);
     if (account?._id !== accountId) continue;
-    out.push(job);
-    if (out.length >= limit) break;
+    jobs.push(job);
+    if (jobs.length >= MAX_ACCOUNT_RUNS) return { jobs, exhausted: false };
   }
-  return out;
+  return { jobs, exhausted: true };
 }
