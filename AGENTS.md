@@ -17,9 +17,11 @@ before adding a budget mechanism back.
 
 Use Bun with the committed `bun.lock`. The app uses TypeScript, React 19, Vite,
 and hosted Convex. Use Oxlint for linting, Oxfmt for formatting, and Vitest for
-tests. `bun run lint` is `oxlint && npx react-doctor@latest` (unpinned). Frontend
+tests. `bun run lint` is `oxlint && npx react-doctor@latest` (unpinned).
+`bun run doctor` is `react-compiler-healthcheck`, not that scan. Frontend
 async work that raises a busy flag must go through `useTask` / `runTask` in
-`src/errors.ts`; do not put `try` / `finally` or `??=` inside a component. See
+`src/errors.ts`; do not put `try` / `finally` or `??=` inside a component.
+Promise `.finally()` and `try` / `catch` without `finally` are fine. See
 [docs/development.md](docs/development.md). Do not introduce TypeScript `any` or
 suppress checks to make code pass unless explicitly requested. Keep changes
 scoped; do not add unrequested features or abstractions.

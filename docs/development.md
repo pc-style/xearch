@@ -103,6 +103,17 @@ The Check workflow (`.github/workflows/ci.yml`) runs that lint script and
 fails on errors. `.github/workflows/react-doctor.yml` is a separate advisory
 scan: it comments on PRs and does not fail the job.
 
+| Command                | What it runs                           | Used by Check?                              |
+| ---------------------- | -------------------------------------- | ------------------------------------------- |
+| `bun run lint`         | Oxlint, then `npx react-doctor@latest` | Yes — this is the Check step                |
+| `bun run react-doctor` | The same unpinned scan, alone          | No — Check still runs Oxlint first          |
+| `bun run doctor`       | `react-compiler-healthcheck`           | No — compiler coverage, not Check errors    |
+| `bun run lint:fix`     | `oxlint --fix`                         | No — does not rewrite react-doctor findings |
+
+If Check is red on `Handle TryStatement with a finalizer` or an impure
+updater, run `bun run lint`, not `bun run doctor`. See
+[Async UI work](#async-ui-work) for the helper that keeps those errors gone.
+
 Search-service responses are decoded with Effect Schema in
 `convex/lib/results.ts`; other validators still use Zod.
 
@@ -114,7 +125,9 @@ Async buttons and forms that raise a busy flag share one helper:
 `useTask` / `runTask` in `src/errors.ts`. One `useTask()` call is one busy
 flag and one message slot. `run` clears the message, sets busy, then on the
 way out shows an optional success string or `describeError`'s text, and
-always lowers busy — including when the work throws.
+always lowers busy — including when the work throws. Failures are not
+rethrown; `void run(...)` is the intended call shape. `tests/errors.test.ts`
+covers `describeError`'s Convex wrapper stripping, not the busy-flag helper.
 
 ```ts
 const { busy, message, setMessage, run } = useTask();
@@ -125,13 +138,17 @@ void run(async () => {
 }, "Import started. You can leave this page open or come back later.");
 ```
 
+Use `setMessage` for checks that never start the work — invalid email or an
+empty code in `src/auth/EmailSignIn.tsx` set the error and return before
+`run`. Those paths must not raise busy.
+
 Rename on destructuring when the screen already has its own words
 (`busy: pending`, `message: error`, `run: task` / `act`). Current owners:
 
 | Component                    | Hook                | Work it drives                                                                                              |
 | ---------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `src/App.tsx`                | `useTask` as `task` | search start, import, live lookup, read-link, interpret, web context, bookmarks, saved searches, email send |
-| `src/Dashboard.tsx`          | `useTask` as `run`  | the import form                                                                                             |
+| `src/Dashboard.tsx`          | `useTask` as `run`  | the import form; Connect to my jobs writes the same `setMessage`                                            |
 | `src/library/AccountRow.tsx` | `useTask` as `act`  | retry, continue, stop                                                                                       |
 | `src/auth/EmailSignIn.tsx`   | `useTask` as `run`  | request code, verify code                                                                                   |
 
@@ -161,6 +178,12 @@ Reach the runner through the imported hook (or call `runTask` directly with
 explicit setters). Do not retype `try` / `catch` / `finally` around mutations
 inside a component.
 
+`try` / `catch` without `finally` is allowed: `App.tsx` uses it while parsing
+the live query, and `Dashboard.tsx`'s `Job` helper uses it around retry /
+stop / continue. Promise `.finally()` is also allowed —
+`ensureSession` clears its in-flight promise that way. The compiler error
+names a `TryStatement` with a finalizer, not `Promise.prototype.finally`.
+
 ### Stale searches and `ensureSession`
 
 The search effect in `src/App.tsx` cannot use `task()` as-is: a superseded
@@ -187,13 +210,24 @@ return () => {
 cannot lower `??=` either, and the error text looks the same as the
 try/finally failure.
 
+After `signIn("anonymous")` it still waits for the Convex websocket to
+confirm authentication, up to 20 seconds. The user-facing text for that
+deadline is `Session connection timed out. Try again.` Concurrent callers
+share one in-flight promise; `.finally()` clears it so the next click can
+start a new attempt.
+
 ### When not to use `useTask`
 
 `Dashboard.tsx`'s `Job` rows still use a local `try` / `catch` with no
 `finally`. They have no busy flag — only an error string — so the compiler
-rule does not apply. The dashboard "Connect to my jobs" button is the same
-shape around `ensureSession`. Do not "upgrade" those to `useTask` just for
+rule does not apply. Do not "upgrade" those to `useTask` just for
 uniformity.
+
+The dashboard "Connect to my jobs" button is the same try/catch shape around
+`ensureSession`, but its `catch` writes `"Could not start your session."`
+through the import form's `setMessage`. One `useTask()` in `Dashboard`
+backs both the form and that button; a connect failure shows on the form's
+status line.
 
 A form's actual submit control needs `type="submit"` (search, the import
 forms in `App` and `Dashboard`, email sign-in, send-results). Non-submit
