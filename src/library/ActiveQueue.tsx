@@ -14,12 +14,25 @@ import { Badge, acquisitionStatusTone, formatRelative, isStalledRun } from "./fo
  * ever show account-identified acquisition, never the non-account
  * live/post/etc. jobs that to-do.md P0 says must stay out of this list.
  */
-export default function ActiveQueue({ rows }: { rows: AccountLibraryRow[] | undefined }) {
+export default function ActiveQueue({
+  rows,
+  isAuthenticated,
+}: {
+  rows: AccountLibraryRow[] | undefined;
+  isAuthenticated: boolean;
+}) {
   if (!rows)
     return (
       <section className="library-section" aria-label="Active queue">
         <h2>Active queue</h2>
-        <p className="library-loading">Loading queue…</p>
+        {/* `undefined` means either "query skipped because signed out" or
+            "still in flight" -- they are different states and must not share
+            a label. */}
+        {isAuthenticated ? (
+          <p className="library-loading">Loading queue…</p>
+        ) : (
+          <p className="library-muted">Connect to see work in progress.</p>
+        )}
       </section>
     );
   const active = rows.filter(

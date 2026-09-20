@@ -252,7 +252,11 @@ export default function Dashboard({
             ).map(([name, ready]) => (
               <div key={name}>
                 <span>{name}</span>
-                <span>{ready ? "Configured" : "Not connected"}</span>
+                {/* `config` is undefined while the query is in flight or the
+                    socket is down. Rendering that as "Not connected" states a
+                    fact we do not have yet -- the same configuration-versus-
+                    connectivity conflation to-do.md P0 calls out. */}
+                <span>{!config ? "Checking…" : ready ? "Configured" : "Not connected"}</span>
               </div>
             ))}
             <p>Configuration status, not a live health check. Provider keys stay on the backend.</p>

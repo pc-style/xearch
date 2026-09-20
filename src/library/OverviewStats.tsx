@@ -17,12 +17,19 @@ export default function OverviewStats({
   health,
   limits,
   connected,
+  isAuthenticated,
 }: {
   summary: DashboardSummary | undefined;
   health: ServiceStatus[] | undefined;
   limits: ProviderLimit[] | undefined;
   connected: boolean;
+  isAuthenticated: boolean;
 }) {
+  // A skipped Convex query returns `undefined`, exactly like one still in
+  // flight -- so a signed-out visitor used to sit on "Loading overview..."
+  // forever. Not connected yet is a different state from still loading, and
+  // the two must not share a label (to-do.md P0: configuration, connectivity,
+  // download completion and publication are distinct states).
   return (
     <section className="library-section" aria-label="Overview">
       <div className="library-section-head">
@@ -34,7 +41,9 @@ export default function OverviewStats({
           </p>
         )}
       </div>
-      {!summary ? (
+      {!isAuthenticated ? (
+        <p className="library-muted">Connect to see your indexed posts, people and queue.</p>
+      ) : !summary ? (
         <p className="library-loading">Loading overview…</p>
       ) : (
         <div className="library-stats-grid">
@@ -69,7 +78,7 @@ export default function OverviewStats({
           {!health
             ? (["indexer", "receiver", "search"] as const).map((service) => (
                 <Badge key={service} tone="neutral">
-                  {SERVICE_DISPLAY_NAME[service]}: loading…
+                  {SERVICE_DISPLAY_NAME[service]}: {isAuthenticated ? "loading…" : "connect to view"}
                 </Badge>
               ))
             : health.map((status) => {
@@ -96,7 +105,7 @@ export default function OverviewStats({
           configured. A stale reading is labelled stale, never shown as a fresh live zero.
         </p>
       </div>
-      <ProviderLimits limits={limits} />
+      <ProviderLimits limits={limits} isAuthenticated={isAuthenticated} />
     </section>
   );
 }

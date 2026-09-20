@@ -33,7 +33,7 @@ async function withUser(t: ReturnType<typeof convexTest>) {
 }
 
 function renderPanel(limits: ProviderLimit[] | undefined): string {
-  return renderToStaticMarkup(createElement(ProviderLimits, { limits }));
+  return renderToStaticMarkup(createElement(ProviderLimits, { limits, isAuthenticated: true }));
 }
 
 describe("scenario: provider throttling — real reason/retry, unknown allowance, no historical leakage", () => {
