@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit",
     "deploy": "bunx @convex-dev/static-hosting deploy",
     "deploy:prod": "CONVEX_DEPLOYMENT=prod:utmost-kudu-321 NODE_OPTIONS=--max-old-space-size=3072 bunx @convex-dev/static-hosting deploy --build-command 'bun run build'",
-    "react-doctor": "npx react-doctor@latest"
+    "react-doctor": "npx react-doctor@latest src --no-supply-chain"
   },
   "dependencies": {
     "@agentmail/convex": "latest",
