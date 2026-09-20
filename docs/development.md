@@ -95,11 +95,109 @@ bunx vite build --outDir "$(mktemp -d /tmp/xearch-build.XXXXXX)"
 
 Build verification uses a temporary directory so it cannot overwrite the live VM frontend in `dist/`.
 
-Oxlint runs with the Effect presets; `prepare` patches Oxlint and tsgolint on
-install. Search-service responses are decoded with Effect Schema
-in `convex/lib/results.ts`; other validators still use Zod.
+`bun run lint` is `oxlint && npx react-doctor@latest`. Oxlint uses the Effect
+presets; `prepare` patches Oxlint and tsgolint on install. React Doctor is
+unpinned (`@latest`), so a new release can fail Check without any commit.
+Vite compiles the UI with the React Compiler (`vite.config.ts`, target 19).
+The Check workflow (`.github/workflows/ci.yml`) runs that lint script and
+fails on errors. `.github/workflows/react-doctor.yml` is a separate advisory
+scan: it comments on PRs and does not fail the job.
+
+Search-service responses are decoded with Effect Schema in
+`convex/lib/results.ts`; other validators still use Zod.
 
 Tests cover raw payload preservation, JSON backfill pagination, safe unordered-stream behavior, stream completion, partial capture, identity pinning, origin selection, retry timing, durable receipts, user isolation, and the Firecrawl component response shape. Provider calls are mocked in tests. No email is sent and no provider credits are consumed by the suite. Selected ideas and remaining work from the supplied local-first spec are tracked in [spec adoption](spec-adoption.md).
+
+## Async UI work
+
+Async buttons and forms that raise a busy flag share one helper:
+`useTask` / `runTask` in `src/errors.ts`. One `useTask()` call is one busy
+flag and one message slot. `run` clears the message, sets busy, then on the
+way out shows an optional success string or `describeError`'s text, and
+always lowers busy — including when the work throws.
+
+```ts
+const { busy, message, setMessage, run } = useTask();
+
+void run(async () => {
+  await ensureSession();
+  await start({ kind, input });
+}, "Import started. You can leave this page open or come back later.");
+```
+
+Rename on destructuring when the screen already has its own words
+(`busy: pending`, `message: error`, `run: task` / `act`). Current owners:
+
+| Component                    | Hook                | Work it drives                                                                                              |
+| ---------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `src/App.tsx`                | `useTask` as `task` | search start, import, live lookup, read-link, interpret, web context, bookmarks, saved searches, email send |
+| `src/Dashboard.tsx`          | `useTask` as `run`  | the import form                                                                                             |
+| `src/library/AccountRow.tsx` | `useTask` as `act`  | retry, continue, stop                                                                                       |
+| `src/auth/EmailSignIn.tsx`   | `useTask` as `run`  | request code, verify code                                                                                   |
+
+`App` shares one slot across all of those actions, so a search spinner and an
+import notice are the same pair of states. That was true before the helper
+was extracted; do not split it unless the UI is meant to show two independent
+pending flags.
+
+### Why the helper is imported, not inlined
+
+The React Compiler cannot lower a `try` with a `finally` inside a component
+or hook body (`Handle TryStatement with a finalizer`). The call sites then
+fail react-doctor's impure-updater rule, because a function that mentions a
+`useState` setter counts as a state updater with side effects. `runTask` is
+a plain module-level function the compiler never analyses. `useTask` is the
+imported hook that owns the two pieces of state.
+
+A thin local wrapper would still fail. This is flagged the same way as the
+old in-component `task` / `act` helpers:
+
+```ts
+// Still an impure updater: the local function closes over setBusy.
+const task = (fn: () => Promise<unknown>) => runTask(fn, { setBusy, setMessage });
+```
+
+Reach the runner through the imported hook (or call `runTask` directly with
+explicit setters). Do not retype `try` / `catch` / `finally` around mutations
+inside a component.
+
+### Stale searches and `ensureSession`
+
+The search effect in `src/App.tsx` cannot use `task()` as-is: a superseded
+request must not clear a newer spinner. It calls `runTask` with setters that
+go quiet after cleanup:
+
+```ts
+let active = true;
+await runTask(fn, {
+  setBusy: (value) => {
+    if (active) setBusy(value);
+  },
+  setMessage: (value) => {
+    if (active) setNotice(value);
+  },
+});
+return () => {
+  active = false;
+};
+```
+
+`ensureSession` in the same file assigns the in-flight anonymous sign-in with
+`if (session.current === null)`, not `session.current ??= …`. The compiler
+cannot lower `??=` either, and the error text looks the same as the
+try/finally failure.
+
+### When not to use `useTask`
+
+`Dashboard.tsx`'s `Job` rows still use a local `try` / `catch` with no
+`finally`. They have no busy flag — only an error string — so the compiler
+rule does not apply. The dashboard "Connect to my jobs" button is the same
+shape around `ensureSession`. Do not "upgrade" those to `useTask` just for
+uniformity.
+
+A form's actual submit control needs `type="submit"` (search, the import
+forms in `App` and `Dashboard`, email sign-in, send-results). Non-submit
+controls in those forms use `type="button"`. Do not blanket-apply one type.
 
 ## Guest sessions and publication
 

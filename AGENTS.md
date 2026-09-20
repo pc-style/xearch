@@ -17,9 +17,12 @@ before adding a budget mechanism back.
 
 Use Bun with the committed `bun.lock`. The app uses TypeScript, React 19, Vite,
 and hosted Convex. Use Oxlint for linting, Oxfmt for formatting, and Vitest for
-tests. Do not introduce TypeScript `any` or suppress checks to make code pass
-unless explicitly requested. Keep changes scoped; do not add unrequested
-features or abstractions.
+tests. `bun run lint` is `oxlint && npx react-doctor@latest` (unpinned). Frontend
+async work that raises a busy flag must go through `useTask` / `runTask` in
+`src/errors.ts`; do not put `try` / `finally` or `??=` inside a component. See
+[docs/development.md](docs/development.md). Do not introduce TypeScript `any` or
+suppress checks to make code pass unless explicitly requested. Keep changes
+scoped; do not add unrequested features or abstractions.
 
 This repository is the shared application home. Convex owns application state;
 Prronsh owns the indexer and Elasticsearch implementation. Preserve the search
