@@ -47,7 +47,21 @@ Idempotency-Key: <sha256 of exact UTF-8 request body>
 
 `payload` is the complete decoded JSON response (including the entire `{profile, posts, meta}` history envelope), or one bulk NDJSON line when explicitly streaming. `request.format` distinguishes these; the profile preflight is labeled `resource: "profile"`. It is semantically preserved, not byte-identical to the original HTTP response. No credential headers enter the capture. `receivedAt` is when this collector observes the record; it is not a claim about the age of the upstream engagement snapshot. x.md can serve archived data; the normalizer must account for this and use provider freshness metadata when available. A metric refresh explicitly requests `refresh=true`.
 
-For bulk collection the profile response is handed off first, then the account's numeric ID is pinned before history is requested. Bodies contain at most 25 ordinary stream records per batch and have a 4 MB hard transport limit. Oversized records fail loudly; nothing is trimmed. A normal endpoint response remains one raw record, even if it contains multiple posts.
+For bulk collection the profile response is handed off first, then the account's numeric ID is pinned before history is requested. Bodies contain at most 25 ordinary stream records per batch and have a 4 MB hard transport limit. Oversized records fail loudly; nothing is trimmed. A normal endpoint response remains one raw record, even if it contains multiple posts — with one exception, below.
+
+### Split history pages
+
+A single history page can now carry up to 5000 posts, which does not fit in one 4 MB body (real captures run ~2.1-6.2 KB per post, and a measured live 5000-post request returned 3.4 MB for 1535 posts). Rather than failing such an import, the collector splits that one page across several captures and says so explicitly:
+
+```json
+{
+  "receivedAt": 1789776000000,
+  "payload": { "profile": {}, "posts": ["…a slice of this page…"], "meta": {} },
+  "part": { "index": 0, "of": 3, "totalPosts": 2500 }
+}
+```
+
+`part` is present only on a split page and never on any other record. Every part repeats the page's own envelope (`profile`, `meta`, and any unknown fields) verbatim and carries a disjoint slice of `posts` in the provider's original order, so concatenating `part.index` 0..`of-1` reproduces the page exactly; `totalPosts` is the whole page's post count. Parts are chosen by measured serialized bytes, not by a fixed post count. They arrive as separate captures with consecutive `sequence` values and their own content-addressed ids; all but the last are `terminal: "more"`, exactly like any other batched capture. The receiver deduplicates as usual — a replay of the same page produces the same parts, and the same ids for identical bytes.
 
 Return only after durable retention:
 
@@ -142,4 +156,4 @@ Up to 20 rows per page; dates in epoch milliseconds. Only tweetId, author, text,
 
 `X_MD_BASE_URL`: `https://mdfromx.com` (default) or `https://x.pcstyle.dev`. `X_MD_API_KEY` is sent only as a bearer header to the configured allowed origin. No automatic failover sends it to another host.
 
-Supported jobs: bulk history, live search, a post/conversation, profile, followers, following, and archive inspection. Production bulk jobs request JSON, up to 500 posts; `nextUntil` comes from its `meta.oldest` only when truncated. The receiver deduplicates inclusive boundaries. An explicit NDJSON collector remains available for bounded streaming, but never issues an oldest-based continuation: capped streams contain first arrivals, not necessarily the newest posts, so doing so could skip unseen newer records. Re-running the same account without `until` lets x.md top up its archive. `refresh:true` requests new snapshots. A handle reassignment pauses collection instead of combining different numeric account identities.
+Supported jobs: bulk history, live search, a post/conversation, profile, followers, following, and archive inspection. Production bulk jobs request JSON at x.md's documented per-request maximum of 5000 posts (`concurrency=8`); `nextUntil` comes from its `meta.oldest` only when truncated. The earlier 500-post request size was this app's own, not the provider's: it made a full account import spend ten requests where one now does, against an allowance x.md's live headers report as 20 imports per 15 minutes per API key. The receiver deduplicates inclusive boundaries. An explicit NDJSON collector remains available for bounded streaming, but never issues an oldest-based continuation: capped streams contain first arrivals, not necessarily the newest posts, so doing so could skip unseen newer records. Re-running the same account without `until` lets x.md top up its archive. `refresh:true` requests new snapshots. A handle reassignment pauses collection instead of combining different numeric account identities.
