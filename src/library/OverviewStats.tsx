@@ -1,7 +1,9 @@
 import type { DashboardSummary } from "../../convex/lib/contracts";
 import type { ServiceStatus } from "../../convex/summary";
+import type { ProviderLimit } from "../../convex/limits";
 import { SERVICE_DISPLAY_NAME, serviceHealthLabel } from "../integrationStatus";
 import { Badge, countValue, countWithUnit, formatRelative } from "./format";
+import ProviderLimits from "./ProviderLimits";
 
 /**
  * "Indexed posts", "Indexed people", the queue breakdown, and service
@@ -13,10 +15,12 @@ import { Badge, countValue, countWithUnit, formatRelative } from "./format";
 export default function OverviewStats({
   summary,
   health,
+  limits,
   connected,
 }: {
   summary: DashboardSummary | undefined;
   health: ServiceStatus[] | undefined;
+  limits: ProviderLimit[] | undefined;
   connected: boolean;
 }) {
   return (
@@ -92,6 +96,7 @@ export default function OverviewStats({
           configured. A stale reading is labelled stale, never shown as a fresh live zero.
         </p>
       </div>
+      <ProviderLimits limits={limits} />
     </section>
   );
 }

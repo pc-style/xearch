@@ -7,6 +7,8 @@ import type { Id } from "../convex/_generated/dataModel";
 import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contracts";
 import type { ServiceStatus } from "../convex/summary";
 import { summaryQuery, healthQuery } from "../src/library/summaryApi";
+import { limitsAllQuery } from "../src/library/limitsApi";
+import type { ProviderLimit } from "../convex/limits";
 
 /**
  * A rendered-DOM smoke test for src/library/*.tsx (to-do.md P0 "Replace the
@@ -183,5 +185,42 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     expect(html).toContain("ve imported.");
     expect(html).toContain("Connect to my library");
     expect(html).not.toContain("No accounts imported yet");
+  });
+
+  it("renders provider limits honestly: none observed vs. a real throttle fact, never jobs.error", () => {
+    reset();
+    setQuery(api.library.rows, []);
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const limits: ProviderLimit[] = [
+      { kind: "none", provider: "xmd" },
+      {
+        kind: "throttled",
+        provider: "receiver",
+        operation: "handoff",
+        reason: "Too many requests",
+        remaining: { kind: "unknown" },
+        observedAt: Date.now(),
+      },
+      { kind: "none", provider: "search" },
+    ];
+    setQuery(limitsAllQuery, limits);
+    const html = renderLibrary();
+    expect(html).toContain("Provider limits");
+    expect(html).toContain("No throttling reported");
+    expect(html).toContain("Throttled on handoff");
+    expect(html).toContain("Too many requests");
+    expect(html).toContain("remaining allowance unknown");
+  });
+
+  it("shows the provider-limits panel as loading, distinctly, before that query resolves", () => {
+    reset();
+    setQuery(api.library.rows, []);
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    // limitsAllQuery deliberately left unset in mockState.responses.
+    const html = renderLibrary();
+    expect(html).toContain("Provider limits");
+    expect(html).toContain("x.md: loading…");
   });
 });

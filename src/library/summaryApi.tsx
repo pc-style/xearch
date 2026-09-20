@@ -24,16 +24,22 @@ import type { ServiceStatus } from "../../convex/summary";
  * to `any`, so a shape mismatch here still fails `tsc --noEmit` like it
  * would through the generated `api` object.
  */
+// `now` is REQUIRED on both (convex/summary.ts's own validators: a query may
+// never read the wall clock itself, so the caller must supply it and refresh
+// it — see that file's comment on `summary`/`health`). This used to be typed
+// as `Record<string, never>` / `{ now?: number }`, which let src/library/
+// Library.tsx call both with `{}` and pass tsc while Convex would reject the
+// missing required arg at runtime; fixed together with that call site.
 export const summaryQuery = anyApi.summary.summary as unknown as FunctionReference<
   "query",
   "public",
-  Record<string, never>,
+  { now: number },
   DashboardSummary
 >;
 
 export const healthQuery = anyApi.summary.health as unknown as FunctionReference<
   "query",
   "public",
-  { now?: number },
+  { now: number },
   ServiceStatus[]
 >;

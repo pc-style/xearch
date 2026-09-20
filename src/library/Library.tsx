@@ -1,11 +1,20 @@
 import { useConvexAuth, useConvexConnectionState, useQuery } from "convex/react";
+import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { summaryQuery, healthQuery } from "./summaryApi";
+import { limitsAllQuery } from "./limitsApi";
 import OverviewStats from "./OverviewStats";
 import ActiveQueue from "./ActiveQueue";
 import AccountLibrary from "./AccountLibrary";
 import RecentActivity from "./RecentActivity";
 import "../dashboard.css";
+
+// convex/summary.ts's `summary`/`health` queries take `now` as a REQUIRED
+// arg (a query must never read the wall clock itself) and expect the caller
+// to refresh it so `observedAt`/`stale` actually advance — see that file's
+// own comment. An interval, not a one-time `Date.now()` at mount, is what
+// makes that true.
+const NOW_REFRESH_MS = 30_000;
 
 /**
  * The new import/library dashboard (to-do.md P0 "Replace the job wall with
@@ -26,8 +35,14 @@ import "../dashboard.css";
 export default function Library({ ensureSession }: { ensureSession: () => Promise<unknown> }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
-  const summary = useQuery(summaryQuery, isAuthenticated ? {} : "skip");
-  const health = useQuery(healthQuery, isAuthenticated ? {} : "skip");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), NOW_REFRESH_MS);
+    return () => clearInterval(id);
+  }, []);
+  const summary = useQuery(summaryQuery, isAuthenticated ? { now } : "skip");
+  const health = useQuery(healthQuery, isAuthenticated ? { now } : "skip");
+  const limits = useQuery(limitsAllQuery, isAuthenticated ? {} : "skip");
   // Unfiltered rows for the active-queue strip, independent of whatever
   // search/status filter is set inside <AccountLibrary>below. Same
   // convex/library.ts `rows` query, just a second live subscription with
@@ -42,7 +57,7 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
           necessarily the current state.
         </p>
       )}
-      <OverviewStats summary={summary} health={health} connected={connected} />
+      <OverviewStats summary={summary} health={health} limits={limits} connected={connected} />
       <AccountLibrary
         isAuthenticated={isAuthenticated}
         connected={connected}
