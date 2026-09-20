@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { ConvexHttpClient } from "convex/browser";
 import { collectXmd } from "../convex/lib/collect";
-import { XmdClient, ProviderError } from "../convex/lib/xmd";
+import { XmdClient, ProviderError, string } from "../convex/lib/xmd";
 import { deliverCapture } from "../convex/lib/handoff";
 const env = parseEnv(await readFile(".env.local", "utf8"));
 if (!env.X_MD_API_KEY) throw new Error("Local X_MD_API_KEY is required.");
@@ -87,8 +87,30 @@ for (;;) {
             await report({ event: "phase", phase });
           },
         );
-        const { profile: _rawProfile, ...summary } = result;
-        await report({ event: "finish", ...summary });
+        // The profile is what creates the account row, so it must travel —
+        // it used to be destructured off and dropped here, which left the
+        // production `accounts` table permanently empty even though every
+        // job had its identity pinned. Same shape and same validation
+        // convex/importer.ts applies on the in-Convex path: a handle that
+        // is actually a handle, an id we really pinned, and an avatar only
+        // when it is an https URL.
+        const { profile: rawProfile, ...summary } = result;
+        const screenName = rawProfile && string(rawProfile.screen_name);
+        await report({
+          event: "finish",
+          ...summary,
+          profile:
+            screenName && /^[A-Za-z0-9_]{1,15}$/.test(screenName) && result.expectedUserId
+              ? {
+                  handle: screenName.toLowerCase(),
+                  userId: result.expectedUserId,
+                  name: string(rawProfile!.name) ?? screenName,
+                  avatar: string(rawProfile!.avatar_url)?.startsWith("https://")
+                    ? string(rawProfile!.avatar_url)
+                    : undefined,
+                }
+              : undefined,
+        });
         console.log("Batch saved; production progress updated.");
       } catch (error) {
         // This worker is the only thing that talks to x.md in production, so
