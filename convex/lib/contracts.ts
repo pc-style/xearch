@@ -51,11 +51,21 @@ export const countValidator = v.union(
 export type Count = Infer<typeof countValidator>;
 
 // --- Dashboard summary -------------------------------------------------------
-// The scope a summary's counts are authorized over. Only "global" is used
-// today (accounts.ts has no per-user/collection scoping yet — see
-// to-do.md P1 "Derive authorized collection scope server-side"); "account" is
-// reserved for that later, narrower summary and is not wired to anything yet.
+// The scope a summary's counts are authorized over.
+//   - "owner": every account the signed-in caller has imported themselves,
+//     derived server-side from their own `jobs.owner` rows. This is what
+//     `convex/summary.ts` returns, and it is the ONLY scope the dashboard
+//     presents as the caller's own numbers.
+//   - "global": every account in the deployment. Never RETURNED by a summary
+//     any more — `convex/summary.ts` always reports "owner" — but still an
+//     accepted INPUT: `convex/search.ts` takes a caller-supplied scope and
+//     this is the one value its fail-closed gate allows, meaning "the whole
+//     shared corpus". Reachability differs by direction; do not delete it on
+//     the strength of the return side alone.
+//   - "account": a single account. Reserved for to-do.md P1's authorized
+//     collection access; not wired to anything yet.
 export const summaryScopeValidator = v.union(
+  v.object({ kind: v.literal("owner") }),
   v.object({ kind: v.literal("global") }),
   v.object({ kind: v.literal("account"), accountId: v.id("accounts") }),
 );
@@ -86,8 +96,11 @@ export const dashboardSummaryValidator = v.object({
   // state a true partial sum plus which accounts are excluded — see
   // docs/publication-contract.md "what unique means".
   indexedPosts: countValidator,
-  // unit "accounts" — distinct accounts with accountPublications.state ===
-  // "searchable". Links to the account-library rows below.
+  // unit "accounts" — distinct in-scope accounts with
+  // accountPublications.state === "searchable". With `scope.kind === "owner"`
+  // this is drawn from exactly the same account set as the account-library
+  // rows it links to, so the number and the list below it agree by
+  // construction rather than by coincidence.
   indexedAccounts: countValidator,
   queue: queueBreakdownValidator,
   scope: summaryScopeValidator,

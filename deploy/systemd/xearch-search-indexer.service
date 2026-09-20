@@ -44,6 +44,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 Environment=SEARCH_BASE_DIR=%h/xearch-search
+# Publication updates to Convex. Optional and absent by default: without
+# PUBLICATION_UPDATE_URL and PUBLICATION_SERVICE_TOKEN the indexer imports
+# exactly as before and reports nothing, so a deployment that has not set
+# these is unaffected rather than broken. Keep the file mode 0600 — it holds
+# a bearer token and must never be committed.
+EnvironmentFile=-%h/xearch-data/search/publication.env
 ExecStart=%h/.local/bin/xearch-search --base-dir ${SEARCH_BASE_DIR} watch
 StandardOutput=journal
 StandardError=journal

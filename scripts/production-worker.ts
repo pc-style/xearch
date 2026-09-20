@@ -91,6 +91,27 @@ for (;;) {
         await report({ event: "finish", ...summary });
         console.log("Batch saved; production progress updated.");
       } catch (error) {
+        // This worker is the only thing that talks to x.md in production, so
+        // it is the only place a provider's "slow down" is ever observed.
+        // Reported separately from the finish below: the job's outcome and
+        // what the provider said are two different facts, and the throttle
+        // observation must survive even if the finish is rejected as a stale
+        // attempt.
+        if (error instanceof ProviderError && error.throttle) {
+          const throttle = error.throttle;
+          await report({
+            event: "throttle",
+            throttle: {
+              provider: throttle.provider,
+              operation: throttle.operation,
+              reason: throttle.reason ?? error.message,
+              remaining: throttle.remaining,
+              resetAt: throttle.resetAt,
+              retryAfterMs: throttle.retryAfterMs,
+              observedAt: throttle.observedAt,
+            },
+          }).catch(() => {});
+        }
         await report({
           event: "finish",
           error:

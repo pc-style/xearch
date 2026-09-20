@@ -42,3 +42,80 @@ export const SERVICE_DISPLAY_NAME: Record<"indexer" | "receiver" | "search", str
   receiver: "Raw-capture receiver",
   search: "Search backend",
 };
+
+/**
+ * How recently the download worker must have checked in for the UI to call
+ * it live. Mirrors the worker's own expiry in `convex/worker.ts`, which
+ * schedules a row flip 45s after each heartbeat.
+ *
+ * Freshness is judged HERE, against the caller's own clock, and never
+ * server-side: a Convex query re-runs when a document it read changes, not
+ * because time passed, so a boolean decided inside the query would freeze at
+ * the last write and keep claiming the worker is live after it stopped.
+ */
+export const WORKER_LIVE_WINDOW_MS = 45_000;
+
+export type HandoffState =
+  | { kind: "configured"; ok: boolean }
+  /**
+   * `lastSeenAt` is absent for a signed-out caller — worker timing is not
+   * part of the public bootstrap response — and null when the worker is
+   * known to be down. Absent means "not disclosed", which is not the same
+   * claim as "down", so it resolves to undefined and the caller falls back
+   * to the public flag rather than asserting something it was not told.
+   */
+  | { kind: "live"; lastSeenAt?: number | null };
+
+/**
+ * Whether the capture handoff is currently usable, as of `now`.
+ * `undefined` means "not knowable from what we were given" — never "no".
+ */
+export function handoffReady(state: HandoffState | undefined, now: number): boolean | undefined {
+  if (!state) return undefined;
+  if (state.kind === "configured") return state.ok;
+  if (state.lastSeenAt === undefined) return undefined;
+  return state.lastSeenAt !== null && now - state.lastSeenAt < WORKER_LIVE_WINDOW_MS;
+}
+
+export type Connection = {
+  name: string;
+  ready: boolean | undefined;
+  purpose: string;
+  env?: string;
+  note?: string;
+  /**
+   * What `ready` actually proves. Almost every row reports whether an
+   * environment variable is set, which is a configuration fact and must not
+   * be worded as connectivity. A row is only "live" when its readiness comes
+   * from a real signal, such as the download worker's heartbeat.
+   */
+  proves?: "configured" | "live";
+};
+/**
+ * The "stores imported posts" row in the Connections panel means two
+ * different things depending on `convex/integrations.ts`'s `configured`
+ * query: in receiver mode it's a config question (set the env vars), in
+ * outbound mode it's a liveness question about the download worker (which
+ * reads RAW_CAPTURE_URL/TOKEN on its own machine — setting them here does
+ * nothing). Keep the vocabulary consistent with
+ * `integrationStatus.ts`'s `indexingUnavailableMessage`.
+ */
+export function receiverConnection(
+  collectorMode: "outbound" | "receiver" | undefined,
+  ready: boolean | undefined,
+): Connection {
+  if (collectorMode === "outbound")
+    return {
+      name: "Download worker",
+      ready,
+      purpose: "Stores imported posts",
+      note: "Connects to this deployment on its own and reconnects automatically — there's nothing to set here.",
+      proves: "live",
+    };
+  return {
+    name: "Raw capture receiver",
+    ready,
+    env: "RAW_CAPTURE_URL, RAW_CAPTURE_TOKEN",
+    purpose: "Stores imported posts",
+  };
+}

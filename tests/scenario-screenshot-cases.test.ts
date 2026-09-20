@@ -76,7 +76,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
       }),
     );
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE1 library.rows:", JSON.stringify(rows));
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("waiting_for_indexing"); // no publication update ever arrived
@@ -135,7 +135,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
       }),
     );
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE2 library.rows:", JSON.stringify(rows));
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("searchable");
@@ -157,7 +157,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     const { session } = await seedOwner(t);
     const now = Date.now();
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE3 library.rows (no imports at all):", JSON.stringify(rows));
     expect(rows).toEqual([]);
 
@@ -211,7 +211,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
       }),
     );
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE4 library.rows:", JSON.stringify(rows));
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("failed");

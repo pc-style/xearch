@@ -230,9 +230,20 @@ export default defineSchema({
     error: v.optional(v.string()),
     updatedAt: v.number(),
     readyAt: v.optional(v.number()),
+    // When the owner dismissed this finished run from their feeds, if they
+    // did. Dismissing HIDES a run; it never deletes it, and it never touches
+    // the `receipts` rows that prove a capture was durably stored — to-do.md
+    // P0 "Preserve receipts and failure evidence; do not delete records just
+    // to hide duplicates". Only a terminal run can be dismissed (see
+    // convex/jobs.ts `dismiss`), and `restore` clears this field again.
+    dismissedAt: v.optional(v.number()),
   })
     .index("by_status", ["status"])
     .index("by_owner", ["owner"])
+    // Kind belongs in the index, not in a `.filter()`: Convex applies a
+    // filter after the index scan, so filtering by kind would still read
+    // every job an owner has run to find their account imports among them.
+    .index("by_owner_and_kind", ["owner", "kind"])
     .index("by_input", ["kind", "input", "status"]),
   // One row per account: the current publication pipeline state plus the
   // last confirmed-searchable snapshot. These are deliberately separate

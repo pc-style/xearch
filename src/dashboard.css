@@ -118,6 +118,20 @@
   padding: 24px 0;
   border-top: 1px solid #363636;
 }
+/* A run the owner cleared from the list, shown only while "Show runs I've
+ * cleared" is on. Dimmed rather than restyled: it is the same record with
+ * the same actions, just no longer part of what they want to look at. */
+.control-job.is-dismissed {
+  opacity: 0.55;
+}
+.control-feed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: #a5a5a5;
+  font-size: 13px;
+}
 .control-job-heading {
   display: flex;
   justify-content: space-between;
@@ -209,6 +223,19 @@
   font-size: 13px;
   white-space: nowrap;
 }
+/* The header status badge (.control-online when live, .control-error when
+ * reconnecting) is a flex child of .control-header alongside the heading
+ * block. .control-error is shared with long-form error text elsewhere
+ * (job.error, the alert banner) that genuinely needs overflow-wrap: anywhere
+ * to break, so that rule stays global. Scoped to the header, the badge must
+ * never shrink below its one-word text ("Reconnecting…" has no space to
+ * break on), or the flex layout squeezes it until it breaks mid-word. */
+.control-header .control-online,
+.control-header .control-error {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  flex-shrink: 0;
+}
 @media (max-width: 760px) {
   .control-layout {
     grid-template-columns: 1fr;
@@ -219,11 +246,13 @@
   }
   .control-header {
     align-items: flex-start;
+    flex-wrap: wrap;
   }
   .control-header h1 {
     font-size: 34px;
   }
-  .control-online {
+  .control-header .control-online,
+  .control-header .control-error {
     margin-top: 8px;
   }
   .control-job-heading {

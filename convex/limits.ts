@@ -22,40 +22,19 @@ import { throttleProviderValidator } from "./schema";
  * this file can ever report is one the provider itself supplied; nothing
  * here reintroduces a self-imposed cap.
  *
- * Nothing writes to `providerThrottleEvents` yet — that is acquisition-side
- * implementation (convex/importer.ts / convex/lib/xmd.ts), out of scope for
- * this file per docs/publication-contract.md ("This table only records
- * observations; nothing in this task adds the code that writes to it").
- * Until something does, every query below honestly returns `{ kind: "none" }`
- * for every provider.
+ * Rows are written by `convex/importer.ts` and — in production, where
+ * COLLECTOR_MODE is outbound and the VM worker is the only thing that calls
+ * x.md — by `scripts/production-worker.ts` through `worker.report`'s
+ * "throttle" event. Facts are captured on error responses only, so a
+ * successful call's remaining allowance is not visible here, and
+ * `{ kind: "none" }` means "nothing has been observed", never "not
+ * throttled".
  *
- * Scope note — to-do.md P0 "Provider limits" is four separate bullets. This
- * file plus the dashboard wiring in src/library/ close two of them:
- *   - CLOSED: "Expose safe summary data through authenticated backend
- *     contracts." `current`/`all` are auth-gated via `user(ctx)` and return
- *     only derived provider-limit facts (never a raw state file, credential,
- *     or another user's data).
- *   - CLOSED (dashboard wiring): "show provider-reported throttling, remaining
- *     allowance ..., the affected operation, and the next retry time."
- *     `src/library/ProviderLimits.tsx` renders `limits.all`'s result and is
- *     mounted into the dashboard via `src/library/Library.tsx` ->
- *     `OverviewStats.tsx`, so a signed-in user can see this panel. It has
- *     nothing to show yet in production, though — see the next two bullets.
- *   - NOT CLOSED: "Respect provider Retry-After/retryAfter." `nextRetryAt`
- *     is computed correctly from `retryAfterMs` when a row has one, but no
- *     row is ever written in production yet (see the paragraph above), so
- *     this is only true of hypothetical rows a test inserts, not of running
- *     code. Closing it needs the write path in convex/importer.ts /
- *     convex/lib/xmd.ts, which is out of scope for this file.
- *   - NOT CLOSED (only trivially, today): "Separate current provider
- *     throttling from historical 'today's import limit' errors." True right
- *     now only because nothing is ever shown (empty table). Once the write
- *     path above exists, add a test that exercises this against data the
- *     acquisition path actually produced, not only synthetic rows a test
- *     inserts directly.
- * Do not report the remaining two bullets as closed until the write path
- * above exists and is tested end-to-end against data acquisition actually
- * produced, not only synthetic rows a test inserts directly.
+ * Evidence rather than a changelog: tests/provider-limits-writepath.test.ts
+ * drives the real acquisition path with the exact 429 body production
+ * retained on disk and asserts the reading that reaches the dashboard,
+ * including that an absent allowance reads "unknown" rather than 0 and that
+ * a stale application-cap string in jobs.error is never reported as current.
  */
 
 // Bounded read (Convex query guidelines: no unbounded `.collect()`).

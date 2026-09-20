@@ -127,7 +127,7 @@ describe("library.rows", () => {
       status: "complete",
       updatedAt: 3_000,
     });
-    const rows = await a.query(api.library.rows, {});
+    const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0].handle).toBe("adam");
     expect(rows[0].latestJob?.jobId).toBe(latest);
@@ -154,13 +154,13 @@ describe("library.rows", () => {
       postsReceived: 500,
       updatedAt: 2_000,
     });
-    const beforePublication = await a.query(api.library.rows, {});
+    const beforePublication = (await a.query(api.library.rows, {})).rows;
     expect(beforePublication).toHaveLength(1);
     expect(beforePublication[0].searchablePostCount).toEqual({ kind: "unknown", unit: "posts" });
     expect(beforePublication[0].publicationState).toBe("waiting_for_indexing");
 
     await insertPublication(t, { accountId, state: "searchable", searchablePostCount: 137 });
-    const afterPublication = await a.query(api.library.rows, {});
+    const afterPublication = (await a.query(api.library.rows, {})).rows;
     expect(afterPublication).toHaveLength(1);
     // Exactly the committed publication count, never 10_500 (summed count)
     // or 1_000 (summed postsReceived).
@@ -178,7 +178,7 @@ describe("library.rows", () => {
     await insertJob(t, alice, { kind: "live", input: "from:theo", status: "complete" });
     await insertJob(t, alice, { kind: "post", input: "https://x.com/adam/status/1", status: "complete" });
     await insertJob(t, alice, { kind: "followers", input: "adam", status: "complete" });
-    const rows = await a.query(api.library.rows, {});
+    const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0].handle).toBe("adam");
   });
@@ -205,7 +205,7 @@ describe("library.rows", () => {
       error: "x.md returned a 500.",
       updatedAt: 2_000,
     });
-    const rows = await a.query(api.library.rows, {});
+    const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     // Publication state is untouched by an acquisition-side job failure —
     // only an accepted publication update may move it (docs/publication-contract.md).
@@ -240,7 +240,7 @@ describe("library.rows", () => {
       status: "complete",
       updatedAt: 1_000,
     });
-    const rows = await a.query(api.library.rows, {});
+    const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("failed");
     expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 2_500 });
@@ -271,7 +271,7 @@ describe("library.rows", () => {
       status: "complete",
       updatedAt: 2_000,
     });
-    const rows = await a.query(api.library.rows, {});
+    const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(2);
     const byId = new Map(rows.map((row) => [row.accountId, row]));
     expect(byId.get(oldAccount)?.name).toBe("Original");
@@ -284,7 +284,7 @@ describe("library.rows", () => {
     // A run whose collectXmd attempt never reached pinIdentity: no
     // expectedUserId recorded on the job.
     await insertJob(t, alice, { input: "adam", status: "complete" });
-    const rows = await a.query(api.library.rows, {});
+    const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0].handle).toBe("adam");
   });
@@ -292,7 +292,7 @@ describe("library.rows", () => {
   it("drops a job whose identity cannot be resolved to any existing account row", async () => {
     const { t, alice, a } = await setup();
     await insertJob(t, alice, { input: "nobody-yet", status: "running" });
-    const rows = await a.query(api.library.rows, {});
+    const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(0);
   });
 
@@ -305,13 +305,13 @@ describe("library.rows", () => {
     await insertPublication(t, { accountId: searchableAccount, state: "searchable", searchablePostCount: 10 });
     await insertPublication(t, { accountId: failedAccount, state: "failed" });
 
-    const searchableOnly = await a.query(api.library.rows, { status: "searchable" });
+    const searchableOnly = (await a.query(api.library.rows, { status: "searchable" })).rows;
     expect(searchableOnly.map((r) => r.handle)).toEqual(["searchable-one"]);
 
-    const byName = await a.query(api.library.rows, { search: "findable" });
+    const byName = (await a.query(api.library.rows, { search: "findable" })).rows;
     expect(byName.map((r) => r.handle)).toEqual(["searchable-one"]);
 
-    const byHandle = await a.query(api.library.rows, { search: "FAILED-ONE" });
+    const byHandle = (await a.query(api.library.rows, { search: "FAILED-ONE" })).rows;
     expect(byHandle.map((r) => r.handle)).toEqual(["failed-one"]);
   });
 
@@ -319,7 +319,7 @@ describe("library.rows", () => {
     const { t, alice, b } = await setup();
     await insertAccount(t, { handle: "adam", userId: "1001" });
     await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
-    expect(await b.query(api.library.rows, {})).toHaveLength(0);
+    expect(((await b.query(api.library.rows, {}))).rows).toHaveLength(0);
     await expect(t.query(api.library.rows, {})).rejects.toThrow();
   });
 });

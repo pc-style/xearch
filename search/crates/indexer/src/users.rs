@@ -136,6 +136,210 @@ impl UserRecord {
     }
 }
 
+/// `reportedState` of a publication update.
+///
+/// Spelled as the wire contract spells it (`docs/publication-contract.md`,
+/// "Publication states"). Only the two states this indexer ever reports
+/// are modelled; `indexing` is the acquisition side's to send, not ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReportedState {
+    /// Posts for this account are live in the committed index.
+    Searchable,
+    /// The import itself failed; the envelope carries the verbatim reason.
+    Failed,
+}
+
+impl ReportedState {
+    /// The exact wire spelling; the receiver rejects anything else.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Searchable => "searchable",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// One publication update that was attempted but never got a response.
+///
+/// Stored whole so a later pass replays *that* update rather than
+/// rebuilding a new one from whatever drop file it happens to be looking
+/// at.
+///
+/// This exists because the receiver's contract is explicit
+/// (`docs/publication-contract.md`, "Idempotency and staleness"): a
+/// generation that is resent "must reflect the exact same content", and a
+/// duplicate generation carrying different content "is a sender-side bug".
+/// A transport failure does not spend the generation it used, so that
+/// number stays reserved for exactly this publication until a response
+/// finally comes back — which means the replay has to be the same bytes,
+/// `observedAt` included, so the `Idempotency-Key` matches too.
+///
+/// Every field is `#[serde(default)]`, so a `users.json` written before
+/// this field existed (or before `publications` existed at all) loads
+/// unchanged instead of being quarantined.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPublication {
+    /// `reportedState` the original attempt carried. `None` only in a
+    /// hand-edited or truncated registry; nothing is replayed without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_state: Option<ReportedState>,
+    /// The exact capture ids the original attempt claimed were processed —
+    /// what the receiver marks confirmed. Empty for a per-handle dump.
+    #[serde(default)]
+    pub capture_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique_post_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique_post_count_as_of: Option<i64>,
+    /// Verbatim import error, present exactly when `reported_state` is
+    /// `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// `observedAt` of the original attempt, replayed verbatim so the
+    /// resend is byte-identical and keeps the same `Idempotency-Key`.
+    #[serde(default)]
+    pub observed_at_ms: i64,
+}
+
+/// Identity an import could not report at the time it happened, because an
+/// earlier update for the same account was still owed a response.
+///
+/// The reserved generation belongs to that owed update, so a second update
+/// cannot go out at it — but the import *did* happen, and the capture ids
+/// it would have confirmed are the only thing that tells Convex those
+/// captures were processed. Dropping them leaves a capture that is in the
+/// index and invisible in the product forever, because the importer skips
+/// it on every later pass (it is already recorded) and so never publishes
+/// it again. So they are kept here, against the account, and folded into
+/// the next update that actually goes out.
+///
+/// Several stood-down imports coalesce into one of these
+/// ([`Self::absorb`]); the whole point is that one follow-on update can
+/// then truthfully name every capture they covered.
+///
+/// Every field is `#[serde(default)]`, so a `users.json` written before
+/// this field existed loads unchanged instead of being quarantined.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeferredPublication {
+    /// Every capture id the stood-down imports would have confirmed, in
+    /// the order they were imported, without duplicates.
+    #[serde(default)]
+    pub capture_ids: Vec<String>,
+    /// The most recent non-empty `runId` among them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// The most recent non-empty `providerAccountId` among them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
+    /// The state the most recent stood-down import would have reported.
+    /// `None` only in a hand-edited registry; nothing is sent without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_state: Option<ReportedState>,
+    /// Verbatim import error of that most recent import, present exactly
+    /// when [`Self::reported_state`] is `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// When the most recent import was stood down, for operator triage.
+    #[serde(default)]
+    pub updated_at_ms: i64,
+}
+
+impl DeferredPublication {
+    /// Fold a newer stood-down import into this one.
+    ///
+    /// Capture ids accumulate — every one of them still needs confirming.
+    /// The reported state (and its error) is the newest import's, because
+    /// that is the account's current condition; the older state would have
+    /// been superseded by the newer update anyway had both gone out.
+    pub fn absorb(&mut self, newer: Self) {
+        for id in newer.capture_ids {
+            if !self.capture_ids.contains(&id) {
+                self.capture_ids.push(id);
+            }
+        }
+        if newer.run_id.is_some() {
+            self.run_id = newer.run_id;
+        }
+        if newer.provider_account_id.is_some() {
+            self.provider_account_id = newer.provider_account_id;
+        }
+        if newer.reported_state.is_some() {
+            self.reported_state = newer.reported_state;
+            self.error = newer.error;
+        }
+        self.updated_at_ms = newer.updated_at_ms;
+    }
+}
+
+/// Durable per-account publication state sent to Convex's
+/// `POST /publication/update` (`docs/publication-contract.md`).
+///
+/// Keyed by the same normalized handle as `users`/`captures`.
+/// `#[serde(default)]` on every field (and the map itself, on [`Registry`])
+/// so a `users.json` written before this feature existed — no
+/// `publications` key at all — loads unchanged instead of being
+/// quarantined.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicationRecord {
+    /// Generation of the last update actually delivered: an HTTP response,
+    /// of any status, was received for it. Zero means nothing has ever been
+    /// sent for this account. The publication contract requires this to
+    /// increase by exactly one per delivered send and never be reused, so
+    /// it is bumped only when [`Registry::record_publish_delivered`] runs —
+    /// never spent on a send whose request never got a response.
+    #[serde(default)]
+    pub generation: u64,
+    /// `uniquePostCount` from the last successfully applied `searchable`
+    /// send (HTTP 200). Left alone by later `failed` sends or non-200
+    /// responses, mirroring `accountPublications.searchablePostCount`'s own
+    /// non-regression rule on the Convex side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_unique_post_count: Option<u64>,
+    /// `observedAt` (epoch ms) of that same last applied `searchable` send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_published_at_ms: Option<i64>,
+    /// The most recent publish-side problem: a transport failure (no
+    /// response ever received — DNS/connect/TLS/timeout) or a permanent
+    /// rejection (401/422/400) from the last delivered send. Cleared the
+    /// next time a send is delivered with a 200 response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_publish_error: Option<String>,
+    /// Set when the most recent send attempt never received an HTTP
+    /// response, so this account is owed a resend on a later pass. Cleared
+    /// by any delivered response (success or permanent rejection alike).
+    /// Never set for a permanent rejection — those are logged and left
+    /// alone rather than retried, per `AGENTS.md`'s "no self-imposed retry
+    /// spinning".
+    ///
+    /// Always accompanied by [`Self::pending`] when this indexer set it;
+    /// a registry written by an older build can carry the flag alone, and
+    /// then there is nothing to replay (see
+    /// [`crate::publish::replay_pending`]).
+    #[serde(default)]
+    pub transport_retry_pending: bool,
+    /// *What* is owed: the whole undelivered update, replayed verbatim at
+    /// the generation it reserved. `None` means nothing is in flight for
+    /// this account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<PendingPublication>,
+    /// What imports that stood down while [`Self::pending`] was owed would
+    /// have reported. Folded into the next update that actually goes out,
+    /// so a capture imported during an outage is still confirmed even
+    /// though the importer will never look at its file again. `None` means
+    /// nothing is waiting to be carried forward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred: Option<DeferredPublication>,
+}
+
 /// The registry file: versioned map of handle to record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Registry {
@@ -146,6 +350,11 @@ pub struct Registry {
     /// Imported capture files keyed by their content hash (filename stem).
     #[serde(default)]
     pub captures: HashMap<String, CaptureRecord>,
+    /// Publication state per account handle. Absent from any `users.json`
+    /// written before this feature existed; `#[serde(default)]` loads that
+    /// as an empty map rather than quarantining the file.
+    #[serde(default)]
+    pub publications: HashMap<String, PublicationRecord>,
 }
 
 const fn default_version() -> u8 {
@@ -158,11 +367,12 @@ impl Default for Registry {
             version: 1,
             users: HashMap::new(),
             captures: HashMap::new(),
+            publications: HashMap::new(),
         }
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -265,6 +475,79 @@ impl Registry {
         self.users
             .entry(handle.to_owned())
             .or_insert_with(|| UserRecord::fresh(now_ms()))
+    }
+
+    /// Fetch the publication record for a handle, inserting a fresh
+    /// (never-sent) one.
+    pub fn publication(&mut self, handle: &str) -> &mut PublicationRecord {
+        self.publications.entry(handle.to_owned()).or_default()
+    }
+
+    /// Record a delivered send (any HTTP response, whatever its status) at
+    /// `generation`: advance the watermark, drop the in-flight publication
+    /// and clear the retry flag.
+    /// `applied_searchable` carries `(uniquePostCount, observedAt)` only
+    /// when the delivered response was a successfully applied `searchable`
+    /// update; passing `None` leaves the previous sticky snapshot alone,
+    /// matching the non-regression rule this mirrors from the Convex side.
+    pub fn record_publish_delivered(
+        &mut self,
+        handle: &str,
+        generation: u64,
+        applied_searchable: Option<(u64, i64)>,
+        last_publish_error: Option<String>,
+    ) {
+        let record = self.publication(handle);
+        record.generation = generation;
+        record.transport_retry_pending = false;
+        // The generation is spent: whatever was in flight at it is done,
+        // whether the receiver applied it, ignored it as a duplicate, or
+        // rejected it outright.
+        record.pending = None;
+        // `deferred` is deliberately left alone: those capture ids were
+        // never in *this* update, and they stay owed until an update that
+        // actually names them is delivered.
+        if let Some((count, observed_at)) = applied_searchable {
+            record.last_unique_post_count = Some(count);
+            record.last_published_at_ms = Some(observed_at);
+        }
+        record.last_publish_error = last_publish_error;
+    }
+
+    /// Record that a send never received an HTTP response, keeping the
+    /// update itself so a later pass can replay exactly it. The generation
+    /// watermark is left untouched so the same number is reused on the
+    /// next attempt — nothing was ever delivered at it.
+    ///
+    /// An update already waiting on this account is never replaced: the
+    /// reserved generation belongs to it, the receiver may already have
+    /// committed it, and resending that number with different content is
+    /// the sender-side bug `docs/publication-contract.md` names outright.
+    pub fn record_publish_transport_failure(
+        &mut self,
+        handle: &str,
+        error: &str,
+        attempted: PendingPublication,
+    ) {
+        let record = self.publication(handle);
+        record.transport_retry_pending = true;
+        record.last_publish_error = Some(error.to_owned());
+        let _ = record.pending.get_or_insert(attempted);
+    }
+
+    /// Keep what an import would have reported but could not, because an
+    /// update for the same account was still owed a response.
+    ///
+    /// Merged into anything already deferred for that account
+    /// ([`DeferredPublication::absorb`]) so several stood-down imports
+    /// during one outage become one truthful follow-on update rather than
+    /// the last one silently winning.
+    pub fn defer_publication(&mut self, handle: &str, deferral: DeferredPublication) {
+        let record = self.publication(handle);
+        match record.deferred.as_mut() {
+            Some(existing) => existing.absorb(deferral),
+            None => record.deferred = Some(deferral),
+        }
     }
 
     /// Mark a successful import. Zero accepted posts is an error, not a

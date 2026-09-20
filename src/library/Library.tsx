@@ -47,7 +47,8 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
   // search/status filter is set inside <AccountLibrary>below. Same
   // convex/library.ts `rows` query, just a second live subscription with
   // different args — Convex serves each set of args as its own cached query.
-  const allRows = useQuery(api.library.rows, isAuthenticated ? {} : "skip");
+  const allLibrary = useQuery(api.library.rows, isAuthenticated ? {} : "skip");
+  const allRows = allLibrary?.rows;
 
   return (
     <div className="library">

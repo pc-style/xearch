@@ -34,7 +34,12 @@ import Dashboard from "./Dashboard";
 import { ResultsSection, Avatar } from "./ResultsSection";
 import { AccountBadge } from "./auth/AccountBadge";
 import { EmailSignIn } from "./auth/EmailSignIn";
-import { indexingUnavailableMessage } from "./integrationStatus";
+import {
+  handoffReady,
+  indexingUnavailableMessage,
+  receiverConnection,
+  type Connection,
+} from "./integrationStatus";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
@@ -57,7 +62,13 @@ const fromLocation = () => {
     includeStats: params.get("stats") === "1",
   };
 };
-
+const safeHostname = (url: string) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "Linked page";
+  }
+};
 function Modal({
   title,
   children,
@@ -297,19 +308,29 @@ export default function App() {
     setReading(true);
     void task(() => runRead(url)).finally(() => setReading(false));
   };
-  const connections = [
+  // Worker liveness is judged against this clock, not inside the Convex
+  // query — a query re-runs when a document changes, never because time
+  // passed, so a server-decided boolean would stay true after the worker
+  // went quiet. Ticking here lets the badge decay on its own.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(id);
+  }, []);
+  const connections: Connection[] = [
     {
       name: "Search service",
       ready: configured?.search,
       env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
       purpose: "Finds posts in your library",
     },
-    {
-      name: "Raw capture receiver",
-      ready: configured?.handoff,
-      env: "RAW_CAPTURE_URL, RAW_CAPTURE_TOKEN",
-      purpose: "Stores imported posts",
-    },
+    // Falls back to the public flag when the timestamp was not disclosed
+    // (signed out), so a visitor sees exactly what they saw before worker
+    // timing was ever returned, rather than a permanent "Checking…".
+    receiverConnection(
+      configured?.collectorMode,
+      handoffReady(configured?.handoffState, now) ?? configured?.handoff,
+    ),
     {
       name: "x.md",
       ready: configured?.xmd,
@@ -851,8 +872,23 @@ export default function App() {
                 <strong>{c.name}</strong>
                 <p>{c.purpose}</p>
                 <small>
-                  {c.ready ? <Check size={12} /> : <span className="status-dot" />} {c.ready ? "Configured" : "Not configured"} · {c.env}
+                  {configured === undefined ? (
+                    "Checking…"
+                  ) : (
+                    <>
+                      {c.ready ? <Check size={12} /> : <span className="status-dot" />}{" "}
+                      {c.ready
+                        ? c.proves === "live"
+                          ? "Connected"
+                          : "Configured"
+                        : c.proves === "live"
+                          ? "Not connected"
+                          : "Not configured"}
+                      {c.env ? ` · ${c.env}` : ""}
+                    </>
+                  )}
                 </small>
+                {c.note && <small>{c.note}</small>}
               </div>
             </div>
           ))}

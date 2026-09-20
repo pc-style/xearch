@@ -1,5 +1,73 @@
-import { XmdClient, ProviderError, record, string, type RawObject } from "./xmd";
-import type { Capture, Receipt } from "./handoff";
+import {
+  XmdClient,
+  ProviderError,
+  record,
+  string,
+  MAX_POSTS_PER_PAGE,
+  type RawObject,
+} from "./xmd";
+import { CAPTURE_MAX_BYTES, jsonBytes, type Capture, type Receipt } from "./handoff";
+
+/**
+ * Bytes of provider payload allowed in one capture. `deliverCapture` rejects a
+ * capture body over `CAPTURE_MAX_BYTES` outright (`capture_too_large`), so this
+ * leaves ~1 MB for the capture envelope, per-record metadata, and any UTF-8
+ * accounting drift — derived from that ceiling rather than restated, so raising
+ * the receiver's limit cannot leave this slicing to a stale size. It is a
+ * transport budget, not a usage budget: it never slows, paces, or caps what we
+ * ask the provider for.
+ */
+const CAPTURE_BUDGET = CAPTURE_MAX_BYTES - 1_000_000;
+/** Per-record allowance for the `part` metadata and record framing. */
+const RECORD_OVERHEAD = 256;
+/** Ordinary stream records per capture (docs/integration-contract.md). */
+const RECORDS_PER_CAPTURE = 25;
+/** A payload and the serialized size that was measured while producing it. */
+export type SizedPayload = { payload: RawObject; bytes: number };
+/**
+ * Split one oversized history page into envelope-shaped parts that each fit in
+ * a capture. Every part repeats the page's own envelope (profile, meta, and any
+ * unknown fields) verbatim and carries a disjoint, in-order slice of `posts`,
+ * so concatenating the slices reproduces the provider's page exactly. Slicing
+ * is driven by measured serialized bytes, never an assumed posts-per-capture
+ * count: real captures on this machine range from ~2.1 KB to ~6.2 KB per post.
+ *
+ * A 5,000-post page is 11-15 MB, so it is measured exactly once: each post is
+ * serialized a single time and every other figure — the whole page's size, and
+ * each part's — is arithmetic on those bytes. Each part carries its size out so
+ * the caller never serializes it again.
+ */
+export function splitHistoryPage(envelope: RawObject, budget = CAPTURE_BUDGET): SizedPayload[] {
+  const posts = envelope.posts;
+  if (!Array.isArray(posts) || posts.length < 2)
+    return [{ payload: envelope, bytes: jsonBytes(envelope) }];
+  // `{...envelope, posts: []}` keeps the provider's key order, so this is the
+  // exact fixed cost every part pays before its own posts are added: a part is
+  // this envelope, its posts' own bytes, and one comma between each pair.
+  const empty = jsonBytes({ ...envelope, posts: [] });
+  const sizes = posts.map((post) => jsonBytes(post));
+  // Exactly what serializing the whole page would report, without doing it:
+  // the empty envelope, every post, and the n-1 commas between them.
+  const whole = sizes.reduce((total, size) => total + size, empty + posts.length - 1);
+  if (whole <= budget) return [{ payload: envelope, bytes: whole }];
+  const overhead = empty + RECORD_OVERHEAD;
+  const parts: SizedPayload[] = [];
+  let slice: unknown[] = [];
+  let size = overhead;
+  const push = () => parts.push({ payload: { ...envelope, posts: slice }, bytes: size });
+  for (const [index, post] of posts.entries()) {
+    const cost = sizes[index] + 1; // the separating comma
+    if (slice.length && size + cost > budget) {
+      push();
+      slice = [];
+      size = overhead;
+    }
+    slice.push(post);
+    size += cost;
+  }
+  if (slice.length) push();
+  return parts;
+}
 
 export type CollectionRequest = {
   runId: string;
@@ -59,16 +127,34 @@ export async function collectXmd(
     bytes = 0;
     sequence++;
   };
-  const add = async (payload: RawObject) => {
-    const size = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
-    if (size > 3_000_000)
+  // `size` is the payload's serialized bytes. Split history parts were already
+  // measured while being sliced, so they pass theirs in rather than paying for
+  // a second serialization of an up-to-3 MB record.
+  const add = async (
+    payload: RawObject,
+    size = jsonBytes(payload),
+    part?: Capture["records"][number]["part"],
+  ) => {
+    if (size > CAPTURE_BUDGET)
       throw new ProviderError(
         "oversized_record",
         "A provider record is too large for this handoff. It was not shortened or normalized.",
       );
-    if (pending.length && (pending.length >= 25 || bytes + size > 3_000_000)) await flush("more");
-    pending.push({ receivedAt: now(), payload });
+    if (pending.length && (pending.length >= RECORDS_PER_CAPTURE || bytes + size > CAPTURE_BUDGET))
+      await flush("more");
+    pending.push({ receivedAt: now(), payload, ...(part ? { part } : {}) });
     bytes += size;
+  };
+  // One history page can hold up to MAX_POSTS_PER_PAGE posts, which is more
+  // than a single 4 MB capture can carry. Hand the page off in parts rather
+  // than failing the whole import with `capture_too_large`; the parts flush
+  // into separate captures through `add` above.
+  const addHistory = async (envelope: RawObject) => {
+    const parts = splitHistoryPage(envelope);
+    if (parts.length === 1) return add(parts[0].payload, parts[0].bytes);
+    const totalPosts = Array.isArray(envelope.posts) ? envelope.posts.length : 0;
+    for (const [index, part] of parts.entries())
+      await add(part.payload, part.bytes, { index, of: parts.length, totalPosts });
   };
   try {
     if (request.kind === "bulk") {
@@ -98,7 +184,11 @@ export async function collectXmd(
       await onStage?.("Fetching account history from x.md");
       let terminal: RawObject | undefined;
       const options = {
-        maxPosts: 500,
+        // Ask for the provider's documented per-request maximum. x.md returns
+        // `meta.truncated` when a range exceeds it, and `nextUntil` continues
+        // from `meta.oldest`, so a larger page never loses posts — it just
+        // spends far fewer requests against the provider's own allowance.
+        maxPosts: MAX_POSTS_PER_PAGE,
         since: request.since,
         until: request.until,
         refresh: request.refresh,
@@ -106,7 +196,7 @@ export async function collectXmd(
       if (request.format !== "ndjson") {
         const response = await client.history(request.input, options);
         // Preserve the complete provider envelope, including future fields.
-        await add(response);
+        await addHistory(response);
         if (!Array.isArray(response.posts) || !response.meta)
           throw new ProviderError(
             "invalid_history",
@@ -131,7 +221,10 @@ export async function collectXmd(
             "invalid_history",
             "x.md history is missing its embedded profile on a first (non-continuation) page.",
           );
-        if (response.profile !== undefined && string(record(response.profile).id) !== expectedUserId)
+        if (
+          response.profile !== undefined &&
+          string(record(response.profile).id) !== expectedUserId
+        )
           throw new ProviderError(
             "identity_mismatch",
             "Account identity changed during history collection. Raw captures need downstream review.",
