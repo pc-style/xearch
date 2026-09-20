@@ -1,11 +1,20 @@
-# Publication contract (proposal — not yet implemented)
+# Publication contract
 
-Status: this is the contract adam sends Pronsh to agree before either side builds a
-publication receiver or a sender against it. Nothing in this document is wired up yet.
-`convex/schema.ts` has the tables and `convex/lib/contracts.ts` has the validators and
-TypeScript types described below; no receiver mutation, HTTP route, or dashboard query
-exists yet, and none of this changes the existing raw-capture or search contracts in
-`docs/integration-contract.md`.
+Status: this is the contract adam sends Pronsh to agree on the sender/indexer side.
+The receiving side below is now implemented and tested against a local convex-test
+deployment only, ahead of that agreement — not because agreement stopped mattering,
+but because the app-side receiver, dashboard queries, and their tests do not require
+Pronsh's sender to exist. `convex/schema.ts` has the tables, `convex/lib/contracts.ts`
+has the validators and TypeScript types, `convex/publication.ts` plus the
+`POST /publication/update` route in `convex/http.ts` are the receiver, and
+`convex/summary.ts` / `convex/library.ts` / `convex/limits.ts` are the dashboard
+queries built on them (`tests/publication.test.ts`, `tests/summary.test.ts`,
+`tests/library.test.ts`, `tests/limits.test.ts`,
+`tests/scenario-publication-lifecycle.test.ts`). No real indexer has ever called this
+route, the URL has not been shared with Pronsh, and nothing in "Open assumptions"
+below has been confirmed — to-do.md P0 ("Agree the summary/publication contract with
+the collaborator before parallel implementation") is still unchecked. None of this
+changes the existing raw-capture or search contracts in `docs/integration-contract.md`.
 
 Scope: this covers the boundary between "a raw capture has been durably received" and
 "an account's posts are confirmed searchable." It does not implement, and does not ask
@@ -183,28 +192,37 @@ Authentication failures are rejected at the transport layer (401) before any of 
 above runs; whether to also log the attempt is an implementation choice for whoever
 builds the receiver, not fixed by this document.
 
-## Delivery (proposed, not built)
+## Delivery
 
 - **Direction:** push. The indexer calls an authenticated Convex HTTP endpoint,
   mirroring the existing raw-capture handoff's push model
   (`RAW_CAPTURE_URL`/`RAW_CAPTURE_TOKEN` in `docs/integration-contract.md`), rather
-  than Convex polling the indexer for status. **Assumption** — if Pronsh's side can
-  only support us polling, the envelope shape above is unaffected but this section
-  needs to flip.
-- **Auth:** a dedicated bearer token, following the existing `serviceToken` capability
-  pattern in `convex/lib/serviceAuth.ts` (which already isolates `"search"` and
-  `"capture"` capabilities and never falls one back to the other). This document
-  proposes a third capability, `"publication"`, with its own env var (for example
-  `PUBLICATION_SERVICE_TOKEN`), falling back to `DATA_SERVICE_TOKEN` only per the same
-  legacy-fallback convention the other two already use. Not implemented here —
-  `convex/lib/serviceAuth.ts` is unchanged by this task.
-- **No route exists yet.** `convex/http.ts` today registers only the auth routes, the
-  AgentMail webhook, and static hosting (see the publication-boundary reader's
-  findings) — there is no publication-update route to point Pronsh's sender at until
-  one is built against `publicationUpdateEnvelope`.
-- **Response (proposed):** on acceptance, return the `outcome` and the account's
-  resulting `committedGeneration`, so the sender can tell a genuine acceptance from a
-  stale/duplicate no-op. Exact response shape is the receiver implementer's choice.
+  than Convex polling the indexer for status. **Assumption, still unconfirmed** — if
+  Pronsh's side can only support us polling, the envelope shape above is unaffected
+  but this section needs to flip.
+- **Auth:** implemented in `convex/publication.ts` as `publicationServiceToken()` — a
+  local, narrower copy of the `serviceToken` capability pattern in
+  `convex/lib/serviceAuth.ts` (which isolates `"search"` and `"capture"` and never
+  falls one back to the other): reads `PUBLICATION_SERVICE_TOKEN`, falling back to
+  `DATA_SERVICE_TOKEN` only, the same legacy-fallback convention the other two use.
+  `convex/lib/serviceAuth.ts` itself is unchanged — this capability was deliberately
+  kept as a local copy in `convex/publication.ts` rather than folded in there (see
+  that file's own header comment).
+- **The route exists.** `convex/http.ts` registers `POST /publication/update`
+  (`convex/publication.ts`'s `receiveUpdate`), built against
+  `publicationUpdateEnvelope` exactly as specified above. It has only ever been
+  called by `t.fetch(...)` in `tests/publication.test.ts` and `tests/
+  scenario-publication-lifecycle.test.ts`, against an in-memory convex-test
+  deployment; no real indexer has called it and the URL has not been given to
+  Pronsh.
+- **Response:** implemented as `{ outcome, committedGeneration?, rejectionReason? }`
+  — HTTP 200 for `applied`/`stale_ignored`/`duplicate_ignored`, 422 for
+  `rejected_invalid`, 401 for `rejected_unauthorized` — so the sender can tell a
+  genuine acceptance from a stale/duplicate no-op or a rejection. The 200/401 cases
+  and the underlying `rejected_invalid`/`applied`/etc. outcomes are exercised by
+  `tests/publication.test.ts` (its HTTP-transport tests cover 401/400/200; the 422
+  mapping itself is only reached through `applyUpdate`'s direct mutation tests, not
+  a `t.fetch` call asserting status 422). Not yet confirmed with Pronsh.
 
 ## Provider throttle facts
 
@@ -239,9 +257,10 @@ limits reader's findings). x.md itself is not tracked here — it is a per-call
 third-party dependency, covered by `providerThrottleEvents` instead of a standing
 health row.
 
-Nothing in this task adds the code that writes to `serviceHealth`. A natural source for
-`indexer` health, once the receiver above exists, is "did we receive a publication
-update recently" — but that wiring is a later implementation step, not fixed here.
+Nothing in this task adds the code that writes to `serviceHealth`. Now that the
+receiver above exists, a natural source for `indexer` health is "did we receive a
+publication update recently" — but that wiring (reading `publicationUpdates` and
+writing a `serviceHealth` row from it) is a later implementation step, not done here.
 
 ## Dashboard-facing shapes
 
@@ -255,12 +274,13 @@ comments in `convex/lib/contracts.ts` for exactly what each count means and how 
 scoped; this document does not repeat them to avoid the two drifting apart.
 
 `queueBreakdownValidator.savedCapturesAwaitingIndexing` (unit `"captures"`) is the one
-bucket without a stored counter behind it yet: the guidance (not a binding requirement)
-is to derive it as receipts whose `captureId` has not appeared in any accepted
-`publicationUpdates.captureIds` for that account. If that join proves too expensive at
-scale, a denormalized per-capture status table is a reasonable future addition — not
-built now, since it is not needed until the receiver above exists and this bucket has
-real data to show.
+bucket without a stored counter behind it: `convex/summary.ts`'s
+`computeSavedCapturesAwaitingIndexing` derives it exactly as guided here — receipts
+whose `captureId` has not appeared in any accepted `publicationUpdates.captureIds` for
+that account, deduped per account across all of an owner's bulk jobs (`tests/
+summary.test.ts`). If that join proves too expensive at real production scale, a
+denormalized per-capture status table is a reasonable future addition — not built,
+since the join has not been measured against real volume yet.
 
 ## Explicitly out of scope here
 
@@ -274,8 +294,10 @@ real data to show.
 - Authorized/scoped collection access (to-do.md P1) — `summaryScopeValidator` reserves
   a shape for it (`{ kind: "account", accountId }`) but nothing computes or enforces it
   yet; only `{ kind: "global" }` is meaningful today.
-- Any actual receiver mutation, HTTP route, or dashboard query — this document and the
-  two files above freeze the shapes; implementing against them is later work.
+- Confirming any "Open assumption" below with Pronsh, and anything on the
+  sender/indexer side that would actually call `POST /publication/update` — the
+  receiver, schema, and dashboard queries are implemented and tested against
+  convex-test only (see "Status" above); a real indexer has never called this route.
 
 ## Open assumptions, listed together
 

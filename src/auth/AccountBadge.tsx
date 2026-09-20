@@ -13,7 +13,8 @@ export type AccountBadgeProps = {
  * sign-out action. Renders nothing while `me` is loading or the visitor has
  * no session at all.
  *
- * Not wired into the app yet - see EmailSignIn.tsx's doc comment.
+ * Wired into the app in src/App.tsx's Connections panel - see
+ * EmailSignIn.tsx's doc comment.
  */
 export function AccountBadge({ className }: AccountBadgeProps) {
   const me = useQuery(api.auth.me);

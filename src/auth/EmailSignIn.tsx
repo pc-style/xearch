@@ -22,13 +22,10 @@ export type EmailSignInProps = {
  * needed (e.g. the Connections panel or a settings page) and style the
  * className/child elements to match.
  *
- * Not wired into the app yet: nothing under src/ outside this directory
- * imports EmailSignIn or AccountBadge today, so guest-only anonymous
- * sign-in (src/App.tsx's ensureSession) is still the only reachable path
- * for a user of the running app. That wiring - plus threading
- * api.email.preview into the existing send modal - touches src/App.tsx
- * (or src/Dashboard.tsx), which is outside this change's owned files;
- * it's tracked as separate follow-up work, not implied to be done here.
+ * Wired into the app in src/App.tsx: it renders inside the "Email these
+ * results" modal (gating Send until the caller has a verified email) and in
+ * the Connections panel, alongside AccountBadge. src/App.tsx also threads
+ * api.email.preview into that same send modal.
  */
 export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
   const { signIn } = useAuthActions();

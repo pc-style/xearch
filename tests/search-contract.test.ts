@@ -8,8 +8,9 @@ import { api, internal } from "../convex/_generated/api";
  * docs/integration-contract.md ("Search service") so a drift in the wire
  * request/response shape, or in this app's own error/authorization
  * behavior, breaks a test here instead of surfacing first in the product.
- * See docs/publication-contract.md for the separate, still-proposed
- * publication-update boundary — not touched by this file.
+ * See docs/publication-contract.md for the separate publication-update
+ * boundary (covered by tests/publication.test.ts and friends) — not touched
+ * by this file.
  */
 
 const modules = import.meta.glob("../convex/**/*.ts");

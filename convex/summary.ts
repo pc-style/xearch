@@ -292,18 +292,10 @@ export const summary = query({
   // names ("pass the current time in as an argument and let the client
   // refresh it").
   //
-  // COORDINATION NOTE for whoever wires this up outside this unit's owned
-  // files (convex/summary.ts, tests/summary.test.ts): src/library/
-  // summaryApi.tsx currently types `summaryQuery`'s args as
-  // `Record<string, never>` and src/library/Library.tsx calls it as
-  // `useQuery(summaryQuery, isAuthenticated ? {} : "skip")` — neither passes
-  // `now`. Making this arg required does not, by itself, make tsc catch that
-  // mismatch (summaryApi.tsx's FunctionReference type is hand-written, not
-  // generated from this validator), so that calling code will fail at
-  // RUNTIME (Convex will reject the missing required arg) until both files
-  // are updated together to pass `{ now: Date.now() }` and refresh it (e.g.
-  // `useState`/`setInterval`). This is a required follow-up, not an
-  // optional cleanup — flagged here and in this unit's handoff notes.
+  // src/library/summaryApi.tsx types `summaryQuery`'s args as `{ now: number }`
+  // (not `Record<string, never>`) and src/library/Library.tsx calls it as
+  // `useQuery(summaryQuery, isAuthenticated ? { now } : "skip")`, refreshing
+  // `now` on a `setInterval` — done together with making this arg required.
   args: { now: v.number() },
   returns: dashboardSummaryValidator,
   handler: async (ctx, args): Promise<DashboardSummary> => {
@@ -371,19 +363,13 @@ export const health = query({
   // REQUIRED, not optional-with-a-Date.now()-fallback. An optional `now`
   // that defaults to `Date.now()` inside the handler is the exact anti-
   // pattern convex/_generated/ai/guidelines.md "Do not read the wall clock
-  // inside a query" warns about: whenever the caller omits it (as src/
-  // library/Library.tsx does today, passing `{}`), this query would still
-  // read the wall clock on every recompute — but a recompute only happens
-  // when args or a watched document change, not merely because time passed,
-  // so `stale` would freeze at whatever was true at the last recompute
-  // instead of tracking real time. Making the arg required forces every
-  // caller to decide how it refreshes `now` (e.g. an interval that bumps a
-  // piece of state and re-passes it), rather than silently getting a wrong
-  // answer. See convex/summary.ts's `summary` query above for the identical
-  // fix and the same coordination note: src/library/summaryApi.tsx and src/
-  // library/Library.tsx (not owned by this unit) still pass no `now` and
-  // must be updated to do so, or the live query will start rejecting the
-  // missing required arg at runtime.
+  // inside a query" warns about: a recompute only happens when args or a
+  // watched document change, not merely because time passed, so `stale`
+  // would freeze at whatever was true at the last recompute instead of
+  // tracking real time. Making the arg required forces every caller to
+  // decide how it refreshes `now` — see `summary` above for the identical
+  // fix: src/library/summaryApi.tsx and src/library/Library.tsx pass and
+  // refresh `now` for both queries the same way.
   args: { now: v.number() },
   returns: v.array(serviceStatusValidator),
   handler: async (ctx, args): Promise<ServiceStatus[]> => {

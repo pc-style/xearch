@@ -315,27 +315,22 @@ describe("digest preview and explicit send", () => {
   });
 });
 
-describe("the only session src/App.tsx can actually reach today", () => {
-  // src/App.tsx's `ensureSession` (around line 305) never calls
-  // `signIn("email", ...)` - it only ever calls `signIn("anonymous")` before
-  // opening the "Email these results" modal (around line 1016), which then
-  // calls `send({ sessionId, recipient })` directly. Neither
-  // src/auth/EmailSignIn.tsx nor src/auth/AccountBadge.tsx is imported by
-  // src/App.tsx, src/Dashboard.tsx, or src/main.tsx (confirmed in this run:
-  // `grep -rn "EmailSignIn|AccountBadge" src --include=*.tsx --include=*.ts
-  // | grep -v '^src/auth/'` returns no matches) - wiring either component in
-  // is outside this change's owned files (convex/auth.ts, convex/auth.config.ts,
-  // convex/email.ts, src/auth/*.tsx (new), tests/journey.test.ts only; not
-  // src/App.tsx or src/Dashboard.tsx). This test reproduces, at the
-  // convex-test level, exactly the identity App.tsx's reachable code path
-  // produces - an Anonymous-provider session, nothing else - and shows the
-  // now-unconditional gate in convex/email.ts's `send` (correctly hardened
-  // against the prior fail-open REQUIRE_VERIFIED_EMAIL default) rejects it.
-  // That gate is intentionally not weakened here to make this pass: today,
-  // through the actually-running app, "Send results" always fails for a real
-  // user until src/App.tsx is wired to a verified-email sign-in, which is
-  // out of scope for this change and tracked as separate follow-up work.
-  it("reproduces the live regression: an anonymous-only session (App.tsx's ensureSession) can never pass the verified-email send gate", async () => {
+describe("an anonymous-only session can never pass the verified-email send gate", () => {
+  // src/App.tsx's `ensureSession` (around line 306) calls `signIn("anonymous")`
+  // to authenticate search/import actions - that identity alone reaches
+  // `send({ sessionId, recipient })` if the person never completes email
+  // sign-in. src/App.tsx also mounts src/auth/EmailSignIn.tsx (in the "Email
+  // these results" modal, gating Send until a verified email exists, and in
+  // the Connections panel) and src/auth/AccountBadge.tsx (Connections panel),
+  // so a verified identity is reachable too - see EmailSignIn.tsx's own doc
+  // comment. This test covers the anonymous branch specifically: it drives,
+  // at the convex-test level, exactly the identity an anonymous-only visitor
+  // has, and shows the unconditional gate in convex/email.ts's `send`
+  // (hardened against the prior fail-open REQUIRE_VERIFIED_EMAIL default)
+  // rejects it. That gate is not weakened here to make this pass: an
+  // anonymous session must always fail to send, by design, regardless of
+  // whether the person went through EmailSignIn first.
+  it("rejects an anonymous session's send attempt even though EmailSignIn offers a verified path", async () => {
     const t = setup();
     const anon = await t.action(api.auth.signIn, { provider: "anonymous", params: {} });
     expect(anon.tokens).toBeTruthy();
@@ -356,9 +351,9 @@ describe("the only session src/App.tsx can actually reach today", () => {
         warnings: [],
       }),
     );
-    // Matches src/App.tsx:1027-1028's call shape exactly (sessionId + the
-    // form's recipient field) - only the identity differs, and it can't:
-    // App.tsx has no other way to obtain one.
+    // Matches src/App.tsx's send-form call shape (sessionId + the verified
+    // address) with an anonymous identity standing in for a visitor who has
+    // not been through EmailSignIn - the case this describe block covers.
     await expect(
       identity.mutation(api.email.send, { sessionId, recipient: "reader@example.com" }),
     ).rejects.toThrow("verified email");
@@ -373,10 +368,12 @@ describe("component rendering (src/auth/*.tsx)", () => {
   // outside this change's owned files - so these are static-markup render
   // checks (react-dom/server, same no-new-dependency technique
   // tests/library-ui.test.ts already uses for src/library/Library.tsx), not
-  // interactive/clicked-through DOM tests. They prove the two new components
-  // render their documented states correctly in isolation; they cannot prove
-  // reachability from a real user's browser, because - per the describe
-  // block above - nothing outside src/auth/ imports them yet.
+  // interactive/clicked-through DOM tests. They prove the two components
+  // render their documented states correctly in isolation; they do not
+  // exercise src/App.tsx's own mounting of them (the modal/Connections-panel
+  // wiring). No test in this repo renders src/App.tsx itself (only src/
+  // main.tsx does, at runtime) - that wiring is unverified by an automated
+  // test today.
   it("EmailSignIn renders the request-code step by default", () => {
     const markup = renderToStaticMarkup(createElement(EmailSignIn, {}));
     expect(markup).toContain("Email address");

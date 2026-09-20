@@ -30,18 +30,17 @@ import { throttleProviderValidator } from "./schema";
  * for every provider.
  *
  * Scope note — to-do.md P0 "Provider limits" is four separate bullets. This
- * file, by itself, closes exactly one of them:
+ * file plus the dashboard wiring in src/library/ close two of them:
  *   - CLOSED: "Expose safe summary data through authenticated backend
  *     contracts." `current`/`all` are auth-gated via `user(ctx)` and return
  *     only derived provider-limit facts (never a raw state file, credential,
  *     or another user's data).
- *   - NOT CLOSED: "show provider-reported throttling, remaining allowance
- *     ..., the affected operation, and the next retry time." This is a
- *     dashboard requirement and nothing in `src/` calls `limits.current` or
- *     `limits.all` yet (verified this session:
- *     `rg -n "limits\.(current|all)|api\.limits" src/` — no matches). Until a
- *     panel (e.g. in src/library/OverviewStats.tsx) consumes these queries,
- *     no user can see this data.
+ *   - CLOSED (dashboard wiring): "show provider-reported throttling, remaining
+ *     allowance ..., the affected operation, and the next retry time."
+ *     `src/library/ProviderLimits.tsx` renders `limits.all`'s result and is
+ *     mounted into the dashboard via `src/library/Library.tsx` ->
+ *     `OverviewStats.tsx`, so a signed-in user can see this panel. It has
+ *     nothing to show yet in production, though — see the next two bullets.
  *   - NOT CLOSED: "Respect provider Retry-After/retryAfter." `nextRetryAt`
  *     is computed correctly from `retryAfterMs` when a row has one, but no
  *     row is ever written in production yet (see the paragraph above), so
@@ -54,9 +53,9 @@ import { throttleProviderValidator } from "./schema";
  *     path above exists, add a test that exercises this against data the
  *     acquisition path actually produced, not only synthetic rows a test
  *     inserts directly.
- * Do not report this file as closing the other three bullets until the
- * dashboard wiring and the write path above both exist and are tested
- * end-to-end.
+ * Do not report the remaining two bullets as closed until the write path
+ * above exists and is tested end-to-end against data acquisition actually
+ * produced, not only synthetic rows a test inserts directly.
  */
 
 // Bounded read (Convex query guidelines: no unbounded `.collect()`).
