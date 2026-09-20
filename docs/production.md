@@ -25,7 +25,7 @@ CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx @convex-dev/static-hosting upload --
 
 AgentMail delivery events for the configured sender inbox are registered at `https://utmost-kudu-321.convex.site/agentmail/webhook`. The inbox-scoped API succeeded; the organization-level create route rejected the key. `AGENTMAIL_WEBHOOK_SECRET` is configured in production. Incoming email processing is not registered. No email was sent during setup.
 
-Production imports use an outbound worker. At the September 20 integration check the VM worker, capture receiver, search API, continuous indexer, and nginx were running. Do not start a second worker or restart the active worker as routine verification. Follow the coordinated cutover steps below for any future worker move. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata, receipts, and provider-throttle observations return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. `scripts/setup-worker.mjs` configures its production credential without printing it.
+Production imports use an outbound worker. At the September 20 integration check the VM worker, capture receiver, search API, continuous indexer, and nginx were running. Do not start a second worker or restart the active worker as routine verification. Follow the coordinated cutover steps below for any future worker move. The worker authenticates to production with `.local-captures/worker-token`, claims one due job at a time, downloads directly from x.md, and saves to the private loopback receiver. Only job metadata, receipts, and provider-throttle observations return to Convex. No inbound port or public tunnel is used. The UI marks the worker offline within 45 seconds without a heartbeat. Each poll also forwards what the worker just observed about the loopback capture receiver, which is the only thing that ever sees it (see "Service health" below). `scripts/setup-worker.mjs` configures its production credential without printing it.
 
 `COLLECTOR_MODE=outbound` means Convex never talks to x.md or the capture receiver: `convex/importer.ts` returns before reading `RAW_CAPTURE_URL`/`RAW_CAPTURE_TOKEN`, so setting them on the production deployment does nothing. The worker reads them on its own machine, and the Connections UI labels that row "Download worker" rather than listing env vars. Worker liveness is expiry-driven: `worker.heartbeat` writes `collector.online` and schedules `worker.expire` 45 seconds later (`convex/worker.ts`), and the browser re-checks the disclosed `lastSeen` against its own clock. A Convex query does not re-run because time passed, so liveness must never be computed from `Date.now()` inside `integrations.configured`. Details: [the control plane](control-plane.md).
 
@@ -40,6 +40,52 @@ A TLS probe against the production route mutated no account state: an unknown ha
 Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; a guest session cannot send production email.
 
 Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. Browser visual checks were unavailable during deployment.
+
+## Service health
+
+The dashboard reports two different things and must never confuse them:
+
+- **Configured** (`convex/integrations.ts`'s `configured`) means an environment
+  variable is set. That is all it means.
+- **Health** (`serviceHealth`, written by `convex/health.ts`, read by
+  `convex/summary.ts`'s `health` query) means something was actually observed
+  working, with the time it last worked. A service that has never reported
+  reads "No health report received yet" — nothing is seeded at deploy time to
+  make the panel look populated.
+
+Three writers, one row per service:
+
+| Service | Written by | Observation |
+| --- | --- | --- |
+| `indexer` | the Rust indexer, once per poll pass (`search/crates/indexer/src/health.rs`) | the pass completed, or failed with its verbatim error |
+| `search` | a Convex cron every 2 minutes (`convex/crons.ts` → `health.probeSearch`) | `GET <SEARCH_API_URL origin>/health` answered `ok` |
+| `receiver` | the production download worker, on every poll (`scripts/production-worker.ts` → `worker:poll`) | `http://127.0.0.1:4319/health` answered |
+
+`lastSuccessAt` is only ever stamped from an observed success and is never
+erased by a later failure; `lastError` carries the reporter's real error text.
+Readings older than five minutes are shown as stale rather than trusted.
+
+Report endpoint: `POST https://utmost-kudu-321.convex.site/service/health`,
+bearer-authenticated, failing closed when unconfigured. Its capability token is
+`SERVICE_HEALTH_TOKEN` on the Convex deployment (falling back to the legacy
+`DATA_SERVICE_TOKEN`), set like any other secret:
+
+```sh
+CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set SERVICE_HEALTH_TOKEN
+```
+
+The Rust indexer sends its heartbeat only when both `SERVICE_HEALTH_URL` (the
+route above) and `SERVICE_HEALTH_TOKEN` (or `DATA_SERVICE_TOKEN`) are present in
+its environment; without them the heartbeat is a complete no-op and the indexer
+imports exactly as before. `xearch-search-indexer.service` already reads
+`%h/xearch-data/search/publication.env`, so both variables belong in that file
+(mode 0600, never committed) next to the publication credentials. A heartbeat
+can never fail or interrupt an import pass, and the worker's health report can
+never fail a poll or move a job's status.
+
+Neither the indexer heartbeat nor the search cron has been observed running
+against the production deployment yet: `SERVICE_HEALTH_TOKEN` is not set there,
+and nothing in this change deploys itself.
 
 ## VM services
 
@@ -111,6 +157,8 @@ systemctl --user status xearch-production-worker.service
 systemctl --user status xearch-frontend.service
 systemctl --user status xearch-search-indexer.service
 curl --fail --silent http://127.0.0.1:4319/health
+curl --fail --silent http://127.0.0.1:4320/health
+curl --fail --silent http://127.0.0.1:4321/health
 curl --fail --silent http://127.0.0.1:8080/
 ss -ltnp 'sport = :4319'
 ```

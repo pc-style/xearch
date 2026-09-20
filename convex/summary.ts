@@ -9,6 +9,7 @@ import {
   dashboardSummaryValidator,
   type Count,
   type DashboardSummary,
+  type ProviderQueuedWork,
   type QueueBreakdown,
 } from "./lib/contracts";
 
@@ -54,23 +55,49 @@ function unknownCount(unit: Count["unit"]): Count {
   return { kind: "unknown", unit };
 }
 
-// --- Queued-post counts / provider "pending work" (NOT implemented here) ---
-// to-do.md P0 "Show queued-post counts only when known. Unknown provider
-// history size is 'unknown,' not zero or an invented estimate." is NOT
-// covered by this query. The data exists —
-// accountPublications.pendingWork / publicationUpdateFields.pendingWork
-// (convex/schema.ts, docs/publication-contract.md "pendingWork") is written
-// by convex/publication.ts whenever the indexer reports it — but
-// dashboardSummaryValidator and queueBreakdownValidator (convex/lib/
-// contracts.ts) have no field to carry a pendingWork total out to the
-// dashboard, and that file is frozen and not one of this unit's owned files
-// (convex/summary.ts, tests/summary.test.ts). Adding this bullet for real
-// needs a new Count-shaped field on one of those two validators, which is a
-// contract change outside this unit's scope. Left honestly unimplemented and
-// untested rather than claimed as covered — do not read this comment as
-// permission to bolt an ad hoc extra field onto the return value here; that
-// would be exactly the kind of parallel mechanism the frozen contract exists
-// to prevent.
+// --- Provider-reported queued work (to-do.md "Show queued-post counts only
+// when known") ------------------------------------------------------------
+// accountPublications.pendingWork is the indexer's own statement of what it
+// still has outstanding for one account, in whichever unit it chose to
+// report: jobs | captures | posts (convex/schema.ts
+// pendingWorkUnitValidator, written by convex/publication.ts on any applied
+// update). Three rules decide how it reaches the dashboard, and the first
+// two are why it is three counts and not one number:
+//
+//   1. Units are never merged. Different accounts can report different units
+//      in the same summary. Adding a capture count (files) to a post count
+//      and calling the result "queued posts" would be precisely the "count
+//      of files labelled as a count of posts" the bullet forbids, so each
+//      unit is tallied and shown under its own label.
+//   2. Silence is never zero. An account whose publication row carries no
+//      pendingWork has told us nothing — an update that omits the field
+//      means "nothing to say about outstanding work", not "there is none"
+//      (convex/publication.ts, docs/publication-contract.md "omit when
+//      unknown — never send a guessed count"). A unit no in-scope account
+//      has ever reported is therefore "unknown". A unit some account DID
+//      report on is "known", even when the tally is 0, because then someone
+//      actually looked and said so.
+//   3. Same owner scope as every other account-derived figure here: it is
+//      computed in the one pass over the caller's own accounts below, off
+//      the publication rows already being read, so it adds no extra read and
+//      cannot describe an account this caller never imported.
+type PendingWorkUnit = NonNullable<Doc<"accountPublications">["pendingWork"]>["unit"];
+type PendingWorkTally = { reported: boolean; sum: number };
+
+function emptyPendingWorkTallies(): Record<PendingWorkUnit, PendingWorkTally> {
+  return {
+    jobs: { reported: false, sum: 0 },
+    captures: { reported: false, sum: 0 },
+    posts: { reported: false, sum: 0 },
+  };
+}
+
+// `reported`, never `sum > 0`, is what separates known from unknown here:
+// "the indexer told us 0 posts are left" and "no account ever mentioned
+// posts" are different claims and must not render as the same number.
+function pendingWorkCount(unit: PendingWorkUnit, tally: PendingWorkTally): Count {
+  return tally.reported ? knownCount(unit, tally.sum) : unknownCount(unit);
+}
 
 // --- Indexed posts / indexed people (owner-scoped) ----------------------
 //
@@ -80,13 +107,18 @@ function unknownCount(unit: Count["unit"]): Count {
 // scan is bounded by one person's own imports; past that bound the totals
 // report "unknown" instead of presenting a partial sum as a complete one.
 
-async function computeIndexTotals(
+async function computeAccountTotals(
   ctx: QueryCtx,
   accountIds: Id<"accounts">[],
-): Promise<{ indexedPosts: Count; indexedAccounts: Count }> {
+): Promise<{
+  indexedPosts: Count;
+  indexedAccounts: Count;
+  providerQueuedWork: ProviderQueuedWork;
+}> {
   let sum = 0;
   let unknown = false;
   let searchableAccounts = 0;
+  const pendingWork = emptyPendingWorkTallies();
   for (const accountId of accountIds) {
     // `.first()` rather than `.unique()`: by_account is not
     // uniqueness-enforced by the schema, and a second row for one account
@@ -98,6 +130,13 @@ async function computeIndexTotals(
       .first();
     if (!publication) continue;
     if (publication.state === "searchable") searchableAccounts += 1;
+    if (publication.pendingWork !== undefined) {
+      // Tallied under the unit it was reported in, never coerced into
+      // another one. See "Provider-reported queued work" above.
+      const tally = pendingWork[publication.pendingWork.unit];
+      tally.reported = true;
+      tally.sum += publication.pendingWork.count;
+    }
     if (publication.searchablePostCount !== undefined) {
       // Sticky "last known good" snapshot: included regardless of the
       // account's CURRENT state, per the non-regression guarantee — a
@@ -127,6 +166,11 @@ async function computeIndexTotals(
     // count to indexedPosts but is not counted here, since it is not
     // currently indexed.
     indexedAccounts: knownCount("accounts", searchableAccounts),
+    providerQueuedWork: {
+      posts: pendingWorkCount("posts", pendingWork.posts),
+      captures: pendingWorkCount("captures", pendingWork.captures),
+      jobs: pendingWorkCount("jobs", pendingWork.jobs),
+    },
   };
 }
 
@@ -323,17 +367,28 @@ export const summary = query({
       }
     }
     // Truncation is the caller's fact, not part of summing: past the bound
-    // neither total can honestly describe "every account this caller
-    // imported", which is what the scope below claims.
-    const { indexedPosts, indexedAccounts } = accountJobs.truncated
-      ? { indexedPosts: unknownCount("posts"), indexedAccounts: unknownCount("accounts") }
-      : await computeIndexTotals(ctx, accountIds);
+    // none of these can honestly describe "every account this caller
+    // imported", which is what the scope below claims — including the
+    // queued-work totals, since the accounts we could not read may be the
+    // ones with work outstanding.
+    const { indexedPosts, indexedAccounts, providerQueuedWork } = accountJobs.truncated
+      ? {
+          indexedPosts: unknownCount("posts"),
+          indexedAccounts: unknownCount("accounts"),
+          providerQueuedWork: {
+            posts: unknownCount("posts"),
+            captures: unknownCount("captures"),
+            jobs: unknownCount("jobs"),
+          },
+        }
+      : await computeAccountTotals(ctx, accountIds);
     return {
       indexedPosts,
       indexedAccounts,
       queue,
+      providerQueuedWork,
       // Everything above is scoped to this caller's own imports — see
-      // computeIndexTotals. convex/lib/contracts.ts summaryScopeValidator's
+      // computeAccountTotals. convex/lib/contracts.ts summaryScopeValidator's
       // "account" variant remains reserved for to-do.md P1's authorized
       // collection access and is not wired to anything.
       scope: { kind: "owner" },
@@ -401,8 +456,14 @@ export const health = query({
     for (const service of SERVICES) {
       const row = await ctx.db
         .query("serviceHealth")
-        .withIndex("by_service", (q) => q.eq("service", service))
-        .unique();
+        .withIndex("by_service_and_observed", (q) => q.eq("service", service))
+      // Newest observation wins. `by_service` alone orders by nothing the
+      // caller cares about, so `.first()` on it would return an arbitrary
+      // row rather than the current reading.
+      .order("desc")
+        // `.first()`, not `.unique()`: by_service has no uniqueness
+        // guarantee, and a duplicate row must not take the query down.
+        .first();
       if (!row) {
         out.push({ service, kind: "unknown" });
         continue;

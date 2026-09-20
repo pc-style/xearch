@@ -169,6 +169,9 @@ fn config_in(
         state_dir: dir.join("state"),
         poll_interval: std::time::Duration::from_secs(1),
         publish,
+        // These tests exercise publication only; a heartbeat would add a
+        // second unrelated request per pass.
+        health: None,
     };
     std::fs::create_dir_all(&config.drop_dir)?;
     Ok(config)
@@ -1619,4 +1622,39 @@ fn a_loopback_http_endpoint_still_delivers() {
         Some("Bearer t")
     );
     assert_eq!(registry.publications.get("tess").unwrap().generation, 1);
+}
+
+/// A heartbeat carries the same bearer token a publication update does, so a
+/// cleartext endpoint is refused the same way — before a config exists that
+/// could send one.
+#[test]
+fn a_non_loopback_http_health_endpoint_is_refused() {
+    let refused = search_indexer::health::HealthConfig::new(
+        "http://example.com/service/health".to_owned(),
+        "super-secret".to_owned(),
+    );
+    let message = refused
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+    assert!(
+        message.contains("SERVICE_HEALTH_URL") && message.contains("cleartext"),
+        "the refusal must name the variable and say why: {message}"
+    );
+    assert!(
+        !message.contains("super-secret"),
+        "the refusal must never echo the token: {message}"
+    );
+}
+
+#[test]
+fn a_loopback_http_health_endpoint_is_accepted() {
+    assert!(
+        search_indexer::health::HealthConfig::new(
+            "http://127.0.0.1:9/service/health".to_owned(),
+            "t".to_owned(),
+        )
+        .is_ok(),
+        "a loopback test endpoint must still work"
+    );
 }

@@ -44,7 +44,9 @@
 //! commands; no token or other secret is written anywhere in this
 //! repository or logged by this sender.
 
-mod transport;
+// Shared with `crate::health`, which sends its heartbeat over this exact
+// client rather than standing up a second HTTP stack.
+pub(crate) mod transport;
 
 use crate::users::{DeferredPublication, PendingPublication, Registry, ReportedState, now_ms};
 use search_model::{Error, Result};
@@ -93,7 +95,7 @@ impl PublishConfig {
     /// bytes never touch a network.
     pub fn new(url: impl Into<String>, token: impl Into<String>) -> Result<Self> {
         let url = url.into();
-        check_endpoint_is_encrypted(&url)?;
+        check_endpoint_is_encrypted("PUBLICATION_UPDATE_URL", &url)?;
         Ok(Self {
             url,
             token: token.into(),
@@ -124,7 +126,7 @@ impl PublishConfig {
     }
 }
 
-fn non_empty_env(name: &str) -> Option<String> {
+pub(crate) fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
@@ -137,26 +139,25 @@ fn non_empty_env(name: &str) -> Option<String> {
 /// other `http://` host, and anything that is not an absolute HTTP(S) URL
 /// at all, is rejected here: the caller never gets a `PublishConfig`, so
 /// no request is ever constructed.
-fn check_endpoint_is_encrypted(url: &str) -> Result<()> {
+pub(crate) fn check_endpoint_is_encrypted(variable: &str, url: &str) -> Result<()> {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("https://") {
         return Ok(());
     }
     let Some(after_scheme) = lower.strip_prefix("http://") else {
-        return Err(Error::Invalid(
-            "PUBLICATION_UPDATE_URL must be an absolute https:// URL (plain http:// is accepted \
-             only for a loopback test endpoint)."
-                .into(),
-        ));
+        return Err(Error::Invalid(format!(
+            "{variable} must be an absolute https:// URL (plain http:// is accepted only for a \
+             loopback test endpoint)."
+        )));
     };
     let host = host_of(after_scheme);
     if is_loopback_host(host) {
         return Ok(());
     }
     Err(Error::Invalid(format!(
-        "PUBLICATION_UPDATE_URL points at http:// host {host:?}, which would send \
-         PUBLICATION_SERVICE_TOKEN over the network in cleartext. Use https://, or a loopback \
-         host (127.0.0.1, ::1, localhost) for a local test endpoint."
+        "{variable} points at http:// host {host:?}, which would send its bearer token over the \
+         network in cleartext. Use https://, or a loopback host (127.0.0.1, ::1, localhost) for \
+         a local test endpoint."
     )))
 }
 

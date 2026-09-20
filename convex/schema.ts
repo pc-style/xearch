@@ -323,7 +323,13 @@ export default defineSchema({
     lastSuccessAt: v.optional(v.number()),
     lastError: v.optional(v.object({ message: v.string(), observedAt: v.number() })),
     observedAt: v.number(),
-  }).index("by_service", ["service"]),
+  })
+    .index("by_service", ["service"])
+    // `service` alone cannot answer "the newest observation": an index
+    // orders by its own columns, and picking a row without observedAt in the
+    // key means picking an arbitrary one. Readers use this and take the
+    // first in descending order.
+    .index("by_service_and_observed", ["service", "observedAt"]),
   receipts: defineTable({
     jobId: v.id("jobs"),
     captureId: v.string(),

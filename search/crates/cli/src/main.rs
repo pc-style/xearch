@@ -271,6 +271,43 @@ async fn run_serve(index: &std::path::Path, listen: SocketAddr) -> color_eyre::R
     Ok(())
 }
 
+/// Build the watcher's configuration from flags, environment, and the shared
+/// base directory. Split out of `main` so the entry point stays readable as
+/// the config grows; every path resolution keeps its own flag/env hint.
+fn watch_config(
+    index: std::path::PathBuf,
+    base: Option<&PathBuf>,
+    archive: Option<PathBuf>,
+    drop_dir: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
+    poll_secs: u64,
+) -> color_eyre::Result<search_indexer::Config> {
+    Ok(search_indexer::Config {
+        index,
+        archive: resolve_dir(archive, base, "archive", "--archive / SEARCH_ARCHIVE_DIR")?,
+        drop_dir: resolve_dir(drop_dir, base, "drop", "--drop-dir / SEARCH_DROP_DIR")?,
+        state_dir: resolve_dir(state_dir, base, "state", "--state-dir / SEARCH_STATE_DIR")?,
+        poll_interval: std::time::Duration::from_secs(poll_secs.clamp(1, 3600)),
+        publish: search_indexer::publish::PublishConfig::from_env(),
+        health: search_indexer::health::HealthConfig::from_env(),
+    })
+}
+
+/// What the watcher resolved, so an operator can see at a glance whether
+/// publication and heartbeats are on before wondering why nothing arrives.
+fn announce(config: &search_indexer::Config) {
+    let state = |on: bool| if on { "enabled" } else { "disabled" };
+    eprintln!(
+        "indexer resolved index={} archive={} drop={} state={} publish={} heartbeat={}",
+        config.index.display(),
+        config.archive.display(),
+        config.drop_dir.display(),
+        config.state_dir.display(),
+        state(config.publish.is_some()),
+        state(config.health.is_some()),
+    );
+}
+
 #[tokio::main(worker_threads = 2)]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
@@ -305,41 +342,15 @@ async fn main() -> color_eyre::Result<()> {
             state_dir,
             poll_secs,
         } => {
-            let config = search_indexer::Config {
-                index: resolve_top_index()?,
-                archive: resolve_dir(
-                    archive,
-                    top_base.as_ref(),
-                    "archive",
-                    "--archive / SEARCH_ARCHIVE_DIR",
-                )?,
-                drop_dir: resolve_dir(
-                    drop_dir,
-                    top_base.as_ref(),
-                    "drop",
-                    "--drop-dir / SEARCH_DROP_DIR",
-                )?,
-                state_dir: resolve_dir(
-                    state_dir,
-                    top_base.as_ref(),
-                    "state",
-                    "--state-dir / SEARCH_STATE_DIR",
-                )?,
-                poll_interval: std::time::Duration::from_secs(poll_secs.clamp(1, 3600)),
-                publish: search_indexer::publish::PublishConfig::from_env(),
-            };
-            eprintln!(
-                "indexer resolved index={} archive={} drop={} state={} publish={}",
-                config.index.display(),
-                config.archive.display(),
-                config.drop_dir.display(),
-                config.state_dir.display(),
-                if config.publish.is_some() {
-                    "enabled"
-                } else {
-                    "disabled"
-                },
-            );
+            let config = watch_config(
+                resolve_top_index()?,
+                top_base.as_ref(),
+                archive,
+                drop_dir,
+                state_dir,
+                poll_secs,
+            )?;
+            announce(&config);
             search_indexer::watch(config).await?;
             Ok(())
         }

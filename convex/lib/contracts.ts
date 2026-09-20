@@ -88,6 +88,41 @@ export const queueBreakdownValidator = v.object({
 });
 export type QueueBreakdown = Infer<typeof queueBreakdownValidator>;
 
+// --- Provider-reported queued work -------------------------------------------
+// What the INDEXER says is still outstanding for the in-scope accounts:
+// accountPublications.pendingWork, written from
+// publicationUpdateFields.pendingWork on any applied update
+// (convex/schema.ts, convex/publication.ts).
+//
+// Deliberately NOT a fifth field inside queueBreakdownValidator above. Those
+// four buckets are work this app can see for itself, derived from our own
+// jobs and receipts; this is the far side's self-reported backlog, in
+// whichever unit the far side chose. Sitting it beside them would invite
+// reading it as one more slice of the same total, and it is not the same
+// total.
+//
+// One Count PER UNIT, never one merged number. `pendingWork.unit` is
+// jobs | captures | posts (schema.ts pendingWorkUnitValidator) and two
+// accounts in one summary can report different units, so a single figure
+// would have to add captures (files) to posts and then label the result
+// something — exactly the "count of files labelled as a count of posts" that
+// docs/publication-contract.md "What 'unique' means" and to-do.md forbid.
+// Split per unit, every number keeps the label it was reported under.
+//
+// A unit is "known" only when at least one in-scope account actually
+// reported pendingWork in that unit. An account whose publication row has no
+// pendingWork has told us nothing — convex/publication.ts is explicit that an
+// update omitting the field means "this update has nothing to say about
+// outstanding work", not "there is none" — so silence reads "unknown", never
+// 0. A known 0 here means an account did report, in that unit, that nothing
+// is left.
+export const providerQueuedWorkValidator = v.object({
+  posts: countValidator,
+  captures: countValidator,
+  jobs: countValidator,
+});
+export type ProviderQueuedWork = Infer<typeof providerQueuedWorkValidator>;
+
 export const dashboardSummaryValidator = v.object({
   // unit "posts" — sum of accountPublications.searchablePostCount across the
   // scope below. NEVER a sum of jobs.count (accepted raw records) or
@@ -103,6 +138,11 @@ export const dashboardSummaryValidator = v.object({
   // construction rather than by coincidence.
   indexedAccounts: countValidator,
   queue: queueBreakdownValidator,
+  // The indexer's own outstanding work for the in-scope accounts, one
+  // Count per unit it can report in. See providerQueuedWorkValidator above
+  // for why this is three separate counts rather than one total, and why a
+  // unit nobody reported is "unknown" rather than 0.
+  providerQueuedWork: providerQueuedWorkValidator,
   scope: summaryScopeValidator,
   // When this summary was computed (assigned by the query/action that built
   // it). A summary is a point-in-time read, not a live guarantee.
