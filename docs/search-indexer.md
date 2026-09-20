@@ -78,6 +78,8 @@ Every intake account is one record, keyed by normalized handle
       "lastUniquePostCount": 42,
       "lastPublishedAtMs": 1789826880797,
       "transportRetryPending": false
+      // when an update is owed, this is true and a "pending" object holds
+      // that exact update — see "Publishing to Convex" below
     }
   }
 }
@@ -224,16 +226,40 @@ followed by one publish attempt for that handle:
 - `generation` is a durable, monotonically increasing per-account counter
   (`publications.<handle>.generation` in `users.json`) that only advances
   when an HTTP response — of any status — was actually received. A
-  transport failure (no response at all) leaves it untouched and sets
-  `transportRetryPending: true`, so the same account is retried on a later
-  poll pass without waiting for new bytes to show up in the drop directory.
-  That retry is a resend and nothing else: content that has not changed is
-  never imported, archived or indexed again to carry it, so an endpoint
-  outage costs one HTTP attempt per affected account per pass rather than a
-  full reimport of every recorded dump and capture batch.
-  A permanent rejection (401/422/400) still advances the generation (a
+  transport failure (no response at all) leaves it untouched, sets
+  `transportRetryPending: true`, and stores the update itself under
+  `publications.<handle>.pending`: reported state, `captureIds`, `runId`,
+  `providerAccountId`, the count with its as-of stamp, any error text, and
+  the original `observedAt`. A later pass resends *those* fields at that
+  same reserved generation, so the body — and therefore the
+  `Idempotency-Key` — is identical to the attempt that never got an answer.
+  Storing the update rather than just the fact of one is what makes the
+  resend honest: `captureIds` is what marks captures confirmed on the
+  Convex side, and one handle can have several capture batches and a
+  per-handle dump in the drop directory at once, so an update rebuilt from
+  whichever file the pass reaches first would confirm captures that update
+  never processed (or, for a dump, confirm none at all).
+- Retry dispatch is per publication record, not per candidate file, and
+  runs at the top of a pass before any import: an outage costs exactly one
+  HTTP attempt per affected account per pass, and content that has not
+  changed is never imported, archived or indexed again to carry a resend.
+- While an update is owed, a later import for the same account does not
+  publish its own update. The reserved generation belongs to the owed
+  update, and `docs/publication-contract.md` ("Idempotency and staleness")
+  is explicit that a generation resent with different content is a
+  sender-side bug. The newer state goes out on the next update after the
+  owed one is finally answered — which, for an account whose imports have
+  all already happened, means the next time that account imports anything.
+  Captures imported during an outage can therefore stay unconfirmed until
+  then; the registry keeps only one owed update per account, not a queue.
+- A permanent rejection (401/422/400) still advances the generation (a
   request *was* delivered) but is not retried automatically — that would
   spin on identical content, which `AGENTS.md` rules out.
+- A `users.json` written by a build that stored only
+  `transportRetryPending` (no `pending` object) still loads, but nothing is
+  invented for it: the flag is cleared with a log line saying so, and the
+  account reports again on its next import, at the generation that was
+  never spent.
 
 **Transport and verification.** Delivery goes over
 [`ureq`](https://docs.rs/ureq) with its `rustls` TLS backend
@@ -265,6 +291,9 @@ Inspect or replay this by hand:
 # See generation/count/error per account alongside the usual ingestion state
 xearch-search --base-dir "$BASE" users list
 # Republish one handle's current live count without reimporting anything.
+# Any update still owed for that handle is resent first, exactly as it was
+# built; if the endpoint is still down, the fresh send stands down rather
+# than reusing that update's generation.
 # Takes the indexer lock, so stop the watcher first if one is running.
 xearch-search --base-dir "$BASE" publish <handle>
 ```
@@ -347,7 +376,7 @@ whole configuration.
 | `serve [--listen 127.0.0.1:4320]`                      | needs `SEARCH_LOCAL_SIGNING_KEY` + `SEARCH_SERVICE_TOKEN` |
 | `watch [--archive --drop-dir --state-dir --poll-secs]` | background indexer; resolves and logs its dirs at startup |
 | `users list [--status …]` / `users mark …`             | registry ops; `list` now also shows each account's publication state |
-| `publish <handle>`                                     | republish one handle's current live count by hand; needs `PUBLICATION_UPDATE_URL` + `PUBLICATION_SERVICE_TOKEN`/`DATA_SERVICE_TOKEN` |
+| `publish <handle>`                                     | republish one handle's current live count by hand (sends any owed update first, unchanged); needs `PUBLICATION_UPDATE_URL` + `PUBLICATION_SERVICE_TOKEN`/`DATA_SERVICE_TOKEN` |
 
 ## Serving the app contract
 

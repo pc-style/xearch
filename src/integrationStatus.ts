@@ -42,3 +42,26 @@ export const SERVICE_DISPLAY_NAME: Record<"indexer" | "receiver" | "search", str
   receiver: "Raw-capture receiver",
   search: "Search backend",
 };
+
+/**
+ * How recently the download worker must have checked in for the UI to call
+ * it live. Mirrors the worker's own expiry in `convex/worker.ts`, which
+ * schedules a row flip 45s after each heartbeat.
+ *
+ * Freshness is judged HERE, against the caller's own clock, and never
+ * server-side: a Convex query re-runs when a document it read changes, not
+ * because time passed, so a boolean decided inside the query would freeze at
+ * the last write and keep claiming the worker is live after it stopped.
+ */
+export const WORKER_LIVE_WINDOW_MS = 45_000;
+
+export type HandoffState =
+  | { kind: "configured"; ok: boolean }
+  | { kind: "live"; lastSeenAt: number | null };
+
+/** Whether the capture handoff is currently usable, as of `now`. */
+export function handoffReady(state: HandoffState | undefined, now: number): boolean | undefined {
+  if (!state) return undefined;
+  if (state.kind === "configured") return state.ok;
+  return state.lastSeenAt !== null && now - state.lastSeenAt < WORKER_LIVE_WINDOW_MS;
+}

@@ -19,7 +19,7 @@ const libraryRows = anyApi.library.rows as unknown as FunctionReference<
   "query",
   "public",
   Record<string, never>,
-  AccountLibraryRow[]
+  { rows: AccountLibraryRow[]; truncated: boolean }
 >;
 const libraryHistory = anyApi.library.history as unknown as FunctionReference<
   "query",
@@ -178,7 +178,7 @@ describe("an account whose every run was cleared", () => {
 
     await a.mutation(api.jobs.dismiss, { jobId: job });
 
-    const library = await a.query(libraryRows, {});
+    const library = (await a.query(libraryRows, {})).rows;
     expect(library).toHaveLength(1);
     expect(library[0].handle).toBe("someone");
     // Clearing the failed run must not erase what is actually searchable.

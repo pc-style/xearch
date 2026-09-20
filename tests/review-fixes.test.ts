@@ -35,7 +35,7 @@ const libraryRows = anyApi.library.rows as unknown as FunctionReference<
   "query",
   "public",
   Record<string, never>,
-  AccountLibraryRow[]
+  { rows: AccountLibraryRow[]; truncated: boolean }
 >;
 
 async function setup() {
@@ -120,7 +120,7 @@ describe("duplicate rows for one provider id", () => {
       }),
     );
 
-    const rows = await a.query(libraryRows, {});
+    const rows = (await a.query(libraryRows, {})).rows;
     expect(rows).toHaveLength(1);
     // The canonical row is the oldest, which is where the publication sits.
     expect(String(rows[0].accountId)).toBe(String(first));
@@ -140,7 +140,7 @@ describe("duplicate rows for one provider id", () => {
     // No pinned provider id, so this falls back to the handle — which two
     // real people have held. That genuinely cannot be resolved.
     await job(t, alice, { input: "moved", kind: "bulk" });
-    expect(await a.query(libraryRows, {})).toEqual([]);
+    expect((await a.query(libraryRows, {})).rows).toEqual([]);
   });
 });
 
@@ -171,11 +171,44 @@ describe("the publication receiver and the library agree on identity", () => {
     expect(applied).toMatchObject({ outcome: "applied" });
 
     // It landed on the canonical row, which is the one the library shows.
-    const rows = await a.query(libraryRows, {});
+    const rows = (await a.query(libraryRows, {})).rows;
     expect(rows).toHaveLength(1);
     expect(String(rows[0].accountId)).toBe(String(canonical));
     expect(rows[0].publicationState).toBe("searchable");
     expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 7 });
+  });
+});
+
+describe("bounded reads never pass as complete data", () => {
+  it("reports unknown queue counts once the owner has more jobs than one read covers", async () => {
+    const { t, alice, a } = await setup();
+    // One past the 1,000-job bound `ownedJobs` reads. Every queue figure is
+    // derived from that page, so a "known" count here would be a partial
+    // presented as a total.
+    for (let i = 0; i < 1001; i++)
+      await job(t, alice, { input: `@q${i}`, kind: "live", status: "failed" });
+
+    const summary = await a.query(summaryQuery, { now: Date.now() });
+    expect(summary.queue.failedRetryable).toEqual({ kind: "unknown", unit: "jobs" });
+    expect(summary.queue.waitingDownloads).toEqual({ kind: "unknown", unit: "jobs" });
+    expect(summary.queue.activeDownloads).toEqual({ kind: "unknown", unit: "jobs" });
+    expect(summary.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "unknown",
+      unit: "captures",
+    });
+  });
+
+  it("tells the caller when the account library itself is only a page", async () => {
+    const { t, alice, a } = await setup();
+    const small = await a.query(libraryRows, {});
+    expect(small.truncated).toBe(false);
+
+    // One past the 500 account-import bound.
+    for (let i = 0; i < 501; i++)
+      await job(t, alice, { input: `acct${i}`, kind: "bulk", expectedUserId: `${i}` });
+
+    const capped = await a.query(libraryRows, {});
+    expect(capped.truncated).toBe(true);
   });
 });
 

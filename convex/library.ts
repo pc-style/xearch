@@ -31,8 +31,8 @@ type AccountBucket = { account: Doc<"accounts">; jobs: Doc<"jobs">[] };
 async function groupOwnedJobsByAccount(
   ctx: QueryCtx,
   owner: Id<"users">,
-): Promise<Map<Id<"accounts">, AccountBucket>> {
-  const { jobs } = await ownedAccountJobs(ctx.db, owner);
+): Promise<{ byAccount: Map<Id<"accounts">, AccountBucket>; truncated: boolean }> {
+  const { jobs, truncated } = await ownedAccountJobs(ctx.db, owner);
   const identityCache = new Map<string, Doc<"accounts"> | null>();
   const byAccount = new Map<Id<"accounts">, AccountBucket>();
   for (const job of jobs) {
@@ -42,7 +42,7 @@ async function groupOwnedJobsByAccount(
     if (bucket) bucket.jobs.push(job);
     else byAccount.set(account._id, { account, jobs: [job] });
   }
-  return byAccount;
+  return { byAccount, truncated };
 }
 
 function latestOf(jobs: Doc<"jobs">[]): Doc<"jobs"> {
@@ -69,10 +69,18 @@ export const rows = query({
     search: v.optional(v.string()),
     status: v.optional(publicationStateValidator),
   },
-  returns: v.array(accountLibraryRowValidator),
+  returns: v.object({
+    rows: v.array(accountLibraryRowValidator),
+    // True when this owner has more account imports than one bounded read
+    // covers, so `rows` is a page rather than their whole library. Returned
+    // rather than hidden: a list silently missing its oldest accounts looks
+    // identical to a complete one, and the counts beside it are derived from
+    // the same bound.
+    truncated: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    const byAccount = await groupOwnedJobsByAccount(ctx, owner);
+    const { byAccount, truncated } = await groupOwnedJobsByAccount(ctx, owner);
     const search = args.search?.trim().toLowerCase();
     const out: AccountLibraryRow[] = [];
     for (const [accountId, { account, jobs }] of byAccount) {
@@ -134,7 +142,7 @@ export const rows = query({
       });
     }
     out.sort((a, b) => (b.latestJob?.updatedAt ?? 0) - (a.latestJob?.updatedAt ?? 0));
-    return out;
+    return { rows: out, truncated };
   },
 });
 
@@ -170,7 +178,11 @@ export const history = query({
   returns: v.array(historyRunValidator),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    const byAccount = await groupOwnedJobsByAccount(ctx, owner);
+    // Truncation is irrelevant here: this query answers about ONE account the
+    // caller named. If that account fell outside the bounded page, the lookup
+    // below simply does not find it and reports "not found", which is the
+    // same answer as any other account that is not theirs.
+    const { byAccount } = await groupOwnedJobsByAccount(ctx, owner);
     const bucket = byAccount.get(args.accountId);
     // Same "not found" message whether the account does not exist or simply
     // is not this owner's — never confirm another user's account exists.

@@ -27,7 +27,7 @@ const libraryRows = anyApi.library.rows as unknown as FunctionReference<
   "query",
   "public",
   Record<string, never>,
-  AccountLibraryRow[]
+  { rows: AccountLibraryRow[]; truncated: boolean }
 >;
 
 async function setup() {
@@ -136,7 +136,7 @@ describe("account identity on the write path", () => {
       });
     }
     // A by_handle read with two matching rows used to throw (`.unique()`).
-    const rows = await a.query(libraryRows, {});
+    const rows = (await a.query(libraryRows, {})).rows;
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((row) => String(row.accountId))).size).toBe(2);
   });

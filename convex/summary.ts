@@ -132,14 +132,20 @@ async function computeIndexTotals(
 
 // --- Queue (owner-scoped via jobs.owner) ---------------------------------
 
-async function ownedJobs(ctx: QueryCtx, owner: Id<"users">): Promise<Doc<"jobs">[]> {
-  return ctx.db
+async function ownedJobs(
+  ctx: QueryCtx,
+  owner: Id<"users">,
+): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
+  // One past the bound, so a full page is distinguishable from a truncated
+  // scan. Newest first: a bounded read that silently kept the OLDEST jobs
+  // would describe a queue the owner no longer has.
+  const scanned = await ctx.db
     .query("jobs")
     .withIndex("by_owner", (q) => q.eq("owner", owner))
-    // Newest first: a bounded read that silently kept the OLDEST jobs would
-    // describe a queue the owner no longer has.
     .order("desc")
-    .take(MAX_OWNED_JOBS);
+    .take(MAX_OWNED_JOBS + 1);
+  const truncated = scanned.length > MAX_OWNED_JOBS;
+  return { jobs: truncated ? scanned.slice(0, MAX_OWNED_JOBS) : scanned, truncated };
 }
 // Every capture id an account has an ACCEPTED ("applied") publication update
 // for. "accepted" deliberately excludes stale_ignored/duplicate_ignored/
@@ -219,6 +225,7 @@ async function computeSavedCapturesAwaitingIndexing(
 async function computeQueue(
   ctx: QueryCtx,
   jobs: Doc<"jobs">[],
+  truncated: boolean,
   accountCache: Map<string, Doc<"accounts"> | null>,
 ): Promise<QueueBreakdown> {
   let waiting = 0;
@@ -246,6 +253,16 @@ async function computeQueue(
     // convex/lib/contracts.ts queueBreakdownValidator comment.
     else if (job.status === "failed" || job.status === "partial") failedRetryable += 1;
   }
+  if (truncated)
+    // More jobs than one bounded read covers, so every one of these counts
+    // would be a partial presented as a total. A queue figure that is quietly
+    // short is worse than one that admits it does not know.
+    return {
+      waitingDownloads: unknownCount("jobs"),
+      activeDownloads: unknownCount("jobs"),
+      savedCapturesAwaitingIndexing: unknownCount("captures"),
+      failedRetryable: unknownCount("jobs"),
+    };
   return {
     waitingDownloads: knownCount("jobs", waiting),
     activeDownloads: knownCount("jobs", active),
@@ -282,11 +299,11 @@ export const summary = query({
     // returned field is exactly a Count, a timestamp, or the fixed "global"
     // scope literal.
     const owner = await user(ctx);
-    const jobs = await ownedJobs(ctx, owner);
+    const owned = await ownedJobs(ctx, owner);
     // One cache for the whole request: the queue's capture tally and the
     // owner-scoped totals below resolve the same jobs to the same accounts.
     const accountCache = new Map<string, Doc<"accounts"> | null>();
-    const queue = await computeQueue(ctx, jobs, accountCache);
+    const queue = await computeQueue(ctx, owned.jobs, owned.truncated, accountCache);
     // Resolved from the library-matching read, not from the queue's wider
     // all-kinds scan, so the "Indexed people" tile and the account list it
     // links to are computed over the same rows and cannot disagree.

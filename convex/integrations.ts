@@ -22,10 +22,9 @@ export const configured = query({
     // `saving` answers two different questions depending on the mode, and
     // the answer means different things to a person: in receiver mode it is
     // whether an env var is set (configuration), in outbound mode it is
-    // whether the download worker checked in within the last 45s
-    // (liveness). Returning the bare boolean forced every consumer to
-    // remember that on its own, and the UI ended up labelling a config fact
-    // "Connected". The discriminant travels with the value instead.
+    // whether the download worker recently checked in (liveness). Returning
+    // one bare boolean forced every consumer to remember that, and the UI
+    // ended up labelling a configuration fact "Connected".
     const saving = outbound
       ? !!worker?.online && Date.now() - worker.lastSeen < 45_000
       : !!process.env.RAW_CAPTURE_URL;
@@ -34,10 +33,18 @@ export const configured = query({
       indexing: !!process.env.X_MD_API_KEY && saving,
       search: !!process.env.SEARCH_API_URL,
       handoff: saving,
-      handoffState: {
-        kind: outbound ? ("live" as const) : ("configured" as const),
-        ok: saving,
-      },
+      // The discriminant travels with the value so a consumer cannot mistake
+      // one for the other. The live case deliberately reports `lastSeenAt`
+      // rather than a pre-judged boolean: a Convex query re-runs when a
+      // document it read changes, never because time passed, so freshness
+      // computed in here freezes at the last write. If the worker stops
+      // heartbeating, a `true` decided server-side would stay `true` until
+      // something else touched the row. The client owns its own clock and
+      // decides. (`handoff` above has the same weakness and predates this;
+      // it is left alone rather than changed underneath its callers.)
+      handoffState: outbound
+        ? { kind: "live" as const, lastSeenAt: worker?.online ? worker.lastSeen : null }
+        : { kind: "configured" as const, ok: saving },
       collectorMode: outbound ? ("outbound" as const) : ("receiver" as const),
       firecrawl: !!process.env.FIRECRAWL_API_KEY,
       openai: !!process.env.OPENAI_API_KEY,

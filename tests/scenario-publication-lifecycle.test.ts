@@ -91,7 +91,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     const session = t.withIdentity({ subject: `${owner}|session` });
 
     // --- Step 1: downloaded capture, no publication update -> waiting_for_indexing ---
-    const rowsBefore = await session.query(libraryRows, {});
+    const rowsBefore = (await session.query(libraryRows, {})).rows;
     console.log("STEP1 library.rows:", JSON.stringify(rowsBefore));
     expect(rowsBefore).toHaveLength(1);
     expect(rowsBefore[0].publicationState).toBe("waiting_for_indexing");
@@ -116,7 +116,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     );
     expect(jobsAfterUpdate).toEqual(jobsBeforeUpdate);
 
-    const rowsAfter = await session.query(libraryRows, {});
+    const rowsAfter = (await session.query(libraryRows, {})).rows;
     console.log("STEP2 library.rows:", JSON.stringify(rowsAfter));
     expect(rowsAfter[0].publicationState).toBe("searchable");
     expect(rowsAfter[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 480 });
@@ -151,7 +151,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     );
     console.log("STEP4 stored row after stale update:", JSON.stringify(rowAfterStale));
     expect(rowAfterStale?.state).toBe("searchable"); // did not regress to "failed"
-    const rowsAfterStale = await session.query(libraryRows, {});
+    const rowsAfterStale = (await session.query(libraryRows, {})).rows;
     expect(rowsAfterStale[0].publicationState).toBe("searchable");
 
     // --- Step 5: unauthorized request over HTTP -> fails closed ---

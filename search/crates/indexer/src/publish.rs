@@ -7,6 +7,17 @@
 //! import succeeded — that is [`crate::run_capture`]/[`crate::run_user`]'s
 //! job, reported in here via [`ImportOutcome`].
 //!
+//! ## Retries
+//!
+//! A send that never got a response does not spend the generation it used,
+//! so that number stays reserved for that one update. The update itself is
+//! stored on the account ([`crate::users::PendingPublication`]) and
+//! [`replay_pending`] resends exactly it — same capture ids, same count,
+//! same `observedAt` — until a response finally arrives. Nothing else may
+//! be sent for that account meanwhile: per
+//! `docs/publication-contract.md`, reusing a generation for different
+//! content is a sender-side bug.
+//!
 //! ## Transport
 //!
 //! Delivery (see [`transport`]) goes over `ureq` with its `rustls` TLS
@@ -29,7 +40,7 @@
 
 mod transport;
 
-use crate::users::{Registry, now_ms};
+use crate::users::{PendingPublication, Registry, ReportedState, now_ms};
 use serde::{Deserialize, Serialize};
 
 /// Convex `/publication/update` sender configuration.
@@ -119,7 +130,7 @@ struct Envelope<'a> {
     run_id: Option<&'a str>,
     capture_ids: &'a [String],
     generation: u64,
-    reported_state: &'static str,
+    reported_state: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     unique_post_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -219,12 +230,40 @@ pub fn report_after_import(
     report: &ImportReport<'_>,
 ) {
     let Some(config) = config else { return };
-    let observed_at = now_ms();
-    let (reported_state, unique_post_count, unique_post_count_as_of, error_message) = match &report
-        .outcome
+    // An account with an undelivered update has a generation reserved for
+    // exactly that update, and the receiver may already have committed it.
+    // Sending this import's different content at that same number is the
+    // sender-side bug `docs/publication-contract.md` names outright, so it
+    // waits: the owed update is replayed first (see [`replay_pending`],
+    // dispatched once per pass by [`crate::run_once`]), and only once a
+    // response frees the generation does a fresh update go out.
+    if let Some(pending) = registry
+        .publications
+        .get(report.handle)
+        .and_then(|record| record.pending.as_ref())
     {
+        eprintln!(
+            "indexer publish: handle={} still owes an undelivered {} update (captureIds={:?}); \
+             this import's update waits for it rather than reusing its generation",
+            report.handle,
+            pending.reported_state.map_or("?", ReportedState::as_str),
+            pending.capture_ids,
+        );
+        return;
+    }
+    let observed_at = now_ms();
+    let attempt = match &report.outcome {
         ImportOutcome::Succeeded => match engine.count_author(report.handle) {
-            Ok(count) => ("searchable", Some(count), Some(observed_at), None),
+            Ok(count) => PendingPublication {
+                reported_state: Some(ReportedState::Searchable),
+                capture_ids: report.capture_ids.clone(),
+                run_id: report.run_id.map(str::to_owned),
+                provider_account_id: report.provider_account_id.map(str::to_owned),
+                unique_post_count: Some(count),
+                unique_post_count_as_of: Some(observed_at),
+                error: None,
+                observed_at_ms: observed_at,
+            },
             Err(error) => {
                 eprintln!(
                     "indexer publish: could not count posts for handle={} (no update sent): {error}",
@@ -233,33 +272,102 @@ pub fn report_after_import(
                 return;
             }
         },
-        ImportOutcome::Failed(message) => ("failed", None, None, Some((*message).to_owned())),
+        ImportOutcome::Failed(message) => PendingPublication {
+            reported_state: Some(ReportedState::Failed),
+            capture_ids: report.capture_ids.clone(),
+            run_id: report.run_id.map(str::to_owned),
+            provider_account_id: report.provider_account_id.map(str::to_owned),
+            unique_post_count: None,
+            unique_post_count_as_of: None,
+            error: Some((*message).to_owned()),
+            observed_at_ms: observed_at,
+        },
     };
-    let next_generation = registry
-        .publication(report.handle)
-        .generation
-        .saturating_add(1);
+    deliver(config, registry, report.handle, &attempt);
+}
+
+/// Resend the update this account already reserved a generation for, byte
+/// for byte, when an earlier attempt never got a response.
+///
+/// Nothing is rebuilt here: not the post count, not the capture ids, not
+/// `observedAt`. The stored update is the one the receiver may already
+/// have seen, so replaying anything else would either confirm the wrong
+/// captures or land as a duplicate generation carrying different content —
+/// the sender-side bug `docs/publication-contract.md` calls out.
+///
+/// A total no-op when the sender is disabled or nothing is owed.
+pub fn replay_pending(config: Option<&PublishConfig>, registry: &mut Registry, handle: &str) {
+    let Some(config) = config else { return };
+    let Some(record) = registry.publications.get_mut(handle) else {
+        return;
+    };
+    let Some(pending) = record.pending.clone() else {
+        if record.transport_retry_pending {
+            // A registry written before the owed update was recorded (an
+            // older build stored only the flag). There is nothing to
+            // replay and nothing may be invented: clear the flag and say
+            // so. The generation was never spent, so the next import for
+            // this account reports at that same number.
+            record.transport_retry_pending = false;
+            eprintln!(
+                "indexer publish: handle={handle} was flagged for retry by an older indexer that \
+                 did not record what was owed; nothing to replay"
+            );
+        }
+        return;
+    };
+    if pending.reported_state.is_none() {
+        record.transport_retry_pending = false;
+        record.pending = None;
+        eprintln!(
+            "indexer publish: handle={handle} has an owed update with no reportedState; \
+             discarding it rather than guessing"
+        );
+        return;
+    }
+    eprintln!(
+        "indexer publish replay handle={handle} captureIds={:?} (no reimport, same generation)",
+        pending.capture_ids
+    );
+    deliver(config, registry, handle, &pending);
+}
+
+/// Encode one publication, deliver it, and record the outcome.
+///
+/// The generation is always the account's watermark plus one — the number
+/// reserved but not yet spent — so a first attempt and every replay of it
+/// use the same generation until a response finally comes back.
+fn deliver(
+    config: &PublishConfig,
+    registry: &mut Registry,
+    handle: &str,
+    publication: &PendingPublication,
+) {
+    let Some(reported_state) = publication.reported_state.map(ReportedState::as_str) else {
+        return;
+    };
+    let next_generation = registry.publication(handle).generation.saturating_add(1);
     let envelope = Envelope {
         version: 1,
-        provider_account_id: report.provider_account_id,
-        handle: report.handle,
-        run_id: report.run_id,
-        capture_ids: &report.capture_ids,
+        provider_account_id: publication.provider_account_id.as_deref(),
+        handle,
+        run_id: publication.run_id.as_deref(),
+        capture_ids: &publication.capture_ids,
         generation: next_generation,
         reported_state,
-        unique_post_count,
-        unique_post_count_as_of,
-        error: error_message
+        unique_post_count: publication.unique_post_count,
+        unique_post_count_as_of: publication.unique_post_count_as_of,
+        error: publication
+            .error
             .as_deref()
             .map(|message| ErrorField { message }),
-        observed_at,
+        observed_at: publication.observed_at_ms,
     };
     let body = match serde_json::to_vec(&envelope) {
         Ok(body) => body,
         Err(error) => {
             eprintln!(
-                "indexer publish: could not encode envelope for handle={} (no update sent): {error}",
-                report.handle
+                "indexer publish: could not encode envelope for handle={handle} (no update sent): {error}"
             );
             return;
         }
@@ -272,15 +380,16 @@ pub fn report_after_import(
             ..
         } => {
             eprintln!(
-                "indexer publish delivered handle={} generation={next_generation} status={status} outcome={} reportedState={reported_state}{}",
-                report.handle,
+                "indexer publish delivered handle={handle} generation={next_generation} status={status} outcome={} reportedState={reported_state}{}",
                 outcome.as_deref().unwrap_or("?"),
                 rejection_reason
                     .map(|reason| format!(" rejectionReason={reason}"))
                     .unwrap_or_default(),
             );
             let applied_searchable = if status == 200 && reported_state == "searchable" {
-                unique_post_count.map(|count| (count, observed_at))
+                publication
+                    .unique_post_count
+                    .map(|count| (count, publication.observed_at_ms))
             } else {
                 None
             };
@@ -290,7 +399,7 @@ pub fn report_after_import(
                 Some(format!("publication update rejected (HTTP {status})"))
             };
             registry.record_publish_delivered(
-                report.handle,
+                handle,
                 next_generation,
                 applied_searchable,
                 last_publish_error,
@@ -298,10 +407,9 @@ pub fn report_after_import(
         }
         SendOutcome::TransportFailed(message) => {
             eprintln!(
-                "indexer publish transport failure handle={} generation={next_generation}: {message}",
-                report.handle
+                "indexer publish transport failure handle={handle} generation={next_generation}: {message}"
             );
-            registry.record_publish_transport_failure(report.handle, &message);
+            registry.record_publish_transport_failure(handle, &message, publication.clone());
         }
     }
 }

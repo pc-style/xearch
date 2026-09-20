@@ -198,6 +198,12 @@ fn run_publish(
     let engine = search_tantivy::open(index, false)?;
     let path = search_indexer::users::registry_path(state_dir);
     let mut registry = search_indexer::users::Registry::load(&path)?;
+    // An update this account already reserved a generation for has to go
+    // out first, exactly as it was built: the receiver treats a reused
+    // generation carrying different content as a sender-side bug. If the
+    // endpoint is still down this replay fails and the fresh send below
+    // stands down rather than reusing that generation.
+    search_indexer::publish::replay_pending(Some(&config), &mut registry, &handle);
     search_indexer::publish::report_after_import(
         Some(&config),
         &engine,

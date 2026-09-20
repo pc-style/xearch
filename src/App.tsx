@@ -38,7 +38,7 @@ import {
 import Dashboard from "./Dashboard";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { AccountBadge } from "./auth/AccountBadge";
-import { indexingUnavailableMessage } from "./integrationStatus";
+import { handoffReady, indexingUnavailableMessage } from "./integrationStatus";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
@@ -522,6 +522,15 @@ export default function App() {
       setPage(await readLink({ url }));
     }).finally(() => setReading(false));
   };
+  // Worker liveness is judged against this clock, not inside the Convex
+  // query — a query re-runs when a document changes, never because time
+  // passed, so a server-decided boolean would stay true after the worker
+  // went quiet. Ticking here lets the badge decay on its own.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(id);
+  }, []);
   const connections: Connection[] = [
     {
       name: "Search service",
@@ -529,7 +538,7 @@ export default function App() {
       env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
       purpose: "Finds posts in your library",
     },
-    receiverConnection(configured?.collectorMode, configured?.handoff),
+    receiverConnection(configured?.collectorMode, handoffReady(configured?.handoffState, now)),
     {
       name: "x.md",
       ready: configured?.xmd,

@@ -40,7 +40,7 @@ const libraryRowsQuery = anyApi.library.rows as unknown as import("convex/server
   "query",
   "public",
   { search?: string; status?: string },
-  AccountLibraryRow[]
+  { rows: AccountLibraryRow[]; truncated: boolean }
 >;
 
 async function setup() {
@@ -376,7 +376,7 @@ describe("summary.summary", () => {
     await insertPublication(t, { accountId: account, state: "searchable", searchablePostCount: 10 });
 
     const bobsSummary = await b.query(summaryQuery, { now: Date.now() });
-    const bobsLibrary = await b.query(libraryRowsQuery, {});
+    const bobsLibrary = (await b.query(libraryRowsQuery, {})).rows;
 
     // This used to be the documented leak: bob read a nonzero GLOBAL
     // indexedAccounts/indexedPosts built from alice's account while his own
@@ -393,7 +393,7 @@ describe("summary.summary", () => {
     // tile's number matches the length of the list it points at, which is
     // the property "link the number to the account list" actually needs.
     const alicesSummary = await a.query(summaryQuery, { now: Date.now() });
-    const alicesLibrary = await a.query(libraryRowsQuery, {});
+    const alicesLibrary = (await a.query(libraryRowsQuery, {})).rows;
     expect(alicesSummary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 1 });
     expect(alicesSummary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 10 });
     expect(alicesLibrary).toHaveLength(1);

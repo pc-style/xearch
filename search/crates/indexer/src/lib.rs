@@ -406,6 +406,12 @@ fn too_large(file: &Path) -> bool {
 pub fn run_once(config: &Config) -> Result<Registry> {
     let path = registry_path(&config.state_dir);
     let mut registry = Registry::load(&path)?;
+    // Flush what the endpoint still owes a response for before importing
+    // anything new: the reserved generation belongs to that update, so
+    // freeing it first is what lets this pass's own imports publish at all.
+    if replay_pending_publications(config, &mut registry) {
+        registry.save(&path)?;
+    }
     let engine = search_tantivy::open(&config.index, true)?;
     let index_empty = engine.num_docs()? == 0;
     if index_empty && (!registry.users.is_empty() || !registry.captures.is_empty()) {
@@ -447,6 +453,40 @@ pub fn run_once(config: &Config) -> Result<Registry> {
     Ok(registry)
 }
 
+/// Replay every update an earlier pass reserved a generation for but never
+/// got a response for: one attempt per account per pass, dispatched from
+/// the publication record itself.
+///
+/// Dispatching from the record — not from whichever drop file this pass
+/// happens to be looking at — is the whole point. Two captures and a dump
+/// can share one handle, and rebuilding the owed update from any of them
+/// would tell the receiver a different set of `captureIds` was processed
+/// than the attempt that reserved the generation claimed.
+///
+/// Returns whether anything was owed, so a pass that had nothing to replay
+/// does not rewrite the registry file for nothing.
+fn replay_pending_publications(config: &Config, registry: &mut Registry) -> bool {
+    let Some(publish_config) = config.publish.as_ref() else {
+        return false;
+    };
+    // Sorted so an outage affecting many accounts replays in a stable,
+    // reportable order rather than hash order.
+    let mut owed: Vec<String> = registry
+        .publications
+        .iter()
+        .filter(|(_, record)| record.pending.is_some() || record.transport_retry_pending)
+        .map(|(handle, _)| handle.clone())
+        .collect();
+    owed.sort();
+    if owed.is_empty() {
+        return false;
+    }
+    for handle in owed {
+        publish::replay_pending(Some(publish_config), registry, &handle);
+    }
+    true
+}
+
 fn run_capture(
     config: &Config,
     engine: &search_tantivy::Engine,
@@ -455,33 +495,13 @@ fn run_capture(
     sha: &str,
     index_empty: bool,
 ) {
-    // A capture whose publish attempt never got a response is retried on a
-    // later pass without waiting for new bytes to show up — read from the
-    // already-recorded handle (see CaptureRecord) so the common steady
-    // state (recorded, no retry owed) never has to reparse the file.
-    let recorded_handle = registry
-        .captures
-        .get(sha)
-        .and_then(|record| record.handle.clone());
-    let publish_retry_pending = recorded_handle.as_deref().is_some_and(|handle| {
-        registry
-            .publications
-            .get(handle)
-            .is_some_and(|p| p.transport_retry_pending)
-    });
     // The batch is recorded and the index still has content: nothing about
-    // this content can need importing again. After an index reset
-    // (`index_empty`) the recorded hash must be reimported from drop
-    // regardless.
+    // this content can need importing again, and any publication still
+    // owed for its handle travels on its own (see
+    // [`replay_pending_publications`]) rather than being rebuilt from this
+    // file. After an index reset (`index_empty`) the recorded hash must be
+    // reimported from drop regardless.
     if !index_empty && registry.captures.contains_key(sha) {
-        // The only work that can still be owed here is a publication
-        // resend, and it travels on its own: dragging import, archive and
-        // index work along with it would repeat all of that for every
-        // recorded capture on every poll pass for as long as the endpoint
-        // is unreachable.
-        if let Some(handle) = recorded_handle.filter(|_| publish_retry_pending) {
-            republish_capture(config, engine, registry, file, sha, &handle);
-        }
         return;
     }
     let identity = capture_identity(file);
@@ -539,34 +559,6 @@ fn run_capture(
     }
 }
 
-/// Resend one capture batch's publication update after an earlier attempt
-/// never received a response. The batch is already imported, archived and
-/// indexed; the file is read only for the identity fields the envelope
-/// carries (`providerAccountId`, `runId`), never re-imported.
-fn republish_capture(
-    config: &Config,
-    engine: &search_tantivy::Engine,
-    registry: &mut Registry,
-    file: &Path,
-    sha: &str,
-    handle: &str,
-) {
-    let identity = capture_identity(file);
-    eprintln!("indexer publish retry capture={sha} user={handle} (no reimport)");
-    publish::report_after_import(
-        config.publish.as_ref(),
-        engine,
-        registry,
-        &publish::ImportReport {
-            handle,
-            outcome: publish::ImportOutcome::Succeeded,
-            provider_account_id: identity.provider_account_id.as_deref(),
-            run_id: identity.run_id.as_deref(),
-            capture_ids: vec![sha.to_owned()],
-        },
-    );
-}
-
 fn run_user(
     config: &Config,
     engine: &search_tantivy::Engine,
@@ -610,30 +602,12 @@ fn run_user(
             || record.file_sig.as_deref() != Some(&sig)
     };
     if !due {
-        // The bytes are unchanged and already in the index. A publication
-        // resend that is still owed is sent on its own, without
-        // re-entering import/archive/index for content nothing has touched
-        // — otherwise an unreachable endpoint would repeat that work for
-        // every affected account on every poll pass.
-        if registry
-            .publications
-            .get(&handle)
-            .is_some_and(|publication| publication.transport_retry_pending)
-        {
-            eprintln!("indexer publish retry user={handle} (no reimport)");
-            publish::report_after_import(
-                config.publish.as_ref(),
-                engine,
-                registry,
-                &publish::ImportReport {
-                    handle: &handle,
-                    outcome: publish::ImportOutcome::Succeeded,
-                    provider_account_id: None,
-                    run_id: None,
-                    capture_ids: Vec::new(),
-                },
-            );
-        }
+        // The bytes are unchanged and already in the index, so there is
+        // nothing to import. A publication still owed for this handle is
+        // replayed from the registry record at the top of the pass (see
+        // [`replay_pending_publications`]) — never rebuilt as a
+        // handle-only update from this file, which would drop the capture
+        // ids the owed update claimed.
         return;
     }
     let writer = match engine.writer() {

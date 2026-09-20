@@ -171,9 +171,18 @@ fn post(id: &str, handle: &str, provider_id: &serde_json::Value) -> serde_json::
 }
 
 fn capture_batch(handle: &str, id: &str, provider_id: &serde_json::Value) -> serde_json::Value {
+    capture_batch_from_run(handle, id, provider_id, "job1")
+}
+
+fn capture_batch_from_run(
+    handle: &str,
+    id: &str,
+    provider_id: &serde_json::Value,
+    run_id: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "version": 1,
-        "runId": "job1",
+        "runId": run_id,
         "source": "x-md",
         "terminal": "complete",
         "request": {"origin": "https://mdfromx.com", "resource": "archive", "input": handle},
@@ -718,4 +727,351 @@ fn a_pending_retry_republishes_a_user_dump_without_reimporting_it() {
     let publication = registry.publications.get("ivy").unwrap();
     assert_eq!(publication.generation, 1);
     assert!(!publication.transport_retry_pending);
+}
+
+/// The reviewer's case: two capture batches and one per-handle dump all
+/// belonging to `@twin`, an outage, then recovery.
+///
+/// The outage must leave exactly one owed update — the one that reserved
+/// the generation — and recovery must resend *that* update: its own
+/// `captureIds`, `runId`, `providerAccountId` and its own post count, not
+/// whatever the next candidate file in the drop directory happens to say.
+/// `captureIds` is what marks captures confirmed on the Convex side, so a
+/// resend built from a different file confirms the wrong captures.
+#[test]
+fn an_outage_owes_one_update_and_recovery_resends_exactly_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path(), None).unwrap();
+    // Sorted candidate order is first.json < second.json < twin.json, so
+    // the first batch is the one that reserves the generation.
+    let first = "a".repeat(64);
+    let second = "b".repeat(64);
+    std::fs::write(
+        config.drop_dir.join(format!("{first}.json")),
+        serde_json::to_vec(&capture_batch_from_run(
+            "twin",
+            "5001",
+            &serde_json::json!("777"),
+            "run-first",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        config.drop_dir.join(format!("{second}.json")),
+        serde_json::to_vec(&capture_batch_from_run(
+            "twin",
+            "5002",
+            &serde_json::json!("777"),
+            "run-second",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        config.drop_dir.join("twin.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "posts": [post("5003", "twin", &serde_json::json!("777"))]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // The outage. Everything imports; nothing can be reported.
+    let unreachable =
+        config_in(dir.path(), Some(publishing_to(unreachable_url().unwrap()))).unwrap();
+    let registry = search_indexer::run_once(&unreachable).unwrap();
+    assert_eq!(registry.captures.len(), 2);
+    assert_eq!(
+        registry.users.get("twin").unwrap().status,
+        search_indexer::users::UserStatus::Complete
+    );
+    assert_eq!(
+        registry.publications.len(),
+        1,
+        "three files, one account: one publication record"
+    );
+    let owed = registry.publications.get("twin").unwrap();
+    assert_eq!(
+        owed.generation, 0,
+        "nothing was delivered, so no generation was spent"
+    );
+    assert!(owed.transport_retry_pending);
+    let pending = owed
+        .pending
+        .as_ref()
+        .expect("the owed update itself must be stored, not just the fact that something is owed");
+    assert_eq!(
+        pending.capture_ids,
+        vec![first.clone()],
+        "the stored update is the one that reserved the generation"
+    );
+    assert_eq!(pending.run_id.as_deref(), Some("run-first"));
+    assert_eq!(pending.provider_account_id.as_deref(), Some("777"));
+    assert_eq!(
+        pending.unique_post_count,
+        Some(1),
+        "the count as it was when the reserved update was built"
+    );
+
+    // Recovery. The responder accepts exactly one connection, so a second
+    // send in this pass would come back as a transport failure and leave a
+    // new pending update behind — asserted against below.
+    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    let registry = search_indexer::run_once(&live).unwrap();
+    let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["handle"], "twin");
+    assert_eq!(
+        body["captureIds"],
+        serde_json::json!([first]),
+        "the resend must confirm the captures the original attempt claimed, not another file's"
+    );
+    assert_eq!(body["runId"], "run-first");
+    assert_eq!(body["providerAccountId"], "777");
+    assert_eq!(body["generation"], 1);
+    assert_eq!(body["reportedState"], "searchable");
+    assert_eq!(
+        body["uniquePostCount"], 1,
+        "the resend replays the original update, not a freshly recounted one (three posts are \
+         indexed by now)"
+    );
+
+    let record = registry.publications.get("twin").unwrap();
+    assert_eq!(record.generation, 1);
+    assert!(!record.transport_retry_pending);
+    assert!(
+        record.pending.is_none(),
+        "a delivered response clears what was owed, and nothing else was sent in that pass: {:?}",
+        record.pending
+    );
+}
+
+/// A replay must reuse the generation the failed attempt reserved, never
+/// allocate a fresh one — the receiver's idempotency is generation-based,
+/// so a replay at a new number reads as a new update. And while that
+/// generation is reserved, a *different* update must not borrow it:
+/// `docs/publication-contract.md` calls a duplicate generation carrying
+/// different content a sender-side bug outright.
+#[test]
+fn a_replay_reuses_the_reserved_generation_and_no_other_update_borrows_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path()).unwrap();
+    let mut registry = Registry::default();
+
+    // One delivered update, so the account's watermark is a real number
+    // rather than zero and an off-by-one would be visible.
+    let (first_url, first_rx) =
+        spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    report_after_import(
+        Some(&publishing_to(first_url)),
+        &engine,
+        &mut registry,
+        &ImportReport {
+            handle: "zoe",
+            outcome: ImportOutcome::Succeeded,
+            provider_account_id: Some("42"),
+            run_id: Some("run-a"),
+            capture_ids: vec!["a".repeat(64)],
+        },
+    );
+    first_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(registry.publications.get("zoe").unwrap().generation, 1);
+
+    // The outage: generation 2 is reserved for this update and never spent.
+    report_after_import(
+        Some(&publishing_to(unreachable_url().unwrap())),
+        &engine,
+        &mut registry,
+        &ImportReport {
+            handle: "zoe",
+            outcome: ImportOutcome::Succeeded,
+            provider_account_id: Some("42"),
+            run_id: Some("run-b"),
+            capture_ids: vec!["b".repeat(64)],
+        },
+    );
+    assert_eq!(
+        registry.publications.get("zoe").unwrap().generation,
+        1,
+        "an undelivered send spends nothing"
+    );
+
+    // A different import for the same account while that generation is
+    // reserved: it must not go out at all.
+    let (blocked_url, blocked_rx) =
+        spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    report_after_import(
+        Some(&publishing_to(blocked_url)),
+        &engine,
+        &mut registry,
+        &ImportReport {
+            handle: "zoe",
+            outcome: ImportOutcome::Succeeded,
+            provider_account_id: Some("42"),
+            run_id: Some("run-c"),
+            capture_ids: vec!["c".repeat(64)],
+        },
+    );
+    assert!(
+        blocked_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_err(),
+        "a different update must never be sent at a generation another update reserved"
+    );
+    assert_eq!(
+        registry
+            .publications
+            .get("zoe")
+            .unwrap()
+            .pending
+            .as_ref()
+            .unwrap()
+            .run_id
+            .as_deref(),
+        Some("run-b"),
+        "the owed update is not replaced by a newer one"
+    );
+
+    // Recovery: the replay goes out at the reserved generation 2.
+    let (replay_url, replay_rx) =
+        spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    search_indexer::publish::replay_pending(Some(&publishing_to(replay_url)), &mut registry, "zoe");
+    let request = replay_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(
+        body["generation"], 2,
+        "a replay reuses the generation the failed attempt reserved"
+    );
+    assert_eq!(body["runId"], "run-b");
+    assert_eq!(body["captureIds"], serde_json::json!(["b".repeat(64)]));
+    let record = registry.publications.get("zoe").unwrap();
+    assert_eq!(record.generation, 2);
+    assert!(record.pending.is_none());
+}
+
+/// A `users.json` written by the build that shipped before the owed update
+/// was recorded — `publications` present, `transportRetryPending: true`,
+/// no `pending` — must load unquarantined, and the flag it carries must
+/// not be turned into an invented update.
+#[test]
+fn a_registry_from_before_pending_updates_loads_and_is_never_replayed_from_guesswork() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path(), None).unwrap();
+    let path = search_indexer::users::registry_path(&config.state_dir);
+    std::fs::create_dir_all(&config.state_dir).unwrap();
+    let legacy = serde_json::json!({
+        "version": 1,
+        "users": {
+            "old": {
+                "status": "complete",
+                "attempts": 1,
+                "accepted": 3,
+                "rejected": 0,
+                "sha256": "ab12",
+                "fileSig": "ab12",
+                "fileName": "old.json",
+                "updatedAtMs": 1_758_000_000_000_i64,
+            }
+        },
+        "captures": {},
+        "publications": {
+            "old": {
+                "generation": 7,
+                "lastUniquePostCount": 3,
+                "lastPublishedAtMs": 1_758_000_000_000_i64,
+                "lastPublishError": "connection refused",
+                "transportRetryPending": true,
+            }
+        },
+    });
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+    let loaded = Registry::load(&path).unwrap();
+    assert_eq!(loaded.publications.get("old").unwrap().generation, 7);
+    assert!(
+        loaded
+            .publications
+            .get("old")
+            .unwrap()
+            .transport_retry_pending,
+        "the old flag still loads"
+    );
+    assert!(loaded.publications.get("old").unwrap().pending.is_none());
+
+    // A pass with a live endpoint must not invent an update for that flag.
+    let (url, rx) = spawn_responder("HTTP/1.1 200 OK", r#"{"outcome":"applied"}"#).unwrap();
+    let live = config_in(dir.path(), Some(publishing_to(url))).unwrap();
+    let registry = search_indexer::run_once(&live).unwrap();
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(500))
+            .is_err(),
+        "nothing is known about what was owed, so nothing may be sent"
+    );
+    let record = registry.publications.get("old").unwrap();
+    assert_eq!(record.generation, 7, "no generation is spent either");
+    assert!(
+        !record.transport_retry_pending,
+        "the unreplayable flag is cleared rather than retried forever"
+    );
+    let no_bad_files = std::fs::read_dir(&config.state_dir)
+        .unwrap()
+        .flatten()
+        .all(|entry| !entry.file_name().to_string_lossy().contains(".bad-"));
+    assert!(
+        no_bad_files,
+        "an older-shaped registry must never be quarantined"
+    );
+}
+
+/// An owed update survives the registry round-trip whole: a restart in the
+/// middle of an outage must replay the same bytes, not a subset of them.
+#[test]
+fn an_owed_update_round_trips_through_the_registry_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path()).unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let path = search_indexer::users::registry_path(state_dir.path());
+    let mut registry = Registry::default();
+    report_after_import(
+        Some(&publishing_to(unreachable_url().unwrap())),
+        &engine,
+        &mut registry,
+        &ImportReport {
+            handle: "rory",
+            outcome: ImportOutcome::Failed("archive checksum mismatch"),
+            provider_account_id: Some("9"),
+            run_id: Some("run-z"),
+            capture_ids: vec!["d".repeat(64)],
+        },
+    );
+    registry.save(&path).unwrap();
+    let reloaded = Registry::load(&path).unwrap();
+    assert_eq!(
+        reloaded.publications.get("rory").unwrap().pending,
+        registry.publications.get("rory").unwrap().pending,
+        "every field of the owed update must survive the restart"
+    );
+    let pending = reloaded
+        .publications
+        .get("rory")
+        .unwrap()
+        .pending
+        .clone()
+        .unwrap();
+    assert_eq!(
+        pending.reported_state,
+        Some(search_indexer::users::ReportedState::Failed)
+    );
+    assert_eq!(pending.error.as_deref(), Some("archive checksum mismatch"));
+    assert!(
+        pending.observed_at_ms > 0,
+        "observedAt is replayed verbatim"
+    );
+    assert!(pending.unique_post_count.is_none());
 }

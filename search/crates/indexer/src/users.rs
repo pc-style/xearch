@@ -136,6 +136,78 @@ impl UserRecord {
     }
 }
 
+/// `reportedState` of a publication update.
+///
+/// Spelled as the wire contract spells it (`docs/publication-contract.md`,
+/// "Publication states"). Only the two states this indexer ever reports
+/// are modelled; `indexing` is the acquisition side's to send, not ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReportedState {
+    /// Posts for this account are live in the committed index.
+    Searchable,
+    /// The import itself failed; the envelope carries the verbatim reason.
+    Failed,
+}
+
+impl ReportedState {
+    /// The exact wire spelling; the receiver rejects anything else.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Searchable => "searchable",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// One publication update that was attempted but never got a response.
+///
+/// Stored whole so a later pass replays *that* update rather than
+/// rebuilding a new one from whatever drop file it happens to be looking
+/// at.
+///
+/// This exists because the receiver's contract is explicit
+/// (`docs/publication-contract.md`, "Idempotency and staleness"): a
+/// generation that is resent "must reflect the exact same content", and a
+/// duplicate generation carrying different content "is a sender-side bug".
+/// A transport failure does not spend the generation it used, so that
+/// number stays reserved for exactly this publication until a response
+/// finally comes back — which means the replay has to be the same bytes,
+/// `observedAt` included, so the `Idempotency-Key` matches too.
+///
+/// Every field is `#[serde(default)]`, so a `users.json` written before
+/// this field existed (or before `publications` existed at all) loads
+/// unchanged instead of being quarantined.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPublication {
+    /// `reportedState` the original attempt carried. `None` only in a
+    /// hand-edited or truncated registry; nothing is replayed without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_state: Option<ReportedState>,
+    /// The exact capture ids the original attempt claimed were processed —
+    /// what the receiver marks confirmed. Empty for a per-handle dump.
+    #[serde(default)]
+    pub capture_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique_post_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique_post_count_as_of: Option<i64>,
+    /// Verbatim import error, present exactly when `reported_state` is
+    /// `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// `observedAt` of the original attempt, replayed verbatim so the
+    /// resend is byte-identical and keeps the same `Idempotency-Key`.
+    #[serde(default)]
+    pub observed_at_ms: i64,
+}
+
 /// Durable per-account publication state sent to Convex's
 /// `POST /publication/update` (`docs/publication-contract.md`).
 ///
@@ -176,8 +248,18 @@ pub struct PublicationRecord {
     /// Never set for a permanent rejection — those are logged and left
     /// alone rather than retried, per `AGENTS.md`'s "no self-imposed retry
     /// spinning".
+    ///
+    /// Always accompanied by [`Self::pending`] when this indexer set it;
+    /// a registry written by an older build can carry the flag alone, and
+    /// then there is nothing to replay (see
+    /// [`crate::publish::replay_pending`]).
     #[serde(default)]
     pub transport_retry_pending: bool,
+    /// *What* is owed: the whole undelivered update, replayed verbatim at
+    /// the generation it reserved. `None` means nothing is in flight for
+    /// this account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<PendingPublication>,
 }
 
 /// The registry file: versioned map of handle to record.
@@ -324,7 +406,8 @@ impl Registry {
     }
 
     /// Record a delivered send (any HTTP response, whatever its status) at
-    /// `generation`: advance the watermark and clear the retry flag.
+    /// `generation`: advance the watermark, drop the in-flight publication
+    /// and clear the retry flag.
     /// `applied_searchable` carries `(uniquePostCount, observedAt)` only
     /// when the delivered response was a successfully applied `searchable`
     /// update; passing `None` leaves the previous sticky snapshot alone,
@@ -339,6 +422,10 @@ impl Registry {
         let record = self.publication(handle);
         record.generation = generation;
         record.transport_retry_pending = false;
+        // The generation is spent: whatever was in flight at it is done,
+        // whether the receiver applied it, ignored it as a duplicate, or
+        // rejected it outright.
+        record.pending = None;
         if let Some((count, observed_at)) = applied_searchable {
             record.last_unique_post_count = Some(count);
             record.last_published_at_ms = Some(observed_at);
@@ -346,13 +433,25 @@ impl Registry {
         record.last_publish_error = last_publish_error;
     }
 
-    /// Record that a send never received an HTTP response. The generation
+    /// Record that a send never received an HTTP response, keeping the
+    /// update itself so a later pass can replay exactly it. The generation
     /// watermark is left untouched so the same number is reused on the
     /// next attempt — nothing was ever delivered at it.
-    pub fn record_publish_transport_failure(&mut self, handle: &str, error: &str) {
+    ///
+    /// An update already waiting on this account is never replaced: the
+    /// reserved generation belongs to it, the receiver may already have
+    /// committed it, and resending that number with different content is
+    /// the sender-side bug `docs/publication-contract.md` names outright.
+    pub fn record_publish_transport_failure(
+        &mut self,
+        handle: &str,
+        error: &str,
+        attempted: PendingPublication,
+    ) {
         let record = self.publication(handle);
         record.transport_retry_pending = true;
         record.last_publish_error = Some(error.to_owned());
+        let _ = record.pending.get_or_insert(attempted);
     }
 
     /// Mark a successful import. Zero accepted posts is an error, not a
