@@ -33,24 +33,40 @@ grep -rqF "Dependency health" dist-operator/assets || {
 # instant where the document root is missing — two renames would leave
 # `try_files $uri =404` serving 404s in between, and a failure between them
 # would leave the site down with nothing restored.
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+#
+# One publication at a time. Two runs in the same UTC second would otherwise
+# share a $STAMP, and one could prune or overwrite the release the other is
+# still copying into — leaving `dist` pointing at a half-written tree.
 mkdir -p "$ROOT/releases"
+exec 9>"$ROOT/.publish.lock"
+flock 9
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 rm -rf "$ROOT/releases/$STAMP"
 cp -r dist-operator "$ROOT/releases/$STAMP"
 
-# One-time migration off the plain directory this used to publish into. Only
-# reachable on the first run after this script changed shape.
+# One-time migration off the plain directory this used to publish into, for
+# any host still on the old layout. This is the one step that cannot be a
+# single rename — a directory cannot be replaced by a symlink atomically — so
+# it is the one step that gets an unwind: if anything after it fails, the
+# original document root goes back where nginx expects it.
+LEGACY=""
 if [ -d "$ROOT/dist" ] && [ ! -L "$ROOT/dist" ]; then
-  mv "$ROOT/dist" "$ROOT/releases/legacy-$STAMP"
+  LEGACY="$ROOT/releases/legacy-$STAMP"
+  trap 'if [ -n "$LEGACY" ] && [ -d "$LEGACY" ] && [ ! -e "$ROOT/dist" ]; then mv "$LEGACY" "$ROOT/dist"; fi' EXIT
+  mv "$ROOT/dist" "$LEGACY"
 fi
 
 PREVIOUS="$(readlink "$ROOT/dist" 2>/dev/null || true)"
 ln -sfn "releases/$STAMP" "$ROOT/dist.incoming"
 mv -T "$ROOT/dist.incoming" "$ROOT/dist"
+trap - EXIT
 
 # Keep the three newest releases; the rest are rollback material nobody wants.
 (cd "$ROOT/releases" && ls -1d */ 2>/dev/null | sort -r | tail -n +4 | xargs -r rm -rf)
 
 echo "deploy-operator-site: published $STAMP against $CONVEX_URL"
-[ -n "$PREVIOUS" ] && echo "deploy-operator-site: roll back with  ln -sfn '$PREVIOUS' '$ROOT/dist.incoming' && mv -T '$ROOT/dist.incoming' '$ROOT/dist'"
+if [ -n "$PREVIOUS" ]; then
+  echo "deploy-operator-site: roll back with  ln -sfn '$PREVIOUS' '$ROOT/dist.incoming' && mv -T '$ROOT/dist.incoming' '$ROOT/dist'"
+fi
 echo "deploy-operator-site: https://$(hostname).exe.xyz:8080/"
