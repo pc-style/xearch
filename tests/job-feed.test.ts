@@ -205,14 +205,18 @@ describe("one live search, one name", () => {
     const first = await a.mutation(api.jobs.start, { kind: "live", input: "from:theo" });
     expect((await t.run((ctx) => ctx.db.get(first)))?.input).toBe("@theo");
 
-    // The already-active guard matches on that exact stored string, so the
-    // other two spellings now collide with the first instead of each opening
-    // a new row for the same search.
+    // Every other spelling normalizes to that same stored string, so each
+    // one comes back as the run already in flight rather than opening a
+    // second row for the same search. Getting the same id back IS the proof
+    // they canonicalized: nothing else could return it.
+    //
+    // This used to throw "already active" at the person instead. Being shown
+    // an error for retyping a search you just ran is not a guarantee worth
+    // keeping — see jobs.ts REPEAT_WINDOW_MS.
     for (const spelling of ["@Theo", "@theo", "from:@theo"]) {
-      await expect(a.mutation(api.jobs.start, { kind: "live", input: spelling })).rejects.toThrow(
-        "already active",
-      );
+      expect(await a.mutation(api.jobs.start, { kind: "live", input: spelling })).toBe(first);
     }
+    expect(await t.run(async (ctx) => (await ctx.db.query("jobs").collect()).length)).toBe(1);
   });
 
   it("keeps the rest of the query and lowercases only the handle", async () => {

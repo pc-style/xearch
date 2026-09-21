@@ -244,6 +244,12 @@ export default defineSchema({
     // filter after the index scan, so filtering by kind would still read
     // every job an owner has run to find their account imports among them.
     .index("by_owner_and_kind", ["owner", "kind"])
+    // One person's runs of one exact request, newest first — Convex appends
+    // `_creationTime` as the trailing column of every index, so `.order("desc")
+    // .first()` on this is "what did they last ask for this?". Used by
+    // `jobs.start` to answer a repeated click with the run it already made
+    // instead of a second one.
+    .index("by_owner_and_input", ["owner", "kind", "input"])
     .index("by_input", ["kind", "input", "status"]),
   // One row per account: the current publication pipeline state plus the
   // last confirmed-searchable snapshot. These are deliberately separate
