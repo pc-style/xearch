@@ -342,12 +342,15 @@ describe("library.rows", () => {
     expect(byHandle.map((r) => r.handle)).toEqual(["failed-one"]);
   });
 
-  it("scopes rows to the requesting owner and requires authentication", async () => {
+  it("scopes rows to the requesting owner and renders empty without an identity", async () => {
     const { t, alice, b } = await setup();
     await insertAccount(t, { handle: "adam", userId: "1001" });
     await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
     expect((await b.query(api.library.rows, {})).rows).toHaveLength(0);
-    await expect(t.query(api.library.rows, {})).rejects.toThrow();
+    // No identity is an auth transition on a live subscription, not a real
+    // request: an empty library, never a thrown ConvexError error tracking
+    // would file as an uncaught exception.
+    expect(await t.query(api.library.rows, {})).toEqual({ rows: [], truncated: false });
   });
 });
 
@@ -397,5 +400,14 @@ describe("library.history", () => {
     const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });
     await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
     await expect(b.query(api.library.history, { accountId })).rejects.toThrow("Account not found");
+  });
+
+  it("renders empty history without an identity instead of throwing the auth guard", async () => {
+    const { t, alice } = await setup();
+    const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });
+    await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
+    // An auth transition on a live subscription: an empty list, not a thrown
+    // ConvexError that error tracking would file as an uncaught exception.
+    expect(await t.query(api.library.history, { accountId })).toEqual([]);
   });
 });

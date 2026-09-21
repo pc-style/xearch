@@ -2,7 +2,7 @@ import { v, ConvexError, type Infer } from "convex/values";
 import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { user } from "./access";
+import { maybeUser } from "./access";
 import { publicationStateValidator, jobStatusValidator } from "./schema";
 import {
   accountLibraryRowValidator,
@@ -83,7 +83,10 @@ export const rows = query({
     truncated: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    const owner = await user(ctx);
+    // No identity means an auth transition on a still-live subscription, not
+    // a real request: render an empty library instead of throwing.
+    const owner = await maybeUser(ctx);
+    if (!owner) return { rows: [], truncated: false };
     const { byAccount, truncated } = await groupOwnedJobsByAccount(ctx, owner);
     const search = args.search?.trim().toLowerCase();
     const out: AccountLibraryRow[] = [];
@@ -181,7 +184,10 @@ export const history = query({
   args: { accountId: v.id("accounts") },
   returns: v.array(historyRunValidator),
   handler: async (ctx, args) => {
-    const owner = await user(ctx);
+    // Same auth-transition guard as `rows`: an empty history is the honest
+    // render while there is no identity, never a thrown ConvexError.
+    const owner = await maybeUser(ctx);
+    if (!owner) return [];
     // A targeted ownership lookup, NOT the bounded library page. Deriving
     // this from the page meant an owner with more imports than it holds was
     // told "not found" for an account they genuinely own, and lost both its
