@@ -36,7 +36,8 @@ const healthQuery = anyApi.summary.health as unknown as import("convex/server").
 // (unmodified) to prove how summary.summary's global indexedAccounts/
 // indexedPosts relate to the owner-scoped account list a real caller would
 // actually see, per the "addressable" must-fix below.
-const libraryRowsQuery = anyApi.library.rows as unknown as import("convex/server").FunctionReference<
+const libraryRowsQuery = anyApi.library
+  .rows as unknown as import("convex/server").FunctionReference<
   "query",
   "public",
   { search?: string; status?: string },
@@ -60,7 +61,12 @@ async function setup() {
 
 type Kind = "bulk" | "live" | "post" | "profile" | "following" | "followers" | "archive";
 type Status = "queued" | "running" | "complete" | "partial" | "failed" | "cancelled";
-type PublicationState = "downloaded" | "waiting_for_indexing" | "indexing" | "searchable" | "failed";
+type PublicationState =
+  | "downloaded"
+  | "waiting_for_indexing"
+  | "indexing"
+  | "searchable"
+  | "failed";
 
 async function insertAccount(
   t: Awaited<ReturnType<typeof setup>>["t"],
@@ -144,7 +150,12 @@ async function insertPublicationUpdate(
     handle: string;
     captureIds: string[];
     generation: number;
-    outcome: "applied" | "stale_ignored" | "duplicate_ignored" | "rejected_unauthorized" | "rejected_invalid";
+    outcome:
+      | "applied"
+      | "stale_ignored"
+      | "duplicate_ignored"
+      | "rejected_unauthorized"
+      | "rejected_invalid";
   },
 ) {
   return t.run((ctx) =>
@@ -385,7 +396,11 @@ describe("summary.summary", () => {
     // Only alice ever ran a job for this account; bob has never imported
     // anything of his own.
     await insertJob(t, alice, { input: "alice-account", expectedUserId: "1" });
-    await insertPublication(t, { accountId: account, state: "searchable", searchablePostCount: 10 });
+    await insertPublication(t, {
+      accountId: account,
+      state: "searchable",
+      searchablePostCount: 10,
+    });
 
     const bobsSummary = await b.query(summaryQuery, { now: Date.now() });
     const bobsLibrary = (await b.query(libraryRowsQuery, {})).rows;

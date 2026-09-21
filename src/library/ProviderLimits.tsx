@@ -38,7 +38,8 @@ export default function ProviderLimits({
         {!limits
           ? PROVIDERS.map((provider) => (
               <Badge key={provider} tone="neutral">
-                {PROVIDER_DISPLAY_NAME[provider]}: {isAuthenticated ? "loading…" : "connect to view"}
+                {PROVIDER_DISPLAY_NAME[provider]}:{" "}
+                {isAuthenticated ? "loading…" : "connect to view"}
               </Badge>
             ))
           : limits.map((limit) => (

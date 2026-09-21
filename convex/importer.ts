@@ -97,20 +97,22 @@ export const run = internalAction({
         // write failed and took the catch block with it, the run would stay
         // "running" until the 10-minute expiry instead of reporting its real
         // error. Losing one observation beats stranding the job.
-        await ctx.runMutation(internal.jobs.recordThrottle, {
-          jobId,
-          attempt: job.attempt,
-          provider: throttle.provider,
-          operation: throttle.operation,
-          // The schema requires a reason; the provider does not always send
-          // one. Fall back to the error text we already show a person rather
-          // than inventing a reason or dropping the whole observation.
-          reason: throttle.reason ?? error.message,
-          remaining: throttle.remaining,
-          resetAt: throttle.resetAt,
-          retryAfterMs: throttle.retryAfterMs,
-          observedAt: throttle.observedAt,
-        }).catch(() => {});
+        await ctx
+          .runMutation(internal.jobs.recordThrottle, {
+            jobId,
+            attempt: job.attempt,
+            provider: throttle.provider,
+            operation: throttle.operation,
+            // The schema requires a reason; the provider does not always send
+            // one. Fall back to the error text we already show a person rather
+            // than inventing a reason or dropping the whole observation.
+            reason: throttle.reason ?? error.message,
+            remaining: throttle.remaining,
+            resetAt: throttle.resetAt,
+            retryAfterMs: throttle.retryAfterMs,
+            observedAt: throttle.observedAt,
+          })
+          .catch(() => {});
       }
       await ctx.runMutation(internal.jobs.finish, {
         jobId,

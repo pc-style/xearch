@@ -5,6 +5,18 @@ export type IndexingStatus = {
   collectorMode: "outbound" | "receiver";
 };
 
+/**
+ * What the client-facing app says when imports are off.
+ *
+ * Deliberately one sentence with no diagnosis in it. The specific reason —
+ * no x.md key, worker offline, no capture receiver — is a fact about how
+ * this deployment is run, and `indexingUnavailableMessage` below says it
+ * only in the operator build, where `integrations.operator` supplies the
+ * fields to say it from.
+ */
+export const IMPORTS_UNAVAILABLE = "Imports are unavailable right now. Try again shortly.";
+
+/** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {
   if (config.indexing) return undefined;
   if (!config.xmd) return "Indexing needs an x.md key. Configure it in Connections.";
@@ -58,11 +70,12 @@ export const WORKER_LIVE_WINDOW_MS = 45_000;
 export type HandoffState =
   | { kind: "configured"; ok: boolean }
   /**
-   * `lastSeenAt` is absent for a signed-out caller — worker timing is not
-   * part of the public bootstrap response — and null when the worker is
-   * known to be down. Absent means "not disclosed", which is not the same
-   * claim as "down", so it resolves to undefined and the caller falls back
-   * to the public flag rather than asserting something it was not told.
+   * `lastSeenAt` is null when the worker is known to be down, and absent
+   * when it was not disclosed at all. Those are different claims: absent
+   * resolves to undefined so the caller reports "unknown" rather than
+   * asserting something it was never told. Worker timing reaches only the
+   * operator build now (`integrations.operator`), and the public bootstrap
+   * query carries no handoff state whatsoever.
    */
   | { kind: "live"; lastSeenAt?: number | null };
 

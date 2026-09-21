@@ -16,10 +16,7 @@ export function parseQuery(raw: string) {
   const authors = [...raw.matchAll(authorFilter())].map((m) => m[1].toLowerCase());
   if (new Set(authors).size > 1)
     throw new Error("Search one author at a time, or remove the @ filters to search everyone.");
-  const text = raw
-    .replace(authorFilter(), " ")
-    .trim()
-    .replace(/\s+/g, " ");
+  const text = raw.replace(authorFilter(), " ").trim().replace(/\s+/g, " ");
   if (/(?:^|\s)-?(?!https?:\/\/)[a-z_][a-z0-9_]*:/i.test(text))
     throw new Error(
       "Use @handle to filter authors. Other X operators are available through Find on X.",

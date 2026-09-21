@@ -127,12 +127,7 @@ export function PostCard({
       {post.links.length > 0 && (
         <div className="links">
           {post.links.slice(0, 3).map((url) => (
-            <button
-              type="button"
-              key={url}
-              onClick={() => onRead(url)}
-              title={url}
-            >
+            <button type="button" key={url} onClick={() => onRead(url)} title={url}>
               <Link2 size={14} />
               <span>{safeHostname(url)}</span>
               <ArrowUpRight size={13} />
@@ -270,11 +265,7 @@ export function ResultsSection({
               <Bookmark size={15} />
               Save search
             </button>
-            <button
-              type="button"
-              disabled={busy || !configured?.firecrawl}
-              onClick={onWebContext}
-            >
+            <button type="button" disabled={busy || !configured?.firecrawl} onClick={onWebContext}>
               <Link2 size={15} />
               Web context
             </button>
@@ -287,11 +278,7 @@ export function ResultsSection({
               <Mail size={15} />
               Email
             </button>
-            <button
-              type="button"
-              disabled={busy || !configured?.indexing}
-              onClick={onLiveSearch}
-            >
+            <button type="button" disabled={busy || !configured?.indexing} onClick={onLiveSearch}>
               <Search size={15} />
               Find on X
             </button>
@@ -311,9 +298,7 @@ export function ResultsSection({
         <div className="empty">
           <Search size={30} />
           <h2>Connect the search service.</h2>
-          <p>
-            The interface is ready. Your data service supplies the corpus and search results.
-          </p>
+          <p>The interface is ready. Your data service supplies the corpus and search results.</p>
           <button type="button" onClick={() => onOpenModal("setup")}>
             View connections
           </button>

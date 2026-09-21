@@ -123,7 +123,8 @@ describe("provider limits (docs/publication-contract.md 'Provider throttle facts
         count: 12,
         attempt: 3,
         warnings: [],
-        error: "Paused at today's import limit. Your downloaded posts are safe. Try again tomorrow.",
+        error:
+          "Paused at today's import limit. Your downloaded posts are safe. Try again tomorrow.",
         updatedAt: Date.now(),
       }),
     );

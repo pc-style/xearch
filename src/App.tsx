@@ -1,4 +1,5 @@
 import {
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -19,7 +20,6 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import {
   ArrowUpRight,
   Bookmark,
-  Check,
   Clock3,
   Download,
   ExternalLink,
@@ -30,16 +30,10 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import Dashboard from "./Dashboard";
 import { ResultsSection, Avatar } from "./ResultsSection";
-import { AccountBadge } from "./auth/AccountBadge";
 import { EmailSignIn } from "./auth/EmailSignIn";
-import {
-  handoffReady,
-  indexingUnavailableMessage,
-  receiverConnection,
-  type Connection,
-} from "./integrationStatus";
+import { IMPORTS_UNAVAILABLE } from "./integrationStatus";
+import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
@@ -133,8 +127,8 @@ export default function App() {
     [busy, setBusy] = useState(false),
     [accountInput, setAccountInput] = useState(""),
     [since, setSince] = useState("");
-  const [dashboard, setDashboard] = useState(() =>
-    new URLSearchParams(location.search).has("dashboard"),
+  const [dashboard, setDashboard] = useState(
+    () => OPERATOR_BUILD && new URLSearchParams(location.search).has("dashboard"),
   );
   const [page, setPage] = useState<{
     title: string;
@@ -302,60 +296,11 @@ export default function App() {
     e.preventDefault();
     void task(submitImport, "Indexing started. Raw captures are handed to your data service.");
   };
-  const loadLive = () =>
-    void task(runLoadLive, "Looking for more posts on X.");
+  const loadLive = () => void task(runLoadLive, "Looking for more posts on X.");
   const read = (url: string) => {
     setReading(true);
     void task(() => runRead(url)).finally(() => setReading(false));
   };
-  // Worker liveness is judged against this clock, not inside the Convex
-  // query — a query re-runs when a document changes, never because time
-  // passed, so a server-decided boolean would stay true after the worker
-  // went quiet. Ticking here lets the badge decay on its own.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 5_000);
-    return () => clearInterval(id);
-  }, []);
-  const connections: Connection[] = [
-    {
-      name: "Search service",
-      ready: configured?.search,
-      env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
-      purpose: "Finds posts in your library",
-    },
-    // Falls back to the public flag when the timestamp was not disclosed
-    // (signed out), so a visitor sees exactly what they saw before worker
-    // timing was ever returned, rather than a permanent "Checking…".
-    receiverConnection(
-      configured?.collectorMode,
-      handoffReady(configured?.handoffState, now) ?? configured?.handoff,
-    ),
-    {
-      name: "x.md",
-      ready: configured?.xmd,
-      env: "X_MD_API_KEY",
-      purpose: "Account histories, live search, conversations",
-    },
-    {
-      name: "Firecrawl",
-      ready: configured?.firecrawl,
-      env: "FIRECRAWL_API_KEY",
-      purpose: "Reads pages linked in posts",
-    },
-    {
-      name: "OpenAI",
-      ready: configured?.openai,
-      env: "OPENAI_API_KEY",
-      purpose: "Turns a question into a clearer search",
-    },
-    {
-      name: "AgentMail",
-      ready: configured?.email,
-      env: "AGENTMAIL_API_KEY, AGENTMAIL_INBOX_ID",
-      purpose: "Emails search results",
-    },
-  ];
   const visible = view === "bookmarks" ? bookmarks : (result?.rows ?? []);
   const home = !raw && view === "search";
   const openDashboard = () => {
@@ -423,29 +368,38 @@ export default function App() {
     };
   }, [searchRequest, configured?.search, queryError, ensureSession, startSearch]);
 
-  if (dashboard)
+  if (dashboard && Dashboard)
     return (
-      <Dashboard
-        ensureSession={ensureSession}
-        close={() => {
-          setDashboard(false);
-          const url = new URL(location.href);
-          url.searchParams.delete("dashboard");
-          history.replaceState(null, "", url);
-        }}
-      />
+      <Suspense fallback={null}>
+        <Dashboard
+          ensureSession={ensureSession}
+          close={() => {
+            setDashboard(false);
+            const url = new URL(location.href);
+            url.searchParams.delete("dashboard");
+            history.replaceState(null, "", url);
+          }}
+        />
+      </Suspense>
     );
   return (
     <div className={`app ${home ? "is-home" : "has-results"}`}>
       <header className="topbar">
-        <button type="button" className="wordmark" onClick={() => search("")} aria-label="Xearch home">
+        <button
+          type="button"
+          className="wordmark"
+          onClick={() => search("")}
+          aria-label="Xearch home"
+        >
           xearch<span className="wordmark-dot">.</span>
         </button>
         <nav aria-label="Main navigation">
-          <button type="button" aria-label="Import dashboard" onClick={openDashboard}>
-            <LayoutDashboard size={15} />
-            <span>Dashboard</span>
-          </button>
+          {OPERATOR_BUILD && (
+            <button type="button" aria-label="Import dashboard" onClick={openDashboard}>
+              <LayoutDashboard size={15} />
+              <span>Dashboard</span>
+            </button>
+          )}
           <button
             type="button"
             aria-label="Saved searches"
@@ -580,9 +534,7 @@ export default function App() {
                   className="text-button ai"
                   disabled={busy || !draft.trim()}
                   title="Suggest a clearer search"
-                  onClick={() =>
-                    void task(proposeSearch)
-                  }
+                  onClick={() => void task(proposeSearch)}
                 >
                   <Sparkles size={13} />
                   Help me search
@@ -624,11 +576,7 @@ export default function App() {
                 <>
                   <span className="status-dot muted" />
                   Connect your sources to start searching.
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => setModal("imports")}
-                  >
+                  <button type="button" className="text-button" onClick={() => setModal("imports")}>
                     Import an account <Plus size={13} />
                   </button>
                 </>
@@ -639,7 +587,12 @@ export default function App() {
         {notice && (
           <div className="notice" role="status">
             <span>{notice}</span>
-            <button type="button" className="icon" aria-label="Dismiss message" onClick={() => setNotice("")}>
+            <button
+              type="button"
+              className="icon"
+              aria-label="Dismiss message"
+              onClick={() => setNotice("")}
+            >
               <X size={16} />
             </button>
           </div>
@@ -667,12 +620,8 @@ export default function App() {
             onWebContext={runWebContext}
             onLoadMore={runLoadMore}
             onRead={read}
-            onBookmark={(post) =>
-              void task(() => runBookmark(post))
-            }
-            onThread={(post) =>
-              void task(() => runThread(post.url))
-            }
+            onBookmark={(post) => void task(() => runBookmark(post))}
+            onThread={(post) => void task(() => runThread(post.url))}
           />
         )}
       </main>
@@ -682,10 +631,12 @@ export default function App() {
           <a href="https://mdfromx.com" target="_blank" rel="noreferrer">
             Powered by x.md <ArrowUpRight size={12} />
           </a>
-          <button type="button" onClick={() => setModal("setup")}>
-            <SlidersHorizontal size={13} />
-            Connections
-          </button>
+          {OPERATOR_BUILD && (
+            <button type="button" onClick={() => setModal("setup")}>
+              <SlidersHorizontal size={13} />
+              Connections
+            </button>
+          )}
         </div>
       </footer>
       {modal === "imports" && (
@@ -720,11 +671,13 @@ export default function App() {
               Import posts
             </button>
             {configured && !configured.indexing && (
-              <p className="config-warning">{indexingUnavailableMessage(configured)}</p>
+              <p className="config-warning">{IMPORTS_UNAVAILABLE}</p>
             )}
-            <button type="button" className="text-button" onClick={openDashboard}>
-              More options in the dashboard <ArrowUpRight size={13} />
-            </button>
+            {OPERATOR_BUILD && (
+              <button type="button" className="text-button" onClick={openDashboard}>
+                More options in the dashboard <ArrowUpRight size={13} />
+              </button>
+            )}
           </form>
           <div className="jobs">
             <h3>Recent imports</h3>
@@ -860,39 +813,11 @@ export default function App() {
           ))}
         </Modal>
       )}
-      {modal === "setup" && (
+      {modal === "setup" && ConnectionsPanel && (
         <Modal notice={notice} title="Connections" close={() => setModal(null)}>
-          <p className="muted-copy">
-            Search is live once your data service returns results. The remaining connections are
-            optional improvements.
-          </p>
-          {connections.map((c) => (
-            <div className="connection-row" key={c.name}>
-              <div>
-                <strong>{c.name}</strong>
-                <p>{c.purpose}</p>
-                <small>
-                  {configured === undefined ? (
-                    "Checking…"
-                  ) : (
-                    <>
-                      {c.ready ? <Check size={12} /> : <span className="status-dot" />}{" "}
-                      {c.ready
-                        ? c.proves === "live"
-                          ? "Connected"
-                          : "Configured"
-                        : c.proves === "live"
-                          ? "Not connected"
-                          : "Not configured"}
-                      {c.env ? ` · ${c.env}` : ""}
-                    </>
-                  )}
-                </small>
-                {c.note && <small>{c.note}</small>}
-              </div>
-            </div>
-          ))}
-          {configured?.collectorMode === "outbound" && <AccountBadge />}
+          <Suspense fallback={<p className="muted-copy">Loading…</p>}>
+            <ConnectionsPanel />
+          </Suspense>
         </Modal>
       )}
       {page && (

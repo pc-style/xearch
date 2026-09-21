@@ -135,7 +135,7 @@ export default function Dashboard({
 }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
-  const config = useQuery(api.integrations.configured, {});
+  const config = useQuery(api.integrations.operator, {});
   const [showDismissed, setShowDismissed] = useState(false);
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
   // out here, after the server had already limited the page, could hide

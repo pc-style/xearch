@@ -16,12 +16,13 @@
     "capture": "node scripts/capture-server.mjs",
     "dev": "vite --host 0.0.0.0",
     "backend": "convex dev",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/check-public-bundle.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "deploy": "bunx @convex-dev/static-hosting deploy",
     "deploy:prod": "CONVEX_DEPLOYMENT=prod:utmost-kudu-321 NODE_OPTIONS=--max-old-space-size=3072 bunx @convex-dev/static-hosting deploy --build-command 'bun run build'",
-    "react-doctor": "npx react-doctor@latest src --no-supply-chain"
+    "react-doctor": "npx react-doctor@latest src --no-supply-chain",
+    "build:operator": "tsc --noEmit && VITE_XEARCH_OPERATOR=1 vite build --outDir dist-operator --emptyOutDir"
   },
   "dependencies": {
     "@agentmail/convex": "latest",

@@ -34,17 +34,22 @@ async function sendVerificationRequest(
   // doesn't declare; convex/email.ts's mutation-context call needs no such
   // cast. Same kind of unavoidable cross-package type gap as the ctx cast
   // above, not a new pattern.
-  await mail.sendMessage(ctx as unknown as Parameters<typeof mail.sendMessage>[0], process.env.AGENTMAIL_INBOX_ID, {
-    to: identifier,
-    subject: "Your Xearch sign-in code",
-    text:
-      `Your Xearch sign-in code is ${token}.\n\n` +
-      `It expires at ${expires.toISOString()}. If you didn't request this, you can ignore this email.`,
-  });
+  await mail.sendMessage(
+    ctx as unknown as Parameters<typeof mail.sendMessage>[0],
+    process.env.AGENTMAIL_INBOX_ID,
+    {
+      to: identifier,
+      subject: "Your Xearch sign-in code",
+      text:
+        `Your Xearch sign-in code is ${token}.\n\n` +
+        `It expires at ${expires.toISOString()}. If you didn't request this, you can ignore this email.`,
+    },
+  );
 }
 
 const EmailOTP = Email<DataModel>({
-  sendVerificationRequest: sendVerificationRequest as unknown as EmailConfig<DataModel>["sendVerificationRequest"],
+  sendVerificationRequest:
+    sendVerificationRequest as unknown as EmailConfig<DataModel>["sendVerificationRequest"],
 });
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({

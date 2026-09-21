@@ -4,7 +4,11 @@ import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
 import { publicationStateValidator, jobStatusValidator } from "./schema";
-import { accountLibraryRowValidator, type AccountLibraryRow, type NextAction } from "./lib/contracts";
+import {
+  accountLibraryRowValidator,
+  type AccountLibraryRow,
+  type NextAction,
+} from "./lib/contracts";
 import { ownedAccountJobs, ownerJobsForAccount, resolveJobAccount } from "./lib/accounts";
 
 /**

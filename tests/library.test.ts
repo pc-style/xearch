@@ -176,7 +176,11 @@ describe("library.rows", () => {
     await insertAccount(t, { handle: "adam", userId: "1001" });
     await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
     await insertJob(t, alice, { kind: "live", input: "from:theo", status: "complete" });
-    await insertJob(t, alice, { kind: "post", input: "https://x.com/adam/status/1", status: "complete" });
+    await insertJob(t, alice, {
+      kind: "post",
+      input: "https://x.com/adam/status/1",
+      status: "complete",
+    });
     await insertJob(t, alice, { kind: "followers", input: "adam", status: "complete" });
     const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
@@ -244,7 +248,10 @@ describe("library.rows", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("failed");
     expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 2_500 });
-    expect(rows[0].lastError).toEqual({ message: "publish rejected: schema mismatch", observedAt: 9_000 });
+    expect(rows[0].lastError).toEqual({
+      message: "publish rejected: schema mismatch",
+      observedAt: 9_000,
+    });
   });
 
   // NOTE ON SCOPE: this proves library.ts's query-layer grouping never folds
@@ -257,8 +264,16 @@ describe("library.rows", () => {
   // to-do.md P0 and is out of scope for this file.
   it("given two pre-existing account rows for different provider ids that shared a handle at different times, keeps them as separate library rows", async () => {
     const { t, alice, a } = await setup();
-    const oldAccount = await insertAccount(t, { handle: "renamed-away", userId: "1001", name: "Original" });
-    const newAccount = await insertAccount(t, { handle: "adam", userId: "1002", name: "New owner" });
+    const oldAccount = await insertAccount(t, {
+      handle: "renamed-away",
+      userId: "1001",
+      name: "Original",
+    });
+    const newAccount = await insertAccount(t, {
+      handle: "adam",
+      userId: "1002",
+      name: "New owner",
+    });
     await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -298,11 +313,23 @@ describe("library.rows", () => {
 
   it("filters by status and by handle/name search, server-side", async () => {
     const { t, alice, a } = await setup();
-    const searchableAccount = await insertAccount(t, { handle: "searchable-one", userId: "1001", name: "Findable" });
+    const searchableAccount = await insertAccount(t, {
+      handle: "searchable-one",
+      userId: "1001",
+      name: "Findable",
+    });
     const failedAccount = await insertAccount(t, { handle: "failed-one", userId: "1002" });
-    await insertJob(t, alice, { input: "searchable-one", expectedUserId: "1001", status: "complete" });
+    await insertJob(t, alice, {
+      input: "searchable-one",
+      expectedUserId: "1001",
+      status: "complete",
+    });
     await insertJob(t, alice, { input: "failed-one", expectedUserId: "1002", status: "complete" });
-    await insertPublication(t, { accountId: searchableAccount, state: "searchable", searchablePostCount: 10 });
+    await insertPublication(t, {
+      accountId: searchableAccount,
+      state: "searchable",
+      searchablePostCount: 10,
+    });
     await insertPublication(t, { accountId: failedAccount, state: "failed" });
 
     const searchableOnly = (await a.query(api.library.rows, { status: "searchable" })).rows;
@@ -319,7 +346,7 @@ describe("library.rows", () => {
     const { t, alice, b } = await setup();
     await insertAccount(t, { handle: "adam", userId: "1001" });
     await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
-    expect(((await b.query(api.library.rows, {}))).rows).toHaveLength(0);
+    expect((await b.query(api.library.rows, {})).rows).toHaveLength(0);
     await expect(t.query(api.library.rows, {})).rejects.toThrow();
   });
 });

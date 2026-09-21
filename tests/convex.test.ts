@@ -149,7 +149,10 @@ describe("Convex application boundaries", () => {
     vi.stubEnv("COLLECTOR_MODE", "outbound");
     vi.stubEnv("X_MD_API_KEY", "test");
     await t.mutation(internal.worker.heartbeat, { online: false });
-    expect(await a.query(api.integrations.configured, {})).toMatchObject({
+    expect(await a.query(api.integrations.configured, {})).toMatchObject({ indexing: false });
+    // Collector mode and handoff state are operator facts, so they are only
+    // on the session-gated query now — never on the public bootstrap.
+    expect(await a.query(api.integrations.operator, {})).toMatchObject({
       handoff: false,
       indexing: false,
       collectorMode: "outbound",
@@ -158,7 +161,7 @@ describe("Convex application boundaries", () => {
       "worker is offline",
     );
     await t.mutation(internal.worker.heartbeat, { online: true });
-    expect(await a.query(api.integrations.configured, {})).toMatchObject({
+    expect(await a.query(api.integrations.operator, {})).toMatchObject({
       handoff: true,
       indexing: true,
     });

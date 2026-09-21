@@ -47,7 +47,6 @@ const MAX_OWNED_JOBS = 1_000;
 const MAX_RECEIPTS_PER_JOB = 200;
 const MAX_PUBLICATION_UPDATES_PER_ACCOUNT = 500;
 
-
 function knownCount(unit: Count["unit"], value: number): Count {
   return { kind: "known", unit, value };
 }
@@ -457,10 +456,10 @@ export const health = query({
       const row = await ctx.db
         .query("serviceHealth")
         .withIndex("by_service_and_observed", (q) => q.eq("service", service))
-      // Newest observation wins. `by_service` alone orders by nothing the
-      // caller cares about, so `.first()` on it would return an arbitrary
-      // row rather than the current reading.
-      .order("desc")
+        // Newest observation wins. `by_service` alone orders by nothing the
+        // caller cares about, so `.first()` on it would return an arbitrary
+        // row rather than the current reading.
+        .order("desc")
         // `.first()`, not `.unique()`: by_service has no uniqueness
         // guarantee, and a duplicate row must not take the query down.
         .first();
