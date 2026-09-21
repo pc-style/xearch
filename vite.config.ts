@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import stylex from "@stylexjs/unplugin";
 
 // Which of the two sites this build produces. The public one — the default,
 // and what Convex static hosting deploys — resolves `./operatorSurface` to a
@@ -11,6 +12,10 @@ const operator = process.env.VITE_XEARCH_OPERATOR === "1";
 
 export default defineConfig({
   plugins: [
+    // Unlayered so the generated atomic classes beat the element defaults
+    // in global.css on equal specificity by source order (Vite appends the
+    // StyleX output after imported CSS assets).
+    stylex.vite(),
     react({
       compiler: { target: "19" },
     }),

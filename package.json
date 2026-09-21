@@ -29,18 +29,20 @@
     "@convex-dev/auth": "latest",
     "@convex-dev/static-hosting": "latest",
     "@firecrawl/firecrawl-convex": "latest",
-    "convex": "^1.45.0",
+    "@stylexjs/stylex": "^0.19.1",
+    "convex": "^1.46.0",
     "effect": "4.0.0-rc.112",
     "lucide-react": "latest",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "zod": "^4.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@effect/tsgo": "0.44.0",
-    "@types/node": "^26.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
+    "@stylexjs/unplugin": "^0.19.1",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "latest",
     "convex-test": "latest",
     "oxc-transform-react": "^0.150.0",
@@ -48,7 +50,7 @@
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
     "react-compiler-healthcheck": "^1.0.0",
-    "typescript": "^5.9.0",
+    "typescript": "^5.9.3",
     "vite": "latest",
     "vitest": "latest"
   }
