@@ -135,7 +135,11 @@ export default function Dashboard({
 }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
-  const config = useQuery(api.integrations.operator, {});
+  // `integrations.operator` requires a session, so asking for it before one
+  // exists throws into the app's error boundary — which only offers a
+  // reload. The dashboard is reachable directly by URL, so that is a normal
+  // first load, not an edge case.
+  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
   const [showDismissed, setShowDismissed] = useState(false);
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
   // out here, after the server had already limited the page, could hide
@@ -265,11 +269,22 @@ export default function Dashboard({
             ).map(([name, ready]) => (
               <div key={name}>
                 <span>{name}</span>
-                {/* `config` is undefined while the query is in flight or the
-                    socket is down. Rendering that as "Not connected" states a
-                    fact we do not have yet -- the same configuration-versus-
-                    connectivity conflation to-do.md P0 calls out. */}
-                <span>{!config ? "Checking…" : ready ? "Configured" : "Not connected"}</span>
+                {/* Three different "we don't know" states, and none of them
+                    may be rendered as "Not connected": no session means we
+                    never asked, `undefined` means the query is in flight or
+                    the socket is down, and only a resolved `false` is a fact
+                    about configuration. Collapsing them is the
+                    configuration-versus-connectivity conflation to-do.md P0
+                    calls out. */}
+                <span>
+                  {!isAuthenticated
+                    ? "Sign in to view"
+                    : !config
+                      ? "Checking…"
+                      : ready
+                        ? "Configured"
+                        : "Not connected"}
+                </span>
               </div>
             ))}
             <p>Configuration status, not a live health check. Provider keys stay on the backend.</p>

@@ -163,10 +163,15 @@ until September 21, and the VM frontend returned 500 for the whole period.
 Convex static-hosting publication does not update nginx's files, and this
 script does not touch Convex.
 
-To verify a public build without publishing anything:
+To verify a public build without publishing anything. Run the steps
+separately: `bun run build` chains three commands, and `bun run` appends
+trailing arguments to the last one, so `bun run build --outDir ...` would hand
+`--outDir` to the bundle checker and leave Vite writing to `dist/`.
 
 ```sh
-VITE_CONVEX_URL=https://utmost-kudu-321.convex.cloud bun run build --outDir .local-hosting/build-check/dist
+bunx tsc --noEmit
+VITE_CONVEX_URL=https://utmost-kudu-321.convex.cloud bunx vite build --outDir .local-hosting/build-check/dist
+node scripts/check-public-bundle.mjs .local-hosting/build-check/dist
 ```
 
 Long-running services have restart policies; this does not prove health or

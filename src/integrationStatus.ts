@@ -8,13 +8,15 @@ export type IndexingStatus = {
 /**
  * What the client-facing app says when imports are off.
  *
- * Deliberately one sentence with no diagnosis in it. The specific reason —
- * no x.md key, worker offline, no capture receiver — is a fact about how
- * this deployment is run, and `indexingUnavailableMessage` below says it
- * only in the operator build, where `integrations.operator` supplies the
- * fields to say it from.
+ * Deliberately one sentence with no diagnosis in it, and no word implying
+ * the cause is temporary: imports can be off because the worker is down
+ * *or* because this deployment was never given an x.md key, and a visitor
+ * cannot tell those apart or act on either. The specific reason is a fact
+ * about how the deployment is run, so `indexingUnavailableMessage` below
+ * says it only in the operator build, where `integrations.operator`
+ * supplies the fields to say it from.
  */
-export const IMPORTS_UNAVAILABLE = "Imports are unavailable right now. Try again shortly.";
+export const IMPORTS_UNAVAILABLE = "Imports are not available on this site.";
 
 /** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {

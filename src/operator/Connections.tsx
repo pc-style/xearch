@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
 import { Check } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { AccountBadge } from "../auth/AccountBadge";
@@ -18,7 +18,10 @@ import { handoffReady, receiverConnection, type Connection } from "../integratio
  * have shipped every one of these strings to convex.site.
  */
 export function ConnectionsPanel() {
-  const config = useQuery(api.integrations.operator, {});
+  // Skipped until a session exists: `integrations.operator` requires one,
+  // and asking early throws into the app's error boundary.
+  const { isAuthenticated } = useConvexAuth();
+  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
   // Worker liveness is judged against this clock, not inside the Convex
   // query — a query re-runs when a document changes, never because time
   // passed, so a server-decided boolean would stay true after the worker
@@ -73,7 +76,9 @@ export function ConnectionsPanel() {
             <strong>{c.name}</strong>
             <p>{c.purpose}</p>
             <small>
-              {config === undefined ? (
+              {!isAuthenticated ? (
+                "Sign in to view"
+              ) : config === undefined ? (
                 "Checking…"
               ) : (
                 <>
