@@ -1,0 +1,154 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&display=swap");
+
+/* Element defaults and other truly global rules. Everything class-based
+ * lives in StyleX stylesheets colocated with the components; this file
+ * holds only what StyleX cannot express: font loading, root tokens, bare
+ * element resets, dialog::backdrop, and keyframes. */
+
+:root {
+  font-family: "DM Sans", sans-serif;
+  color: #e9e7e3;
+  background: #080808;
+  font-synthesis: none;
+  font-weight: 400;
+  --muted: #b3b0ab;
+  --line: #292827;
+  --accent: #ffc99b;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #080808;
+}
+
+main {
+  flex: 1;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  cursor: pointer;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  padding: 10px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 5px;
+}
+
+button:hover:not(:disabled) {
+  background: #1a1816;
+  border-color: #55504b;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+input,
+select {
+  color: inherit;
+  background: #0d0d0d;
+  border: 1px solid #42403c;
+  border-radius: 4px;
+  padding: 13px 15px;
+  min-width: 0;
+}
+
+input::placeholder {
+  color: #9a9691;
+}
+
+p {
+  line-height: 1.6;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+mark {
+  color: #ffcea6;
+  background: #3a2c20;
+  border-radius: 2px;
+}
+
+code {
+  font-size: 0.85em;
+}
+
+dialog {
+  background: #11100f;
+  border: 1px solid #39342e;
+  color: #e2dcd5;
+  padding: 0;
+  border-radius: 12px;
+  max-width: 580px;
+  width: calc(100% - 32px);
+  max-height: calc(100svh - 48px);
+  overflow: hidden;
+  box-shadow: 0 20px 100px #0009;
+}
+
+dialog::backdrop {
+  background: #000a;
+  backdrop-filter: blur(5px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button,
+  a {
+    transition:
+      background-color 0.15s,
+      border-color 0.15s,
+      color 0.15s;
+  }
+}
+
+@keyframes status-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}

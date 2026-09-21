@@ -9,6 +9,8 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import * as stylex from "@stylexjs/stylex";
+import { site } from "./styles/site.stylex";
 import {
   useAction,
   useConvexAuth,
@@ -89,14 +91,21 @@ function Modal({
       }}
       aria-modal="true"
     >
-      <div className="modal-inner">
-        <header>
-          <h2 id={titleId}>{title}</h2>
-          <button type="button" className="icon" onClick={close} aria-label="Close">
+      <div {...stylex.props(site.modalInner)}>
+        <header {...stylex.props(site.modalHeader)}>
+          <h2 id={titleId} {...stylex.props(site.modalTitle)}>
+            {title}
+          </h2>
+          <button
+            type="button"
+            {...stylex.props(site.iconButton)}
+            onClick={close}
+            aria-label="Close"
+          >
             <X size={20} />
           </button>
         </header>
-        <div className="modal-body">
+        <div {...stylex.props(site.modalBody)}>
           {notice && <p role="status">{notice}</p>}
           {children}
         </div>
@@ -370,105 +379,122 @@ export default function App() {
       </Suspense>
     );
   return (
-    <div className={`app ${home ? "is-home" : "has-results"}`}>
-      <header className="topbar">
+    <div {...stylex.props(site.app)}>
+      <header {...stylex.props(site.topbar)}>
         <button
           type="button"
-          className="wordmark"
+          {...stylex.props(site.wordmark)}
           onClick={() => search("")}
           aria-label="Xearch home"
         >
-          xearch<span className="wordmark-dot">.</span>
+          xearch<span {...stylex.props(site.wordmarkDot)}>.</span>
         </button>
-        <nav aria-label="Main navigation">
+        <nav aria-label="Main navigation" {...stylex.props(site.nav)}>
           {OPERATOR_BUILD && (
-            <button type="button" aria-label="Import dashboard" onClick={openDashboard}>
+            <button
+              type="button"
+              aria-label="Import dashboard"
+              onClick={openDashboard}
+              {...stylex.props(site.navButton)}
+            >
               <LayoutDashboard size={15} />
-              <span>Dashboard</span>
+              <span {...stylex.props(site.navButtonLabel)}>Dashboard</span>
             </button>
           )}
           <button
             type="button"
             aria-label="Saved searches"
+            {...stylex.props(site.navButton)}
             onClick={() => {
               setModal("saved");
             }}
           >
             <Clock3 size={15} />
-            <span>Saved searches</span>
+            <span {...stylex.props(site.navButtonLabel)}>Saved searches</span>
           </button>
           <button
             type="button"
             aria-label="Bookmarks"
             aria-pressed={view === "bookmarks"}
+            {...stylex.props(site.navButton, view === "bookmarks" && site.navButtonPressed)}
             onClick={() => setView(view === "bookmarks" ? "search" : "bookmarks")}
           >
             <Bookmark size={15} />
-            <span>Bookmarks</span>
-            {bookmarks.length > 0 && <small>{bookmarks.length}</small>}
+            <span {...stylex.props(site.navButtonLabel)}>Bookmarks</span>
+            {bookmarks.length > 0 && (
+              <small {...stylex.props(site.navCount)}>{bookmarks.length}</small>
+            )}
           </button>
           <button
             type="button"
             aria-label="Import account"
-            className="import-nav"
+            {...stylex.props(site.navButton, site.importNav)}
             onClick={() => setModal("imports")}
           >
             <Plus size={16} />
-            <span>Import account</span>
+            <span {...stylex.props(site.navButtonLabel)}>Import account</span>
           </button>
         </nav>
       </header>
       {!connection.isWebSocketConnected && (
-        <p className="connection" role="status">
-          <span className="connection-dot" />
+        <p {...stylex.props(site.connection)} role="status">
+          <span {...stylex.props(site.connectionDot)} />
           {connection.hasEverConnected
             ? "Reconnecting to your search library…"
             : "Connecting to your search library…"}
         </p>
       )}
       <main>
-        <section className="search-stage" aria-label="Search X posts">
+        <section
+          aria-label="Search X posts"
+          {...stylex.props(site.searchStage, home ? site.searchStageHome : site.searchStageResults)}
+        >
           {home && (
             <>
-              <div className="orbit" role="group" aria-label="Imported accounts">
+              <div role="group" aria-label="Imported accounts" {...stylex.props(site.orbit)}>
                 {accounts.slice(0, 32).map((a, i, all) => {
                   const angle = (i / all.length) * Math.PI * 2 - Math.PI / 2;
+                  const orbit = stylex.props(site.orbitButton);
                   return (
                     <button
                       type="button"
                       title={`Search @${a.handle}`}
                       aria-label={`Search @${a.handle}`}
                       key={a._id}
+                      {...orbit}
                       style={
                         {
+                          ...orbit.style,
                           "--left": `${50 + 44 * Math.cos(angle)}%`,
                           "--top": `${50 + 45 * Math.sin(angle)}%`,
                         } as CSSProperties
                       }
                       onClick={() => search(`@${a.handle}`)}
                     >
-                      <Avatar name={a.handle} url={a.avatar} />
+                      <Avatar name={a.handle} url={a.avatar} large />
                     </button>
                   );
                 })}
               </div>
-              <div className="hero-title">
-                <p>Your people. Their words.</p>
-                <h1>Search X posts.</h1>
+              <div {...stylex.props(site.heroTitle)}>
+                <p {...stylex.props(site.heroKicker)}>Your people. Their words.</p>
+                <h1 {...stylex.props(site.heroHeading)}>Search X posts.</h1>
               </div>
             </>
           )}
           <form
-            className="search-form"
+            {...stylex.props(site.searchForm, home ? site.searchFormHome : site.searchFormResults)}
             onSubmit={(e) => {
               e.preventDefault();
               search(draft);
             }}
           >
-            <label htmlFor="query">Search posts</label>
-            <div className="search-controls">
-              <div className="query-wrap">
-                <Search size={19} />
+            <label htmlFor="query" {...stylex.props(site.searchLabel)}>
+              Search posts
+            </label>
+            <div {...stylex.props(site.searchControls)}>
+              <div {...stylex.props(site.queryWrap)}>
+                <Search size={19} {...stylex.props(site.queryIcon)} />
                 <input
                   id="query"
                   name="query"
@@ -479,6 +505,7 @@ export default function App() {
                   placeholder="e.g. local-first software or @handle"
                   autoComplete="off"
                   list="accounts"
+                  {...stylex.props(site.queryInput)}
                 />
                 <datalist id="accounts">
                   {accounts.map((a) => (
@@ -492,6 +519,7 @@ export default function App() {
                 aria-label="Sort results"
                 value={sort}
                 onChange={(e) => search(draft, e.target.value as Sort)}
+                {...stylex.props(site.searchSelect)}
               >
                 {sorts.map((s) => (
                   <option value={s.value} key={s.value}>
@@ -499,29 +527,31 @@ export default function App() {
                   </option>
                 ))}
               </select>
-              <button type="submit" className="primary">
+              <button type="submit" {...stylex.props(site.primary)}>
                 Search
               </button>
             </div>
-            <div className="search-help">
+            <div {...stylex.props(site.searchHelp)}>
               <span>
-                Search everything, select a creator, or start with <b>@</b> to filter by account.
+                Search everything, select a creator, or start with{" "}
+                <b {...stylex.props(site.searchHelpAt)}>@</b> to filter by account.
               </span>
-              <label className="stats-toggle">
+              <label {...stylex.props(site.statsToggle)}>
                 <input
                   type="checkbox"
                   checked={statsForNerds}
                   onChange={(event) => setStatsForNerds(event.target.checked)}
+                  {...stylex.props(site.statsCheckbox)}
                 />
                 Stats for nerds
               </label>
               {configured?.openai && (
                 <button
                   type="button"
-                  className="text-button ai"
                   disabled={busy || !draft.trim()}
                   title="Suggest a clearer search"
                   onClick={() => void task(proposeSearch)}
+                  {...stylex.props(site.textButton, site.aiButton)}
                 >
                   <Sparkles size={13} />
                   Help me search
@@ -530,13 +560,14 @@ export default function App() {
             </div>
           </form>
           {proposal && (
-            <div className="proposal">
+            <div {...stylex.props(site.proposal)}>
               <div>
                 <strong>{proposal.query}</strong>
-                <p>{proposal.explanation}</p>
+                <p {...stylex.props(site.proposalText)}>{proposal.explanation}</p>
               </div>
               <button
                 type="button"
+                {...stylex.props(site.proposalButton)}
                 onClick={() => {
                   setDraft(proposal.query);
                   setProposal(null);
@@ -548,22 +579,26 @@ export default function App() {
             </div>
           )}
           {home && (
-            <div className="library-status" aria-live="polite">
+            <div {...stylex.props(site.libraryStatus)} aria-live="polite">
               {libraryLoading ? (
                 <>
-                  <span className="status-dot loading" />
+                  <span {...stylex.props(site.statusDot, site.statusDotLoading)} />
                   Loading your search library…
                 </>
               ) : accounts.length ? (
                 <>
-                  <span className="status-dot" />
+                  <span {...stylex.props(site.statusDot)} />
                   Select an imported account to search its posts
                 </>
               ) : (
                 <>
-                  <span className="status-dot muted" />
+                  <span {...stylex.props(site.statusDot, site.statusDotMuted)} />
                   Connect your sources to start searching.
-                  <button type="button" className="text-button" onClick={() => setModal("imports")}>
+                  <button
+                    type="button"
+                    {...stylex.props(site.textButton, site.libraryStatusButton)}
+                    onClick={() => setModal("imports")}
+                  >
                     Import an account <Plus size={13} />
                   </button>
                 </>
@@ -572,20 +607,20 @@ export default function App() {
           )}
         </section>
         {notice && (
-          <div className="notice" role="status">
+          <div {...stylex.props(site.notice)} role="status">
             <span>{notice}</span>
             <button
               type="button"
-              className="icon"
               aria-label="Dismiss message"
               onClick={() => setNotice("")}
+              {...stylex.props(site.iconButton)}
             >
               <X size={16} />
             </button>
           </div>
         )}
         {reading && (
-          <div className="notice" role="status">
+          <div {...stylex.props(site.notice)} role="status">
             Reading the linked page…
           </div>
         )}
@@ -612,14 +647,23 @@ export default function App() {
           />
         )}
       </main>
-      <footer className="site-footer">
-        <span>Find the words. Keep the context.</span>
-        <div>
-          <a href="https://mdfromx.com" target="_blank" rel="noreferrer">
+      <footer {...stylex.props(site.siteFooter)}>
+        <span {...stylex.props(site.siteFooterTagline)}>Find the words. Keep the context.</span>
+        <div {...stylex.props(site.siteFooterLinks)}>
+          <a
+            href="https://mdfromx.com"
+            target="_blank"
+            rel="noreferrer"
+            {...stylex.props(site.siteFooterLink)}
+          >
             Powered by x.md <ArrowUpRight size={12} />
           </a>
           {OPERATOR_BUILD && (
-            <button type="button" onClick={() => setModal("setup")}>
+            <button
+              type="button"
+              onClick={() => setModal("setup")}
+              {...stylex.props(site.siteFooterButton)}
+            >
               <SlidersHorizontal size={13} />
               Connections
             </button>
@@ -628,12 +672,14 @@ export default function App() {
       </footer>
       {modal === "imports" && (
         <Modal notice={notice} title="Import an account" close={() => setModal(null)}>
-          <p className="muted-copy">
+          <p {...stylex.props(site.mutedCopy)}>
             Collect an account’s public history through x.md. Raw captures go to your data service
             for normalization and storage; this app tracks the handoff.
           </p>
-          <form className="stack-form" onSubmit={importAccount}>
-            <label htmlFor="account">X handle</label>
+          <form {...stylex.props(site.stackForm)} onSubmit={importAccount}>
+            <label htmlFor="account" {...stylex.props(site.stackLabel)}>
+              X handle
+            </label>
             <input
               id="account"
               value={accountInput}
@@ -642,8 +688,9 @@ export default function App() {
               required
               maxLength={16}
             />
-            <label htmlFor="since">
-              History since <small>Optional, YYYY-MM-DD</small>
+            <label htmlFor="since" {...stylex.props(site.stackLabel)}>
+              History since{" "}
+              <small {...stylex.props(site.stackLabelNote)}>Optional, YYYY-MM-DD</small>
             </label>
             <input
               id="since"
@@ -653,34 +700,54 @@ export default function App() {
               value={since}
               onChange={(e) => setSince(e.target.value)}
             />
-            <button className="primary" type="submit" disabled={busy || !configured?.indexing}>
+            <button
+              type="submit"
+              disabled={busy || !configured?.indexing}
+              {...stylex.props(site.primary, site.stackSubmit)}
+            >
               <Download size={16} />
               Import posts
             </button>
             {configured && !configured.indexing && (
-              <p className="config-warning">{IMPORTS_UNAVAILABLE}</p>
+              <p {...stylex.props(site.configWarning)}>{IMPORTS_UNAVAILABLE}</p>
             )}
             {OPERATOR_BUILD && (
-              <button type="button" className="text-button" onClick={openDashboard}>
+              <button
+                type="button"
+                onClick={openDashboard}
+                {...stylex.props(site.textButton, site.stackTextButton)}
+              >
                 More options in the dashboard <ArrowUpRight size={13} />
               </button>
             )}
           </form>
-          <div className="jobs">
-            <h3>Recent imports</h3>
+          <div {...stylex.props(site.jobs)}>
+            <h3 {...stylex.props(site.jobsHeading)}>Recent imports</h3>
             {!jobs.length && (
-              <p className="muted-copy">Your imports and their progress will appear here.</p>
+              <p {...stylex.props(site.mutedCopy)}>
+                Your imports and their progress will appear here.
+              </p>
             )}
             {jobs.map((job) => (
-              <div className="job" key={job._id}>
-                <div>
-                  <strong>{job.kind === "bulk" ? `@${job.input}` : job.input}</strong>
-                  <span className={`job-status ${job.status}`}>{jobLabel(job)}</span>
+              <div {...stylex.props(site.job)} key={job._id}>
+                <div {...stylex.props(site.jobRow)}>
+                  <strong {...stylex.props(site.jobTitle)}>
+                    {job.kind === "bulk" ? `@${job.input}` : job.input}
+                  </strong>
+                  <span
+                    {...stylex.props(
+                      site.jobStatus,
+                      job.status === "complete" && site.jobStatusComplete,
+                      (job.status === "failed" || job.status === "partial") && site.jobStatusFailed,
+                    )}
+                  >
+                    {jobLabel(job)}
+                  </span>
                 </div>
-                <p>{jobSummary(job)}</p>
-                {job.error && <p className="config-warning">{job.error}</p>}
+                <p {...stylex.props(site.jobText)}>{jobSummary(job)}</p>
+                {job.error && <p {...stylex.props(site.configWarning)}>{job.error}</p>}
                 {jobWarnings(job).map((w) => (
-                  <p className="muted-copy" key={w}>
+                  <p {...stylex.props(site.mutedCopy)} key={w}>
                     {w}
                   </p>
                 ))}
@@ -693,6 +760,7 @@ export default function App() {
                     <button
                       type="button"
                       disabled={busy}
+                      {...stylex.props(site.jobButton)}
                       onClick={() =>
                         void task(async () => {
                           await ensureSession();
@@ -719,30 +787,35 @@ export default function App() {
       )}
       {modal === "saved" && (
         <Modal title="Saved searches" close={() => setModal(null)}>
-          <p className="muted-copy">Saved privately to this browser's guest session.</p>
+          <p {...stylex.props(site.mutedCopy)}>Saved privately to this browser's guest session.</p>
           {!saved.length && (
-            <div className="empty small">
-              <Clock3 size={26} />
-              <p>Run a search, then save it to come back to it.</p>
+            <div {...stylex.props(site.empty, site.emptySmall)}>
+              <span {...stylex.props(site.emptyIcon)}>
+                <Clock3 size={26} />
+              </span>
+              <p {...stylex.props(site.emptyText)}>
+                Run a search, then save it to come back to it.
+              </p>
             </div>
           )}
           {saved.map((item) => (
-            <div className="saved-row" key={item._id}>
+            <div {...stylex.props(site.savedRow)} key={item._id}>
               <button
                 type="button"
                 onClick={() => {
                   search(item.query, item.sort);
                   setModal(null);
                 }}
+                {...stylex.props(site.savedRowOpen)}
               >
                 <Search size={16} />
                 {item.query}
               </button>
               <button
                 type="button"
-                className="icon"
                 aria-label={`Remove ${item.query}`}
                 onClick={() => void task(() => runRemoveSaved(item._id))}
+                {...stylex.props(site.iconButton)}
               >
                 <X size={16} />
               </button>
@@ -753,29 +826,31 @@ export default function App() {
       {modal === "email" && (
         <Modal notice={notice} title="Email these results" close={() => setModal(null)}>
           {me === undefined ? (
-            <p className="muted-copy">Checking your account…</p>
+            <p {...stylex.props(site.mutedCopy)}>Checking your account…</p>
           ) : !verifiedEmail ? (
             <>
-              <p className="muted-copy">
+              <p {...stylex.props(site.mutedCopy)}>
                 Sending requires a verified email address, so results only ever go to you. Search
                 and every other feature stay available without one.
               </p>
               <EmailSignIn
-                className="stack-form"
+                xstyle={site.stackForm}
                 onSignedIn={() => setNotice("Signed in. You can now preview and send this digest.")}
               />
             </>
           ) : (
             <>
-              <p className="muted-copy">
+              <p {...stylex.props(site.mutedCopy)}>
                 {emailPreview
                   ? `First ${emailPreview.rowCount} of ${emailPreview.totalCount} results for "${raw}", with original post links.`
                   : `Send the first 10 matches for "${raw}", with original post links.`}{" "}
                 Sending happens only when you press the button below.
               </p>
-              {emailPreview && <p className="muted-copy">Subject: {emailPreview.subject}</p>}
+              {emailPreview && (
+                <p {...stylex.props(site.mutedCopy)}>Subject: {emailPreview.subject}</p>
+              )}
               <form
-                className="stack-form"
+                {...stylex.props(site.stackForm)}
                 onSubmit={(e) => {
                   e.preventDefault();
                   void task(async () => {
@@ -787,14 +862,14 @@ export default function App() {
                 <p>
                   Sends to your verified address: <strong>{verifiedEmail}</strong>
                 </p>
-                <button className="primary" type="submit" disabled={busy || !sessionId}>
+                <button type="submit" disabled={busy || !sessionId} {...stylex.props(site.primary)}>
                   Send results
                 </button>
               </form>
             </>
           )}
           {deliveries.map((d) => (
-            <p key={d._id} className="delivery">
+            <p key={d._id} {...stylex.props(site.delivery)}>
               {d.query}: {d.delivery?.status ?? "unknown"}
             </p>
           ))}
@@ -802,16 +877,18 @@ export default function App() {
       )}
       {modal === "setup" && ConnectionsPanel && (
         <Modal notice={notice} title="Connections" close={() => setModal(null)}>
-          <Suspense fallback={<p className="muted-copy">Loading…</p>}>
+          <Suspense fallback={<p {...stylex.props(site.mutedCopy)}>Loading…</p>}>
             <ConnectionsPanel />
           </Suspense>
         </Modal>
       )}
       {page && (
         <Modal title={page.title} close={() => setPage(null)}>
-          <p className="muted-copy">Collected {new Date(page.collectedAt).toLocaleString()}</p>
-          <p className="page-text">{page.text}</p>
-          <a href={page.url} target="_blank" rel="noreferrer">
+          <p {...stylex.props(site.mutedCopy)}>
+            Collected {new Date(page.collectedAt).toLocaleString()}
+          </p>
+          <p {...stylex.props(site.pageText)}>{page.text}</p>
+          <a href={page.url} target="_blank" rel="noreferrer" {...stylex.props(site.sourceLink)}>
             <ExternalLink size={14} />
             Open original page
           </a>
@@ -821,7 +898,7 @@ export default function App() {
         (contextPages.length ? (
           <Modal title="Web context" close={() => setContextPages(null)}>
             {contextPages.map((p) => (
-              <div className="page-text" key={p.url}>
+              <div {...stylex.props(site.pageText, site.pageBlock)} key={p.url}>
                 <strong>{p.title}</strong>
                 <p>{p.text}</p>
               </div>
@@ -829,7 +906,7 @@ export default function App() {
           </Modal>
         ) : (
           <Modal title="Web context" close={() => setContextPages(null)}>
-            <p className="muted-copy">No linked pages found for this search.</p>
+            <p {...stylex.props(site.mutedCopy)}>No linked pages found for this search.</p>
           </Modal>
         ))}
     </div>

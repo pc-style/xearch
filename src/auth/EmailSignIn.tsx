@@ -1,12 +1,31 @@
 import { useId, useState, type FormEvent } from "react";
+import * as stylex from "@stylexjs/stylex";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useTask } from "../errors";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const styles = stylex.create({
+  form: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  label: {
+    fontSize: 12,
+  },
+  submit: {
+    marginTop: 8,
+  },
+  error: {
+    fontSize: 12,
+    color: "#e3a99e",
+  },
+});
+
 export type EmailSignInProps = {
-  /** Applied to the root element; the integrator owns the visual styling. */
-  className?: string;
+  /** StyleX styles applied to the root element; the integrator owns the visual styling. */
+  xstyle?: stylex.StyleXStyles;
   /** Called once `signIn("email", { email, code })` resolves. */
   onSignedIn?: () => void;
 };
@@ -19,15 +38,15 @@ export type EmailSignInProps = {
  * calls and never talks to AgentMail directly.
  *
  * Unstyled by design: mount it wherever a "sign in with email" affordance is
- * needed (e.g. the Connections panel or a settings page) and style the
- * className/child elements to match.
+ * needed (e.g. the Connections panel or a settings page) and style it via
+ * xstyle to match.
  *
  * Wired into the app in src/App.tsx: it renders inside the "Email these
  * results" modal (gating Send until the caller has a verified email) and in
  * the Connections panel, alongside AccountBadge. src/App.tsx also threads
  * api.email.preview into that same send modal.
  */
-export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
+export function EmailSignIn({ xstyle, onSignedIn }: EmailSignInProps) {
   const { signIn } = useAuthActions();
   const [step, setStep] = useState<"request" | "verify">("request");
   const [email, setEmail] = useState("");
@@ -72,10 +91,12 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
   };
 
   return (
-    <div className={className}>
+    <div {...stylex.props(xstyle)}>
       {step === "request" ? (
-        <form onSubmit={requestCode}>
-          <label htmlFor={emailFieldId}>Email address</label>
+        <form onSubmit={requestCode} {...stylex.props(styles.form)}>
+          <label htmlFor={emailFieldId} {...stylex.props(styles.label)}>
+            Email address
+          </label>
           <input
             id={emailFieldId}
             type="email"
@@ -87,14 +108,16 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
             disabled={pending}
             required
           />
-          <button type="submit" disabled={pending}>
+          <button type="submit" disabled={pending} {...stylex.props(styles.submit)}>
             {pending ? "Sending…" : "Send sign-in code"}
           </button>
         </form>
       ) : (
-        <form onSubmit={verifyCode}>
+        <form onSubmit={verifyCode} {...stylex.props(styles.form)}>
           <p role="status">Enter the code sent to {email}.</p>
-          <label htmlFor={codeFieldId}>Sign-in code</label>
+          <label htmlFor={codeFieldId} {...stylex.props(styles.label)}>
+            Sign-in code
+          </label>
           <input
             id={codeFieldId}
             type="text"
@@ -106,7 +129,7 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
             disabled={pending}
             required
           />
-          <button type="submit" disabled={pending}>
+          <button type="submit" disabled={pending} {...stylex.props(styles.submit)}>
             {pending ? "Verifying…" : "Verify and sign in"}
           </button>
           <button type="button" onClick={useDifferentEmail} disabled={pending}>
@@ -114,7 +137,11 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
           </button>
         </form>
       )}
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? (
+        <p role="alert" {...stylex.props(styles.error)}>
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

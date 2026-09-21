@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useConvexAuth, useQuery } from "convex/react";
+import * as stylex from "@stylexjs/stylex";
 import { Check } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { AccountBadge } from "../auth/AccountBadge";
 import { handoffReady, receiverConnection, type Connection } from "../integrationStatus";
+import { site } from "../styles/site.stylex";
 
 /**
  * The Connections panel: which services this deployment has been given, and
@@ -66,15 +68,15 @@ export function ConnectionsPanel() {
   ];
   return (
     <>
-      <p className="muted-copy">
+      <p {...stylex.props(site.mutedCopy)}>
         Search is live once your data service returns results. The remaining connections are
         optional improvements.
       </p>
       {connections.map((c) => (
-        <div className="connection-row" key={c.name}>
-          <div>
-            <strong>{c.name}</strong>
-            <p>{c.purpose}</p>
+        <div {...stylex.props(site.connectionRow)} key={c.name}>
+          <div {...stylex.props(site.connectionRowTop)}>
+            <strong {...stylex.props(site.connectionRowName)}>{c.name}</strong>
+            <p {...stylex.props(site.connectionRowText)}>{c.purpose}</p>
             <small>
               {!isAuthenticated ? (
                 "Sign in to view"
@@ -82,7 +84,7 @@ export function ConnectionsPanel() {
                 "Checking…"
               ) : (
                 <>
-                  {c.ready ? <Check size={12} /> : <span className="status-dot" />}{" "}
+                  {c.ready ? <Check size={12} /> : <span {...stylex.props(site.statusDot)} />}{" "}
                   {c.ready
                     ? c.proves === "live"
                       ? "Connected"
