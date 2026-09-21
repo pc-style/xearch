@@ -1,10 +1,31 @@
 # Production deployment
 
-VM frontend (private exe.dev proxy): https://exp-xearch.exe.xyz/
+Two sites are built from this one source tree, and they are not the same
+application.
 
-Dashboard: https://exp-xearch.exe.xyz/?dashboard=1
+| | operator site | public site |
+|---|---|---|
+| url | https://exp-xearch.exe.xyz:8080/ | https://utmost-kudu-321.convex.site |
+| served by | nginx on this VM | Convex static hosting |
+| who can reach it | exe.dev accounts with access to the VM | anyone |
+| contains the dashboard | yes | no |
+| build | `bash scripts/deploy-operator-site.sh` | `bun run deploy:prod` |
 
-Hosted Convex frontend: https://utmost-kudu-321.convex.site
+The dashboard, the Connections panel and the account library exist only in the
+operator build (`VITE_XEARCH_OPERATOR=1`). The public build resolves
+`src/operatorSurface.ts` to a stub that imports nothing, so those modules are
+absent from its bundle rather than merely unreachable inside it;
+`scripts/check-public-bundle.mjs` runs as part of `bun run build` and fails the
+build if any operator-only string reaches the public output. Both sites talk to
+the same production deployment — the split is about what UI each one ships, not
+about which data exists.
+
+`https://exp-xearch.exe.xyz/` with no port is **not** the operator site. The
+port the exe.dev proxy treats as this VM's primary is 4321, the search edge,
+and it is the one port marked public. Every other port in 3000-9999, 8080
+included, is reachable only by users with access to the VM
+(https://exe.dev/docs/proxy.md). That is the whole access control on the
+operator site: it has no login of its own.
 
 Convex project: `xearch/xearch-next`. Deployment: `utmost-kudu-321` (production).
 
@@ -123,25 +144,30 @@ confirmed stopped and any final capture sync is complete. At cutover:
 systemctl --user enable --now xearch-production-worker.service
 ```
 
-Verify a production-bound frontend build without changing existing environment
-files or overwriting a live `dist/`:
+Publish the operator site:
+
+```sh
+bash scripts/deploy-operator-site.sh
+```
+
+It builds with `VITE_XEARCH_OPERATOR=1` against the production deployment,
+refuses to publish a tree with no dashboard in it, and swaps the directory into
+place through a staging copy so a request never lands on a half-copied tree.
+nginx serves from disk, so publishing needs no restart. The previous tree is
+kept at `dist.previous` for a quick rollback.
+
+Installed nginx uses the prefix `/home/exedev/xearch-data/hosting/`, so its
+`root dist` resolves to `/home/exedev/xearch-data/hosting/dist`, not either
+checkout's `dist/`. That document root was absent from the September 20 check
+until September 21, and the VM frontend returned 500 for the whole period.
+Convex static-hosting publication does not update nginx's files, and this
+script does not touch Convex.
+
+To verify a public build without publishing anything:
 
 ```sh
 VITE_CONVEX_URL=https://utmost-kudu-321.convex.cloud bun run build --outDir .local-hosting/build-check/dist
 ```
-
-This only builds; it does not publish. Installed nginx uses the prefix
-`/home/exedev/xearch-data/hosting/`, so its `root dist` resolves to
-`/home/exedev/xearch-data/hosting/dist`, not either checkout's `dist/`. That document
-root was absent at the September 20 check and the documented VM frontend URL
-returned 404. After approved backend deployment, publish the matching build to
-that root and verify HTML and assets separately. Convex static-hosting publication
-does not update nginx's files.
-
-The frontend listens on port 8080 for the exe.dev HTTPS proxy. Configure the
-documented private proxy with `ssh exe.dev share port exp-xearch 8080`. Do not
-make the proxy public without an explicit launch decision. The resulting private
-URL is `https://exp-xearch.exe.xyz/`.
 
 Long-running services have restart policies; this does not prove health or
 frontend publication. The receiver listens only on `127.0.0.1:4319`.
