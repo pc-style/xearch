@@ -182,6 +182,8 @@ export const site = stylex.create({
   },
   orbitButton: {
     position: "absolute",
+    left: "var(--left)",
+    top: "var(--top)",
     transform: "translate(-50%, -50%)",
     borderWidth: 0,
     borderRadius: "50%",

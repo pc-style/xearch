@@ -84,7 +84,11 @@ export function ConnectionsPanel() {
                 "Checking…"
               ) : (
                 <>
-                  {c.ready ? <Check size={12} /> : <span {...stylex.props(site.statusDot)} />}{" "}
+                  {c.ready ? (
+                    <Check size={12} />
+                  ) : (
+                    <span {...stylex.props(site.statusDot, site.statusDotMuted)} />
+                  )}{" "}
                   {c.ready
                     ? c.proves === "live"
                       ? "Connected"
