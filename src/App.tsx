@@ -501,6 +501,7 @@ export default function App() {
       attemptId,
       trigger: SearchTrigger.Retry,
     };
+    setSessionId(null);
     setSearchRequest(request);
     startSearchTransition(() => {
       if (runSearch(request)) kickedAttempt.current = request.attemptId;

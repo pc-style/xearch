@@ -12,19 +12,36 @@ export function runTask(
     readonly onSettled?: () => void;
   },
 ): void {
-  work().then(
-    () => {
-      try {
-        handlers.onSuccess?.();
-      } catch (error) {
-        handlers.onError?.(error);
-      } finally {
-        handlers.onSettled?.();
-      }
-    },
-    (error: unknown) => {
+  const reportError = (error: unknown) => {
+    try {
       handlers.onError?.(error);
+    } catch {
+      // The chain is detached. A throw here must not become an unhandled rejection.
+    }
+  };
+  const finish = () => {
+    try {
       handlers.onSettled?.();
-    },
-  );
+    } catch {
+      // Same as reportError: cleanup runs, and its failure stays on this chain.
+    }
+  };
+  void work()
+    .then(
+      () => {
+        try {
+          handlers.onSuccess?.();
+        } catch (error) {
+          reportError(error);
+        }
+        finish();
+      },
+      (error: unknown) => {
+        reportError(error);
+        finish();
+      },
+    )
+    .catch(() => {
+      // Terminal handler for the detached chain.
+    });
 }

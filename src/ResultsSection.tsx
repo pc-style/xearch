@@ -317,7 +317,7 @@ export function ResultsSection({
         <div className="empty">
           <h2>Search could not complete</h2>
           <p>{result.error}</p>
-          <button type="button" onClick={onRetry}>
+          <button type="button" onClick={onRetry} disabled={busy}>
             Retry search
           </button>
         </div>
