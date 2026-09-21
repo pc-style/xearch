@@ -299,15 +299,21 @@ export default function App() {
     history.replaceState(null, "", url);
   };
   const search = (query: string, nextSort: Sort = sort) => {
-    setRaw(query.trim());
-    setDraft(query.trim());
+    const trimmed = query.trim();
+    setRaw(trimmed);
+    setDraft(trimmed);
     setSort(nextSort);
     setSessionId(null);
-    setSearchRequest({ raw: query.trim(), sort: nextSort, includeStats: statsForNerds });
+    // An empty query is not a search — the wordmark home button sends one on
+    // purpose. Leave the request null so the effect never calls search.start
+    // with a blank query, matching the popstate handler below.
+    setSearchRequest(
+      trimmed ? { raw: trimmed, sort: nextSort, includeStats: statsForNerds } : null,
+    );
     setView("search");
     setProposal(null);
     const url = new URL(location.href);
-    if (query.trim()) url.searchParams.set("q", query.trim());
+    if (trimmed) url.searchParams.set("q", trimmed);
     else url.searchParams.delete("q");
     url.searchParams.set("sort", nextSort);
     if (statsForNerds) url.searchParams.set("stats", "1");
@@ -605,7 +611,7 @@ export default function App() {
             onOpenModal={(which) => setModal(which)}
             onRetry={() => setSearchRequest({ raw, sort, includeStats: statsForNerds })}
             onWebContext={runWebContext}
-            onLoadMore={runLoadMore}
+            onLoadMore={() => void task(runLoadMore)}
             onRead={read}
             onBookmark={(post) => void task(() => runBookmark(post))}
             onThread={(post) => void task(() => runThread(post.url))}
