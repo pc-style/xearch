@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import * as stylex from "@stylexjs/stylex";
 import { api } from "../../convex/_generated/api";
 import type { AccountLibraryRow, NextAction } from "../../convex/lib/contracts";
 import type { HistoryRun } from "../../convex/library";
@@ -14,6 +15,7 @@ import {
   isStalledRun,
 } from "./format";
 import { Badge } from "./format.tsx";
+import { ops } from "../styles/ops.stylex";
 
 /**
  * One account library row: identity, the four states the "dashboard"
@@ -49,22 +51,22 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   const stalled = job ? isStalledRun(job.status, job.updatedAt) : false;
 
   return (
-    <article className="library-row">
-      <div className="library-row-head">
-        <div className="library-identity">
+    <article {...stylex.props(ops.row)}>
+      <div {...stylex.props(ops.rowHead)}>
+        <div {...stylex.props(ops.identity)}>
           {row.avatar ? (
-            <img className="library-avatar" src={row.avatar} alt="" />
+            <img {...stylex.props(ops.avatar)} src={row.avatar} alt="" />
           ) : (
-            <span className="library-avatar-fallback" aria-hidden="true">
+            <span {...stylex.props(ops.avatarFallback)} aria-hidden="true">
               {row.handle.slice(0, 1).toUpperCase()}
             </span>
           )}
-          <div className="library-identity-text">
-            <h3>{row.name}</h3>
-            <span>@{row.handle}</span>
+          <div {...stylex.props(ops.identityText)}>
+            <h3 {...stylex.props(ops.identityName)}>{row.name}</h3>
+            <span {...stylex.props(ops.identityHandle)}>@{row.handle}</span>
           </div>
         </div>
-        <div className="library-row-badges">
+        <div {...stylex.props(ops.rowBadges)}>
           <Badge tone={stateMeta.tone}>{stateMeta.label}</Badge>
           {job && (
             <Badge tone={acquisitionStatusTone(job.status)}>
@@ -74,11 +76,14 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         </div>
       </div>
 
-      <p className="library-muted">{stateMeta.detail}</p>
+      <p {...stylex.props(ops.libraryMuted)}>{stateMeta.detail}</p>
 
-      <div className="library-row-meta">
+      <div {...stylex.props(ops.rowMeta)}>
         <span>
-          Searchable posts: <strong>{countWithUnit(row.searchablePostCount)}</strong>
+          Searchable posts:{" "}
+          <strong {...stylex.props(ops.rowMetaStrong)}>
+            {countWithUnit(row.searchablePostCount)}
+          </strong>
           {row.searchablePostCountAsOf !== undefined &&
             ` (as of ${formatRelative(row.searchablePostCountAsOf)})`}
         </span>
@@ -95,18 +100,18 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
       </div>
 
       {row.publicationState === "failed" && hasGoodCorpus && (
-        <p className="library-row-note">
+        <p {...stylex.props(ops.rowNote)}>
           The previously confirmed index still has {countWithUnit(row.searchablePostCount)}{" "}
           searchable — the failure below is about the latest refresh only, not the existing corpus.
         </p>
       )}
       {row.lastError && (
-        <p className="library-row-failure">
+        <p {...stylex.props(ops.rowFailure)}>
           Publication error ({formatRelative(row.lastError.observedAt)}): {row.lastError.message}
         </p>
       )}
       {needsFailureDetail && (
-        <p className="library-row-failure">
+        <p {...stylex.props(ops.rowFailure)}>
           {history === undefined
             ? "Loading failure details…"
             : currentRun
@@ -115,7 +120,7 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         </p>
       )}
 
-      <div className="library-row-actions">
+      <div {...stylex.props(ops.rowActions)}>
         <NextActionControl
           action={row.nextAction}
           busy={busy}
@@ -125,12 +130,16 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           }
         />
         {job && (job.status === "running" || job.status === "queued") && (
-          <button disabled={busy} onClick={() => act(() => cancel({ jobId: job.jobId }))}>
+          <button
+            {...stylex.props(ops.button)}
+            disabled={busy}
+            onClick={() => act(() => cancel({ jobId: job.jobId }))}
+          >
             Stop
           </button>
         )}
         <button
-          className="library-row-toggle"
+          {...stylex.props(ops.button, ops.rowToggle)}
           aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
         >
@@ -138,7 +147,7 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         </button>
       </div>
       {error && (
-        <p role="alert" className="library-row-failure">
+        <p role="alert" {...stylex.props(ops.rowFailure)}>
           {error}
         </p>
       )}
@@ -161,19 +170,23 @@ function NextActionControl({
 }) {
   if (action.kind === "retry")
     return (
-      <button disabled={busy} onClick={() => onRetry(action.jobId)}>
+      <button {...stylex.props(ops.button)} disabled={busy} onClick={() => onRetry(action.jobId)}>
         {busy ? "Retrying…" : "Retry"}
       </button>
     );
   if (action.kind === "continue")
     return (
-      <button disabled={busy} onClick={() => onContinue(action.jobId)}>
+      <button
+        {...stylex.props(ops.button)}
+        disabled={busy}
+        onClick={() => onContinue(action.jobId)}
+      >
         {busy ? "Continuing…" : "Continue download"}
       </button>
     );
   if (action.kind === "wait")
     return (
-      <span className="library-muted">
+      <span {...stylex.props(ops.libraryMuted)}>
         Retries automatically around {new Date(action.readyAt).toLocaleTimeString()}
       </span>
     );
@@ -185,32 +198,33 @@ function NextActionControl({
  * collapsed to hide duplicates (to-do.md P0). Raw fields (phase/error text,
  * receipt ids) stay behind a `<details>` disclosure per run. */
 function AccountHistory({ history }: { history: HistoryRun[] | undefined }) {
-  if (history === undefined) return <p className="library-loading">Loading history…</p>;
-  if (history.length === 0) return <p className="library-muted">No runs recorded yet.</p>;
+  if (history === undefined) return <p {...stylex.props(ops.loading)}>Loading history…</p>;
+  if (history.length === 0) return <p {...stylex.props(ops.libraryMuted)}>No runs recorded yet.</p>;
   return (
-    <div className="library-history">
+    <div {...stylex.props(ops.history)}>
       {history.map((run) => (
-        <div className="library-history-run" key={run.jobId}>
-          <div className="run-head">
+        <div {...stylex.props(ops.historyRun)} key={run.jobId}>
+          <div {...stylex.props(ops.historyRunHead)}>
             <Badge tone={acquisitionStatusTone(run.status)}>
               {acquisitionStatusLabel(run.status)}
             </Badge>
-            <span className="library-muted">
+            <span {...stylex.props(ops.libraryMuted)}>
               Attempt {run.attempt} · {formatRelative(run.updatedAt)}
             </span>
           </div>
-          <p>{describeRunOutcome(run)}</p>
+          <p {...stylex.props(ops.historyRunText)}>{describeRunOutcome(run)}</p>
           {(run.receipts.length > 0 || run.phase || run.error) && (
-            <details className="library-raw-details">
-              <summary>
+            <details>
+              <summary {...stylex.props(ops.rawDetailsSummary)}>
                 {run.receipts.length} receipt{run.receipts.length === 1 ? "" : "s"} · raw
                 diagnostics
               </summary>
-              <div className="library-history-receipts">
+              <div {...stylex.props(ops.historyReceipts)}>
                 {run.receipts.map((r) => (
                   <div key={r.receiptId}>
-                    <strong>{r.records} records</strong> · capture <code>{r.captureId}</code> ·
-                    receipt <code>{r.receiptId}</code>
+                    <strong>{r.records} records</strong> · capture{" "}
+                    <code {...stylex.props(ops.historyReceiptCode)}>{r.captureId}</code> · receipt{" "}
+                    <code {...stylex.props(ops.historyReceiptCode)}>{r.receiptId}</code>
                   </div>
                 ))}
                 {run.phase && <div>Last phase: {run.phase}</div>}

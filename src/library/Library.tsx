@@ -1,5 +1,6 @@
 import { useConvexAuth, useConvexConnectionState, useQuery } from "convex/react";
 import { useEffect, useState } from "react";
+import * as stylex from "@stylexjs/stylex";
 import { api } from "../../convex/_generated/api";
 import { summaryQuery, healthQuery } from "./summaryApi";
 import { limitsAllQuery } from "./limitsApi";
@@ -7,7 +8,7 @@ import OverviewStats from "./OverviewStats";
 import ActiveQueue from "./ActiveQueue";
 import AccountLibrary from "./AccountLibrary";
 import RecentActivity from "./RecentActivity";
-import "../dashboard.css";
+import { ops } from "../styles/ops.stylex";
 
 // convex/summary.ts's `summary`/`health` queries take `now` as a REQUIRED
 // arg (a query must never read the wall clock itself) and expect the caller
@@ -51,9 +52,9 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
   const allRows = allLibrary?.rows;
 
   return (
-    <div className="library">
+    <div {...stylex.props(ops.library)}>
       {!connected && (
-        <p className="library-offline-banner" role="status">
+        <p {...stylex.props(ops.offlineBanner)} role="status">
           Reconnecting to Convex — the figures below reflect the last data this page received, not
           necessarily the current state.
         </p>

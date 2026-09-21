@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "convex/react";
+import * as stylex from "@stylexjs/stylex";
 import { api } from "../../convex/_generated/api";
 import type { AccountLibraryRow } from "../../convex/lib/contracts";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -7,6 +8,7 @@ import { acquisitionStatusLabel } from "../jobText";
 import { describeError } from "../errors";
 import { acquisitionStatusTone, formatRelative, isStalledRun } from "./format";
 import { Badge } from "./format.tsx";
+import { ops } from "../styles/ops.stylex";
 
 /**
  * The compact "what's downloading right now" strip. Built only from
@@ -24,15 +26,15 @@ export default function ActiveQueue({
 }) {
   if (!rows)
     return (
-      <section className="library-section" aria-label="Active queue">
-        <h2>Active queue</h2>
+      <section {...stylex.props(ops.section)} aria-label="Active queue">
+        <h2 {...stylex.props(ops.sectionTitle)}>Active queue</h2>
         {/* `undefined` means either "query skipped because signed out" or
             "still in flight" -- they are different states and must not share
             a label. */}
         {isAuthenticated ? (
-          <p className="library-loading">Loading queue…</p>
+          <p {...stylex.props(ops.loading)}>Loading queue…</p>
         ) : (
-          <p className="library-muted">Connect to see work in progress.</p>
+          <p {...stylex.props(ops.libraryMuted)}>Connect to see work in progress.</p>
         )}
       </section>
     );
@@ -40,12 +42,12 @@ export default function ActiveQueue({
     (r) => r.latestJob && (r.latestJob.status === "queued" || r.latestJob.status === "running"),
   );
   return (
-    <section className="library-section" aria-label="Active queue">
-      <h2>Active queue</h2>
+    <section {...stylex.props(ops.section)} aria-label="Active queue">
+      <h2 {...stylex.props(ops.sectionTitle)}>Active queue</h2>
       {active.length === 0 ? (
-        <p className="library-muted">Nothing is downloading right now.</p>
+        <p {...stylex.props(ops.libraryMuted)}>Nothing is downloading right now.</p>
       ) : (
-        <div className="library-queue-list">
+        <div {...stylex.props(ops.queueList)}>
           {active.map((row) => (
             <QueueRow key={row.accountId} row={row} />
           ))}
@@ -73,19 +75,21 @@ function QueueRow({ row }: { row: AccountLibraryRow }) {
     }
   };
   return (
-    <div className="library-queue-row">
-      <span className="library-queue-identity">
-        {row.name} <span className="library-muted">@{row.handle}</span>
+    <div {...stylex.props(ops.queueRow)}>
+      <span {...stylex.props(ops.queueIdentity)}>
+        {row.name} <span {...stylex.props(ops.libraryMuted)}>@{row.handle}</span>
       </span>
-      <span className={stalled ? "stalled" : undefined}>
+      <span {...stylex.props(stalled && ops.queueStalled)}>
         {stalled
           ? `No update in over 10m — may be stalled (${acquisitionStatusLabel(job.status)})`
           : acquisitionStatusLabel(job.status)}
       </span>
       <Badge tone={acquisitionStatusTone(job.status)}>{formatRelative(job.updatedAt)}</Badge>
-      <button onClick={() => stop(job.jobId)}>Stop</button>
+      <button {...stylex.props(ops.button)} onClick={() => stop(job.jobId)}>
+        Stop
+      </button>
       {error && (
-        <span role="alert" className="library-row-failure">
+        <span role="alert" {...stylex.props(ops.rowFailure)}>
           {error}
         </span>
       )}

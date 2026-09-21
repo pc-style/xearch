@@ -1,6 +1,8 @@
+import * as stylex from "@stylexjs/stylex";
 import type { ProviderLimit } from "../../convex/limits";
 import { formatRelative } from "./format";
 import { Badge } from "./format.tsx";
+import { ops } from "../styles/ops.stylex";
 
 const PROVIDER_DISPLAY_NAME: Record<ProviderLimit["provider"], string> = {
   xmd: "x.md",
@@ -33,8 +35,8 @@ export default function ProviderLimits({
   );
   return (
     <div>
-      <h3 className="library-subhead">Provider limits</h3>
-      <div className="library-health-row" role="status">
+      <h3 {...stylex.props(ops.subhead)}>Provider limits</h3>
+      <div {...stylex.props(ops.healthRow)} role="status">
         {!limits
           ? PROVIDERS.map((provider) => (
               <Badge key={provider} tone="neutral">
@@ -54,7 +56,7 @@ export default function ProviderLimits({
       {throttled && throttled.length > 0 && (
         <div>
           {throttled.map((limit) => (
-            <p className="library-muted" key={limit.provider}>
+            <p {...stylex.props(ops.libraryMuted)} key={limit.provider}>
               {PROVIDER_DISPLAY_NAME[limit.provider]}: {limit.reason}
               {limit.remaining.kind === "known"
                 ? ` — ${limit.remaining.value.toLocaleString()} remaining`
@@ -69,7 +71,7 @@ export default function ProviderLimits({
           ))}
         </div>
       )}
-      <p className="library-muted">
+      <p {...stylex.props(ops.libraryMuted)}>
         Provider-reported throttling only, never an old error left on a job. "No throttling
         reported" means none has been observed, not that one was checked and ruled out. Unknown
         remaining allowance is shown as unknown, never zero or an estimate.

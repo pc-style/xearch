@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useConvexAuth, useConvexConnectionState, useMutation, useQuery } from "convex/react";
+import * as stylex from "@stylexjs/stylex";
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
-import "./dashboard.css";
+import { ops } from "./styles/ops.stylex";
 import { indexingUnavailableMessage } from "./integrationStatus";
 import { describeError, useTask } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
@@ -28,13 +29,22 @@ function Job({ job }: { job: Doc<"jobs"> }) {
   const active = job.status === "queued" || job.status === "running";
   const dismissed = job.dismissedAt !== undefined;
   return (
-    <article className={dismissed ? "control-job is-dismissed" : "control-job"}>
-      <div className="control-job-heading">
-        <h3>{job.input}</h3>
-        <span className={`job-status ${job.status}`}>{jobLabel(job)}</span>
+    <article {...stylex.props(ops.job, dismissed && ops.jobDismissed)}>
+      <div {...stylex.props(ops.jobHeading)}>
+        <h3 {...stylex.props(ops.jobTitle)}>{job.input}</h3>
+        <span
+          {...stylex.props(
+            ops.jobStatus,
+            (job.status === "running" || job.status === "queued") && ops.jobStatusRunning,
+            job.status === "complete" && ops.jobStatusComplete,
+            (job.status === "failed" || job.status === "partial") && ops.jobStatusFailed,
+          )}
+        >
+          {jobLabel(job)}
+        </span>
       </div>
-      <p>{jobSummary(job)}</p>
-      <p className="control-phase" role="status">
+      <p {...stylex.props(ops.jobText)}>{jobSummary(job)}</p>
+      <p {...stylex.props(ops.jobText, ops.jobPhase)} role="status">
         {job.status === "complete"
           ? job.nextUntil
             ? "More history remains. Continue to download the rest automatically."
@@ -57,23 +67,36 @@ function Job({ job }: { job: Doc<"jobs"> }) {
                 // showing only 'Saving raw capture.'"
                 "This run did not finish."}
       </p>
-      <small>
+      <small {...stylex.props(ops.muted)}>
         Updated {new Date(job.updatedAt).toLocaleString()}
         {job.oldest ? ` | Oldest post received: ${new Date(job.oldest).toLocaleDateString()}` : ""}
       </small>
-      {job.error && <p className="control-error">{job.error}</p>}
+      {job.error && <p {...stylex.props(ops.jobText, ops.error)}>{job.error}</p>}
       {jobWarnings(job).map((w) => (
-        <p className="control-warning" key={w}>
+        <p {...stylex.props(ops.jobText, ops.warning)} key={w}>
           {w}
         </p>
       ))}
-      <div className="control-actions">
-        {active && <button onClick={() => act(() => cancel({ jobId: job._id }))}>Stop job</button>}
+      <div {...stylex.props(ops.actions)}>
+        {active && (
+          <button
+            {...stylex.props(ops.button)}
+            onClick={() => act(() => cancel({ jobId: job._id }))}
+          >
+            Stop job
+          </button>
+        )}
         {["failed", "partial", "cancelled"].includes(job.status) && (
-          <button onClick={() => act(() => retry({ jobId: job._id }))}>Retry download</button>
+          <button
+            {...stylex.props(ops.button)}
+            onClick={() => act(() => retry({ jobId: job._id }))}
+          >
+            Retry download
+          </button>
         )}
         {job.status === "complete" && (job.nextUntil || job.nextCursor) && (
           <button
+            {...stylex.props(ops.button)}
             onClick={() =>
               act(() =>
                 start({
@@ -95,29 +118,43 @@ function Job({ job }: { job: Doc<"jobs"> }) {
             allowance with no row to stop it from. */}
         {!active &&
           (dismissed ? (
-            <button onClick={() => act(() => restore({ jobId: job._id }))}>Bring back</button>
+            <button
+              {...stylex.props(ops.button)}
+              onClick={() => act(() => restore({ jobId: job._id }))}
+            >
+              Bring back
+            </button>
           ) : (
-            <button onClick={() => act(() => dismiss({ jobId: job._id }))}>Clear from list</button>
+            <button
+              {...stylex.props(ops.button)}
+              onClick={() => act(() => dismiss({ jobId: job._id }))}
+            >
+              Clear from list
+            </button>
           ))}
-        <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        <button
+          {...stylex.props(ops.button)}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
           {expanded ? "Hide technical details" : "Technical details"}
         </button>
       </div>
       {error && (
-        <p role="alert" className="control-error">
+        <p role="alert" {...stylex.props(ops.jobText, ops.error)}>
           {error}
         </p>
       )}
       {expanded && (
-        <div className="control-receipts">
+        <div {...stylex.props(ops.receipts)}>
           {receipts === undefined
             ? "Loading receipts…"
             : receipts.length === 0
               ? "No durable acknowledgments yet."
               : receipts.map((r) => (
-                  <div key={r._id}>
+                  <div key={r._id} {...stylex.props(ops.receipt)}>
                     <strong>{r.records} saved response files</strong>
-                    <code>{r.receiptId}</code>
+                    <code {...stylex.props(ops.receiptCode)}>{r.receiptId}</code>
                   </div>
                 ))}
         </div>
@@ -161,21 +198,25 @@ export default function Dashboard({
     [refresh, setRefresh] = useState(false);
   const { busy, message, setMessage, run } = useTask();
   return (
-    <main className="control-room">
-      <header className="control-header">
+    <main {...stylex.props(ops.room)}>
+      <header {...stylex.props(ops.header)}>
         <div>
-          <button onClick={close}>Back to search</button>
-          <h1>Import your posts</h1>
-          <p>Choose an account. We'll download its available history.</p>
+          <button {...stylex.props(ops.button)} onClick={close}>
+            Back to search
+          </button>
+          <h1 {...stylex.props(ops.title)}>Import your posts</h1>
+          <p {...stylex.props(ops.muted)}>
+            Choose an account. We'll download its available history.
+          </p>
         </div>
-        <span className={connected ? "control-online" : "control-error"}>
+        <span {...stylex.props(connected ? ops.online : ops.error, ops.headerBadge)}>
           {connected ? "Live connection" : "Reconnecting…"}
         </span>
       </header>
-      <div className="control-layout">
+      <div {...stylex.props(ops.layout)}>
         <aside>
           <form
-            className="control-form"
+            {...stylex.props(ops.form)}
             onSubmit={async (e) => {
               e.preventDefault();
               await run(async () => {
@@ -189,10 +230,14 @@ export default function Dashboard({
               }, "Import started. You can leave this page open or come back later.");
             }}
           >
-            <h2>Start an import</h2>
-            <label>
+            <h2 {...stylex.props(ops.heading)}>Start an import</h2>
+            <label {...stylex.props(ops.formLabel)}>
               What to download
-              <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+              <select
+                value={kind}
+                onChange={(e) => setKind(e.target.value as typeof kind)}
+                {...stylex.props(ops.field)}
+              >
                 <option value="bulk">Account history</option>
                 <option value="profile">Profile</option>
                 <option value="post">Post / conversation</option>
@@ -202,13 +247,14 @@ export default function Dashboard({
                 <option value="following">Following</option>
               </select>
             </label>
-            <label>
+            <label {...stylex.props(ops.formLabel)}>
               {kind === "post" ? "X post URL" : kind === "live" ? "Search query" : "X handle"}
               <input
                 id="import-input"
                 required
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                {...stylex.props(ops.field)}
                 placeholder={
                   kind === "post"
                     ? "https://x.com/…/status/…"
@@ -220,7 +266,7 @@ export default function Dashboard({
             </label>
             {kind === "bulk" && (
               <>
-                <label>
+                <label {...stylex.props(ops.formLabel)}>
                   History since (optional, YYYY-MM-DD)
                   <input
                     inputMode="numeric"
@@ -228,19 +274,25 @@ export default function Dashboard({
                     placeholder="YYYY-MM-DD"
                     value={since}
                     onChange={(e) => setSince(e.target.value)}
+                    {...stylex.props(ops.field)}
                   />
                 </label>
-                <label className="control-check">
+                <label {...stylex.props(ops.formLabel, ops.check)}>
                   <input
                     type="checkbox"
                     checked={refresh}
                     onChange={(e) => setRefresh(e.target.checked)}
+                    {...stylex.props(ops.checkbox)}
                   />
                   Fetch fresh data instead of using x.md's cache
                 </label>
               </>
             )}
-            <button type="submit" className="control-start" disabled={busy || !config?.indexing}>
+            <button
+              type="submit"
+              disabled={busy || !config?.indexing}
+              {...stylex.props(ops.button, ops.start)}
+            >
               {busy
                 ? "Starting..."
                 : kind === "bulk"
@@ -248,12 +300,16 @@ export default function Dashboard({
                   : "Start download"}
             </button>
             {config && !config.indexing && (
-              <p role="status">{indexingUnavailableMessage(config)}</p>
+              <p role="status" {...stylex.props(ops.muted)}>
+                {indexingUnavailableMessage(config)}
+              </p>
             )}
-            <p role="status">{message}</p>
+            <p role="status" {...stylex.props(ops.muted)}>
+              {message}
+            </p>
           </form>
-          <section className="control-connections">
-            <h2>Connections</h2>
+          <section {...stylex.props(ops.connections)}>
+            <h2 {...stylex.props(ops.heading)}>Connections</h2>
             {(
               [
                 ["x.md", config?.xmd],
@@ -267,7 +323,7 @@ export default function Dashboard({
                 ["AgentMail", config?.email],
               ] as const
             ).map(([name, ready]) => (
-              <div key={name}>
+              <div key={name} {...stylex.props(ops.connectionRow)}>
                 <span>{name}</span>
                 {/* Three different "we don't know" states, and none of them
                     may be rendered as "Not connected": no session means we
@@ -276,7 +332,7 @@ export default function Dashboard({
                     about configuration. Collapsing them is the
                     configuration-versus-connectivity conflation to-do.md P0
                     calls out. */}
-                <span>
+                <span {...stylex.props(ops.connectionState)}>
                   {!isAuthenticated
                     ? "Sign in to view"
                     : !config
@@ -287,20 +343,22 @@ export default function Dashboard({
                 </span>
               </div>
             ))}
-            <p>Configuration status, not a live health check. Provider keys stay on the backend.</p>
+            <p {...stylex.props(ops.muted)}>
+              Configuration status, not a live health check. Provider keys stay on the backend.
+            </p>
           </section>
         </aside>
-        <div className="control-main">
+        <div {...stylex.props(ops.main)}>
           <Library ensureSession={ensureSession} />
-          <section className="control-feed" aria-label="Other imports">
-            <h2>Other imports</h2>
-            <p className="control-feed-note">
+          <section aria-label="Other imports">
+            <h2 {...stylex.props(ops.heading)}>Other imports</h2>
+            <p {...stylex.props(ops.muted, ops.feedNote)}>
               Live searches, single posts, profiles, and follower/following lookups. These aren't
               account history imports, so they don't create or update a row in the account library
               above.
             </p>
             {isAuthenticated && (
-              <label className="control-feed-toggle">
+              <label {...stylex.props(ops.feedToggle)}>
                 <input
                   type="checkbox"
                   checked={showDismissed}
@@ -311,6 +369,7 @@ export default function Dashboard({
             )}
             {!isAuthenticated ? (
               <button
+                {...stylex.props(ops.button)}
                 onClick={async () => {
                   try {
                     await ensureSession();
@@ -322,11 +381,11 @@ export default function Dashboard({
                 Connect to my jobs
               </button>
             ) : !jobs ? (
-              <p>Loading jobs…</p>
+              <p {...stylex.props(ops.muted)}>Loading jobs…</p>
             ) : jobs.length === 0 ? (
-              <div className="control-empty">
+              <div {...stylex.props(ops.empty)}>
                 <h3>{showDismissed ? "Nothing here" : "No other imports yet"}</h3>
-                <p>
+                <p {...stylex.props(ops.muted)}>
                   {showDismissed
                     ? "You haven't cleared any runs, and there are no others to show."
                     : "Live searches, single posts, and profile/follower lookups will show up here."}

@@ -1,7 +1,9 @@
+import * as stylex from "@stylexjs/stylex";
 import type { AccountLibraryRow } from "../../convex/lib/contracts";
 import { acquisitionStatusLabel } from "../jobText";
 import { acquisitionStatusTone, formatRelative } from "./format";
 import { Badge } from "./format.tsx";
+import { ops } from "../styles/ops.stylex";
 
 const RECENT_LIMIT = 8;
 
@@ -34,14 +36,14 @@ export default function RecentActivity({
 }) {
   if (!rows)
     return (
-      <section className="library-section" aria-label="Recent run history">
-        <h2>Recent run history</h2>
+      <section {...stylex.props(ops.section)} aria-label="Recent run history">
+        <h2 {...stylex.props(ops.sectionTitle)}>Recent run history</h2>
         {/* Skipped-because-signed-out and still-loading both arrive as
             `undefined`; they are different states and get different words. */}
         {isAuthenticated ? (
-          <p className="library-loading">Loading recent activity…</p>
+          <p {...stylex.props(ops.loading)}>Loading recent activity…</p>
         ) : (
-          <p className="library-muted">Connect to see your recent runs.</p>
+          <p {...stylex.props(ops.libraryMuted)}>Connect to see your recent runs.</p>
         )}
       </section>
     );
@@ -52,30 +54,32 @@ export default function RecentActivity({
     .slice(0, RECENT_LIMIT);
 
   return (
-    <section className="library-section" aria-label="Recent run history">
-      <div className="library-section-head">
-        <h2>Recent run history</h2>
-        <p className="library-muted">
+    <section {...stylex.props(ops.section)} aria-label="Recent run history">
+      <div {...stylex.props(ops.sectionHead)}>
+        <h2 {...stylex.props(ops.sectionTitle)}>Recent run history</h2>
+        <p {...stylex.props(ops.libraryMuted)}>
           The most recent runs across your library. Expand an account above for its full history and
           receipts.
         </p>
       </div>
       {recent.length === 0 ? (
-        <p className="library-muted">No runs recorded yet.</p>
+        <p {...stylex.props(ops.libraryMuted)}>No runs recorded yet.</p>
       ) : (
-        // Reuses <ActiveQueue>'s row styling (.library-queue-*) on purpose:
+        // Reuses <ActiveQueue>'s row styling on purpose:
         // same visual shape (identity + status badge + timestamp), just a
-        // different, broader set of rows — not worth a parallel CSS block.
-        <div className="library-queue-list">
+        // different, broader set of rows — not worth a parallel style block.
+        <div {...stylex.props(ops.queueList)}>
           {recent.map((row) => (
-            <div className="library-queue-row" key={row.accountId}>
-              <span className="library-queue-identity">
-                {row.name} <span className="library-muted">@{row.handle}</span>
+            <div {...stylex.props(ops.queueRow)} key={row.accountId}>
+              <span {...stylex.props(ops.queueIdentity)}>
+                {row.name} <span {...stylex.props(ops.libraryMuted)}>@{row.handle}</span>
               </span>
               <Badge tone={acquisitionStatusTone(row.latestJob.status)}>
                 {acquisitionStatusLabel(row.latestJob.status)}
               </Badge>
-              <span className="library-muted">{formatRelative(row.latestJob.updatedAt)}</span>
+              <span {...stylex.props(ops.libraryMuted)}>
+                {formatRelative(row.latestJob.updatedAt)}
+              </span>
             </div>
           ))}
         </div>

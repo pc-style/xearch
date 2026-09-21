@@ -1,9 +1,11 @@
+import * as stylex from "@stylexjs/stylex";
 import type { DashboardSummary } from "../../convex/lib/contracts";
 import type { ServiceStatus } from "../../convex/summary";
 import type { ProviderLimit } from "../../convex/limits";
 import { SERVICE_DISPLAY_NAME, serviceHealthLabel } from "../integrationStatus";
 import { countValue, countWithUnit, formatRelative } from "./format";
 import { Badge } from "./format.tsx";
+import { ops } from "../styles/ops.stylex";
 import ProviderLimits from "./ProviderLimits";
 
 /**
@@ -43,22 +45,24 @@ export default function OverviewStats({
   // the two must not share a label (to-do.md P0: configuration, connectivity,
   // download completion and publication are distinct states).
   return (
-    <section className="library-section" aria-label="Overview">
-      <div className="library-section-head">
-        <h2>Overview</h2>
+    <section {...stylex.props(ops.section)} aria-label="Overview">
+      <div {...stylex.props(ops.sectionHead)}>
+        <h2 {...stylex.props(ops.sectionTitle)}>Overview</h2>
         {summary && (
-          <p className="library-muted">
+          <p {...stylex.props(ops.libraryMuted)}>
             As of {formatRelative(summary.observedAt)} · {scopeLabel(summary.scope)}
             {!connected && " · reconnecting — figures reflect the last data received"}
           </p>
         )}
       </div>
       {!isAuthenticated ? (
-        <p className="library-muted">Connect to see your indexed posts, people and queue.</p>
+        <p {...stylex.props(ops.libraryMuted)}>
+          Connect to see your indexed posts, people and queue.
+        </p>
       ) : !summary ? (
-        <p className="library-loading">Loading overview…</p>
+        <p {...stylex.props(ops.loading)}>Loading overview…</p>
       ) : (
-        <div className="library-stats-grid">
+        <div {...stylex.props(ops.statsGrid)}>
           <Stat label="Indexed posts" count={summary.indexedPosts} />
           {/* Links to the account library below. Both are now built from the
               same owner-scoped account set (convex/summary.ts), so this
@@ -96,8 +100,8 @@ export default function OverviewStats({
         </div>
       )}
       <div>
-        <h3 className="library-subhead">Dependency health</h3>
-        <div className="library-health-row" role="status">
+        <h3 {...stylex.props(ops.subhead)}>Dependency health</h3>
+        <div {...stylex.props(ops.healthRow)} role="status">
           {!health
             ? (["indexer", "receiver", "search"] as const).map((service) => (
                 <Badge key={service} tone="neutral">
@@ -124,7 +128,7 @@ export default function OverviewStats({
                 );
               })}
         </div>
-        <p className="library-muted">
+        <p {...stylex.props(ops.libraryMuted)}>
           Health is an observed fact with a timestamp, separate from whether a service is
           configured. A stale reading is labelled stale, never shown as a fresh live zero.
         </p>
@@ -152,18 +156,20 @@ function Stat({
   const unknown = count.kind === "unknown";
   const body = (
     <>
-      <span className={`value${unknown ? " unknown" : ""}`}>{countValue(count)}</span>
-      <span className="label">{label}</span>
-      <span className="sub">{unknown ? "not yet known" : countWithUnit(count)}</span>
-      {caveat && <span className="library-stat-caveat">{caveat}</span>}
+      <span {...stylex.props(ops.statValue, unknown && ops.statValueUnknown)}>
+        {countValue(count)}
+      </span>
+      <span {...stylex.props(ops.statLabel, href !== undefined && ops.statLinkLabel)}>{label}</span>
+      <span {...stylex.props(ops.statSub)}>{unknown ? "not yet known" : countWithUnit(count)}</span>
+      {caveat && <span {...stylex.props(ops.statCaveat)}>{caveat}</span>}
     </>
   );
   if (href) {
     return (
-      <a className="library-stat library-stat-link" href={href}>
+      <a href={href} {...stylex.props(ops.stat, ops.statLink)}>
         {body}
       </a>
     );
   }
-  return <div className="library-stat">{body}</div>;
+  return <div {...stylex.props(ops.stat)}>{body}</div>;
 }

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "convex/react";
+import * as stylex from "@stylexjs/stylex";
 import { api } from "../../convex/_generated/api";
 import type { PublicationState } from "../../convex/lib/contracts";
+import { ops } from "../styles/ops.stylex";
 import AccountRow from "./AccountRow";
 
 const STATUS_OPTIONS: { value: PublicationState | ""; label: string }[] = [
@@ -38,16 +40,16 @@ export default function AccountLibrary({
   const filtersActive = search.trim().length > 0 || status !== "";
 
   return (
-    <section id="account-library" className="library-section" aria-label="Account library">
-      <div className="library-section-head">
-        <h2>Account library</h2>
+    <section id="account-library" {...stylex.props(ops.section)} aria-label="Account library">
+      <div {...stylex.props(ops.sectionHead)}>
+        <h2 {...stylex.props(ops.sectionTitle)}>Account library</h2>
         {!connected && (
-          <p className="library-muted" role="status">
+          <p {...stylex.props(ops.libraryMuted)} role="status">
             Reconnecting — showing the last data received, not necessarily current.
           </p>
         )}
       </div>
-      <div className="library-controls">
+      <div {...stylex.props(ops.controls)}>
         <input
           type="search"
           aria-label="Search accounts"
@@ -55,12 +57,14 @@ export default function AccountLibrary({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           disabled={!isAuthenticated}
+          {...stylex.props(ops.controlsField, ops.controlsSearch)}
         />
         <select
           aria-label="Filter by publication status"
           value={status}
           onChange={(e) => setStatus(e.target.value as PublicationState | "")}
           disabled={!isAuthenticated}
+          {...stylex.props(ops.controlsField)}
         >
           {STATUS_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -71,14 +75,16 @@ export default function AccountLibrary({
       </div>
 
       {!isAuthenticated ? (
-        <div className="library-empty">
+        <div {...stylex.props(ops.emptyBox)}>
           <p>Connect to see the accounts you've imported.</p>
-          <button onClick={onConnect}>Connect to my library</button>
+          <button {...stylex.props(ops.button, ops.emptyBoxButton)} onClick={onConnect}>
+            Connect to my library
+          </button>
         </div>
       ) : rows === undefined ? (
-        <p className="library-loading">Loading your account library…</p>
+        <p {...stylex.props(ops.loading)}>Loading your account library…</p>
       ) : rows.length === 0 ? (
-        <div className="library-empty">
+        <div {...stylex.props(ops.emptyBox)}>
           {filtersActive ? (
             <p>No accounts match this search or filter. Try clearing them.</p>
           ) : (
@@ -88,9 +94,9 @@ export default function AccountLibrary({
           )}
         </div>
       ) : (
-        <div className="library-rows">
+        <div {...stylex.props(ops.rows)}>
           {library?.truncated && (
-            <p className="library-muted" role="status">
+            <p {...stylex.props(ops.libraryMuted)} role="status">
               Showing your most recent accounts. You have more imported than this list can load at
               once, so the figures above report "not yet known" rather than a partial total.
             </p>
