@@ -298,7 +298,7 @@ export function ResultsSection({
       ) : view === "search" && configured?.search === false ? (
         <div className="empty">
           <Search size={30} />
-          <h2>Search is unavailable right now.</h2>
+          <h2>Search is not available on this site.</h2>
           <p>The interface is ready. Your data service supplies the corpus and search results.</p>
           {/* The Connections panel exists only in the operator build, so in
               the public one this button opened a modal that renders nothing.
