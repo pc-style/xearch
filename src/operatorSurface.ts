@@ -32,6 +32,4 @@ export type DashboardProps = {
 };
 
 export const Dashboard: ComponentType<DashboardProps> | null = lazy(() => import("./Dashboard"));
-export const ConnectionsPanel: ComponentType | null = lazy(
-  () => import("./operator/Connections"),
-);
+export const ConnectionsPanel: ComponentType | null = lazy(() => import("./operator/Connections"));
