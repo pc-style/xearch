@@ -18,10 +18,32 @@ CONVEX_URL="${XEARCH_PROD_CONVEX_URL:-https://utmost-kudu-321.convex.cloud}"
 CONVEX_SITE_URL="${XEARCH_PROD_CONVEX_SITE_URL:-https://utmost-kudu-321.convex.site}"
 
 cd "$REPO"
+
+# A wrong or unreachable endpoint publishes an operator site that loads and
+# then cannot talk to anything, which looks like a backend outage rather than
+# a bad deploy. Cheaper to refuse here.
+case "$CONVEX_URL" in
+  https://*) ;;
+  *)
+    echo "deploy-operator-site: XEARCH_PROD_CONVEX_URL must be an https URL, got '$CONVEX_URL'." >&2
+    exit 1
+    ;;
+esac
+
+# One publication at a time, and the lock is taken before the build, not
+# after: every run builds into the same dist-operator, so two of them would
+# otherwise have one emptying that directory while the other copied out of it.
+mkdir -p "$ROOT/releases"
+exec 9>"$ROOT/.publish.lock"
+flock 9
+
+# `bun run build:operator`, not a bare `vite build`: the repository's operator
+# build runs `tsc --noEmit` first, and Vite will happily emit a tree that does
+# not typecheck.
 VITE_XEARCH_OPERATOR=1 \
 VITE_CONVEX_URL="$CONVEX_URL" \
 VITE_CONVEX_SITE_URL="$CONVEX_SITE_URL" \
-  bunx vite build --outDir dist-operator --emptyOutDir
+  bun run build:operator
 
 grep -rqF "Dependency health" dist-operator/assets || {
   echo "deploy-operator-site: built tree has no dashboard in it — refusing to publish." >&2
@@ -33,14 +55,6 @@ grep -rqF "Dependency health" dist-operator/assets || {
 # instant where the document root is missing — two renames would leave
 # `try_files $uri =404` serving 404s in between, and a failure between them
 # would leave the site down with nothing restored.
-#
-# One publication at a time. Two runs in the same UTC second would otherwise
-# share a $STAMP, and one could prune or overwrite the release the other is
-# still copying into — leaving `dist` pointing at a half-written tree.
-mkdir -p "$ROOT/releases"
-exec 9>"$ROOT/.publish.lock"
-flock 9
-
 # A name no release already has. The lock serialises publications but does
 # not advance the clock, so two of them a second apart still collide — and
 # clearing the colliding name would delete the tree `dist` is pointing at
@@ -77,10 +91,13 @@ trap - EXIT
 
 # Keep the three newest releases, and never the one `dist` points at
 # whatever its age — pruning the live target would empty the site.
+# Sorted by modification time, not by name: after a migration `legacy-<stamp>`
+# sorts ahead of every plain timestamp and would permanently hold one of the
+# three slots, leaving only two real releases to roll back to.
 LIVE="$(basename "$(readlink "$ROOT/dist")")"
 (
   cd "$ROOT/releases"
-  ls -1d */ 2>/dev/null | sed 's:/$::' | sort -r | tail -n +4 |
+  ls -1dt */ 2>/dev/null | sed 's:/$::' | tail -n +4 |
     while read -r old; do
       [ "$old" = "$LIVE" ] || rm -rf -- "$old"
     done

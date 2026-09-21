@@ -170,6 +170,13 @@ export const start = mutation({
         .first();
       if (
         recent &&
+        // Never a stopped run. A failed/partial/cancelled job has nothing
+        // scheduled behind it, so handing its id back would answer "start
+        // this import" by doing nothing at all — and those are exactly the
+        // statuses the UI offers "Retry import" for.
+        (recent.status === "queued" ||
+          recent.status === "running" ||
+          recent.status === "complete") &&
         Date.now() - recent._creationTime < REPEAT_WINDOW_MS &&
         recent.since === args.since &&
         recent.refresh === (args.refresh ?? false)

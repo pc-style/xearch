@@ -60,6 +60,18 @@ describe("a repeated identical import request", () => {
     vi.useRealTimers();
   });
 
+  it.each(["failed", "partial", "cancelled"] as const)(
+    "does not hand back a %s run — there is nothing scheduled behind it",
+    async (status) => {
+      const { t, a } = await setup();
+      const first = await a.mutation(api.jobs.start, { kind: "live", input: "from:theo" });
+      await t.run((ctx) => ctx.db.patch(first, { status }));
+      const second = await a.mutation(api.jobs.start, { kind: "live", input: "from:theo" });
+      expect(second).not.toBe(first);
+      expect(await countJobs(t)).toBe(2);
+    },
+  );
+
   it("does not collapse a different request for the same account", async () => {
     const { t, a } = await setup();
     const first = await a.mutation(api.jobs.start, { kind: "bulk", input: "theo" });
