@@ -150,11 +150,21 @@ Publish the operator site:
 bash scripts/deploy-operator-site.sh
 ```
 
-It builds with `VITE_XEARCH_OPERATOR=1` against the production deployment,
-refuses to publish a tree with no dashboard in it, and swaps the directory into
-place through a staging copy so a request never lands on a half-copied tree.
-nginx serves from disk, so publishing needs no restart. The previous tree is
-kept at `dist.previous` for a quick rollback.
+It builds with `VITE_XEARCH_OPERATOR=1` against the production deployment and
+refuses to publish a tree with no dashboard in it. Each build lands in
+`$ROOT/releases/<utc-stamp>/` and `$ROOT/dist` is a symlink onto the current
+one, so publication is a single rename and a request never lands on a
+half-copied tree. nginx resolves its document root per request and serves from
+disk, so publishing needs no restart.
+
+The three newest releases are kept, plus whichever one `dist` points at. The
+script prints the exact rollback command for the release it replaced; it is
+another symlink swap:
+
+```sh
+ROOT=~/xearch-data/hosting
+ln -sfn "releases/<stamp>" "$ROOT/dist.incoming" && mv -T "$ROOT/dist.incoming" "$ROOT/dist"
+```
 
 Installed nginx uses the prefix `/home/exedev/xearch-data/hosting/`, so its
 `root dist` resolves to `/home/exedev/xearch-data/hosting/dist`, not either

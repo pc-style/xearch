@@ -41,9 +41,22 @@ mkdir -p "$ROOT/releases"
 exec 9>"$ROOT/.publish.lock"
 flock 9
 
+# A name no release already has. The lock serialises publications but does
+# not advance the clock, so two of them a second apart still collide — and
+# clearing the colliding name would delete the tree `dist` is pointing at
+# while nginx is serving out of it. Nothing here ever removes an existing
+# release; `mkdir` without -p is what enforces that.
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-rm -rf "$ROOT/releases/$STAMP"
-cp -r dist-operator "$ROOT/releases/$STAMP"
+ATTEMPT=0
+while ! mkdir "$ROOT/releases/$STAMP" 2>/dev/null; do
+  ATTEMPT=$((ATTEMPT + 1))
+  if [ "$ATTEMPT" -gt 50 ]; then
+    echo "deploy-operator-site: could not find an unused release name." >&2
+    exit 1
+  fi
+  STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$ATTEMPT"
+done
+cp -r dist-operator/. "$ROOT/releases/$STAMP/"
 
 # One-time migration off the plain directory this used to publish into, for
 # any host still on the old layout. This is the one step that cannot be a
@@ -62,8 +75,16 @@ ln -sfn "releases/$STAMP" "$ROOT/dist.incoming"
 mv -T "$ROOT/dist.incoming" "$ROOT/dist"
 trap - EXIT
 
-# Keep the three newest releases; the rest are rollback material nobody wants.
-(cd "$ROOT/releases" && ls -1d */ 2>/dev/null | sort -r | tail -n +4 | xargs -r rm -rf)
+# Keep the three newest releases, and never the one `dist` points at
+# whatever its age — pruning the live target would empty the site.
+LIVE="$(basename "$(readlink "$ROOT/dist")")"
+(
+  cd "$ROOT/releases"
+  ls -1d */ 2>/dev/null | sed 's:/$::' | sort -r | tail -n +4 |
+    while read -r old; do
+      [ "$old" = "$LIVE" ] || rm -rf -- "$old"
+    done
+)
 
 echo "deploy-operator-site: published $STAMP against $CONVEX_URL"
 if [ -n "$PREVIOUS" ]; then
