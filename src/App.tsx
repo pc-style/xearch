@@ -1,5 +1,6 @@
 import {
   Profiler,
+  Suspense,
   useDeferredValue,
   useId,
   useRef,
@@ -21,7 +22,6 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import {
   ArrowUpRight,
   Bookmark,
-  Check,
   Clock3,
   Download,
   ExternalLink,
@@ -33,11 +33,10 @@ import {
   X,
 } from "lucide-react";
 import * as Effect from "effect/Effect";
-import Dashboard from "./Dashboard";
 import { ResultsSection, Avatar } from "./ResultsSection";
-import { AccountBadge } from "./auth/AccountBadge";
 import { EmailSignIn } from "./auth/EmailSignIn";
-import { indexingUnavailableMessage } from "./integrationStatus";
+import { IMPORTS_UNAVAILABLE } from "./integrationStatus";
+import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
@@ -47,10 +46,8 @@ import { parseQuery, type Sort } from "../convex/lib/search";
 import { pushLocation, replaceLocation, useLocation } from "./locationStore";
 import { runTask } from "./runTask";
 import { searchFlow, type SearchRequest as FlowSearchRequest } from "./searchFlow";
-import { NerdStatsPanel } from "./library/NerdStatsPanel";
 import {
   createSearchTelemetryStore,
-  deriveSearchMetrics,
   SearchStatus,
   SearchTrigger,
   type ConvexConnectionState,
@@ -359,36 +356,30 @@ export default function App() {
   }
   // Commit-phase telemetry: Profiler onRender (no useEffect) records render cost,
   // and the results ref below records first/terminal commits when Convex data lands.
-  const onResultsRender: ResultsProfiler = (
-    _id,
-    _phase,
-    actualDuration,
-    baseDuration,
-  ) => {
+  const onResultsRender: ResultsProfiler = (_id, _phase, actualDuration, baseDuration) => {
     const attempt = searchRequest?.attemptId;
     if (attempt !== undefined) telemetry.recordProfiler(attempt, actualDuration, baseDuration);
   };
   function resultsCommitRef(node: HTMLElement | null) {
-      const req = searchRequest;
-      if (!node || !req || !result || result._id !== sessionId) return;
-      if (result.status === "complete" || result.status === "failed") {
-        telemetry.markTerminal({
-          attemptId: req.attemptId,
-          status:
-            result.status === "complete" ? SearchStatus.Complete : SearchStatus.Failed,
-          rowCount: result.rows.length,
-          sessionId: result._id,
-          connection: connectionSnapshot,
-        });
-      } else {
-        telemetry.markResultCommit({
-          attemptId: req.attemptId,
-          status: result.status === "running" ? SearchStatus.Running : SearchStatus.Queued,
-          rowCount: result.rows.length,
-          sessionId: result._id,
-          connection: connectionSnapshot,
-        });
-      }
+    const req = searchRequest;
+    if (!node || !req || !result || result._id !== sessionId) return;
+    if (result.status === "complete" || result.status === "failed") {
+      telemetry.markTerminal({
+        attemptId: req.attemptId,
+        status: result.status === "complete" ? SearchStatus.Complete : SearchStatus.Failed,
+        rowCount: result.rows.length,
+        sessionId: result._id,
+        connection: connectionSnapshot,
+      });
+    } else {
+      telemetry.markResultCommit({
+        attemptId: req.attemptId,
+        status: result.status === "running" ? SearchStatus.Running : SearchStatus.Queued,
+        rowCount: result.rows.length,
+        sessionId: result._id,
+        connection: connectionSnapshot,
+      });
+    }
   }
 
   // NB: `task` is deliberately a plain void function: it only ever runs in
@@ -466,58 +457,16 @@ export default function App() {
     e.preventDefault();
     void task(submitImport(), "Indexing started. Raw captures are handed to your data service.");
   };
-  const loadLive = () =>
-    void task(runLoadLive(), "Looking for more posts on X.");
+  const loadLive = () => void task(runLoadLive(), "Looking for more posts on X.");
   const read = (url: string) => {
     setReading(true);
-    task(
-      runRead(url),
-      undefined,
-      () => setReading(false),
-    );
+    task(runRead(url), undefined, () => setReading(false));
   };
-  const connections = [
-    {
-      name: "Search service",
-      ready: configured?.search,
-      env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
-      purpose: "Finds posts in your library",
-    },
-    {
-      name: "Raw capture receiver",
-      ready: configured?.handoff,
-      env: "RAW_CAPTURE_URL, RAW_CAPTURE_TOKEN",
-      purpose: "Stores imported posts",
-    },
-    {
-      name: "x.md",
-      ready: configured?.xmd,
-      env: "X_MD_API_KEY",
-      purpose: "Account histories, live search, conversations",
-    },
-    {
-      name: "Firecrawl",
-      ready: configured?.firecrawl,
-      env: "FIRECRAWL_API_KEY",
-      purpose: "Reads pages linked in posts",
-    },
-    {
-      name: "OpenAI",
-      ready: configured?.openai,
-      env: "OPENAI_API_KEY",
-      purpose: "Turns a question into a clearer search",
-    },
-    {
-      name: "AgentMail",
-      ready: configured?.email,
-      env: "AGENTMAIL_API_KEY, AGENTMAIL_INBOX_ID",
-      purpose: "Emails search results",
-    },
-  ];
   const deferredRaw = useDeferredValue(raw);
   const visible = view === ViewMode.Bookmarks ? bookmarks : (result?.rows ?? []);
   const home = !deferredRaw && view === ViewMode.Search;
   const openDashboard = () => {
+    if (!OPERATOR_BUILD) return;
     setModal(null);
     pushLocation({ dashboard: true });
   };
@@ -540,7 +489,7 @@ export default function App() {
     setProposal(null);
     pushLocation({ raw: trimmed, sort: nextSort, includeStats: statsForNerds });
     startSearchTransition(() => {
-      runSearch(request);
+      if (runSearch(request)) kickedAttempt.current = request.attemptId;
     });
   };
   const retrySearch = () => {
@@ -554,31 +503,41 @@ export default function App() {
     };
     setSearchRequest(request);
     startSearchTransition(() => {
-      runSearch(request);
+      if (runSearch(request)) kickedAttempt.current = request.attemptId;
     });
   };
 
-  if (dashboard)
+  if (OPERATOR_BUILD && dashboard && Dashboard)
     return (
-      <Dashboard
-        ensureSession={ensureSession}
-        close={() => {
-          replaceLocation({ dashboard: false });
-          replaceLocation({ dashboard: false });
-        }}
-      />
+      <Suspense fallback={null}>
+        <span ref={authProbe} hidden />
+        <Dashboard
+          ensureSession={ensureSession}
+          close={() => {
+            replaceLocation({ dashboard: false });
+          }}
+        />
+      </Suspense>
     );
   return (
     <div className={`app ${home ? "is-home" : "has-results"}`}>
+      <span ref={authProbe} hidden />
       <header className="topbar">
-        <button type="button" className="wordmark" onClick={() => search("")} aria-label="Xearch home">
+        <button
+          type="button"
+          className="wordmark"
+          onClick={() => search("")}
+          aria-label="Xearch home"
+        >
           xearch<span className="wordmark-dot">.</span>
         </button>
         <nav aria-label="Main navigation">
-          <button type="button" aria-label="Import dashboard" onClick={openDashboard}>
-            <LayoutDashboard size={15} />
-            <span>Dashboard</span>
-          </button>
+          {OPERATOR_BUILD && (
+            <button type="button" aria-label="Import dashboard" onClick={openDashboard}>
+              <LayoutDashboard size={15} />
+              <span>Dashboard</span>
+            </button>
+          )}
           <button
             type="button"
             aria-label="Saved searches"
@@ -593,7 +552,9 @@ export default function App() {
             type="button"
             aria-label="Bookmarks"
             aria-pressed={view === ViewMode.Bookmarks}
-            onClick={() => setView(view === ViewMode.Bookmarks ? ViewMode.Search : ViewMode.Bookmarks)}
+            onClick={() =>
+              setView(view === ViewMode.Bookmarks ? ViewMode.Search : ViewMode.Bookmarks)
+            }
           >
             <Bookmark size={15} />
             <span>Bookmarks</span>
@@ -713,9 +674,7 @@ export default function App() {
                   className="text-button ai"
                   disabled={busy || !draft.trim()}
                   title="Suggest a clearer search"
-                  onClick={() =>
-                    void task(proposeSearch())
-                  }
+                  onClick={() => void task(proposeSearch())}
                 >
                   <Sparkles size={13} />
                   Help me search
@@ -772,7 +731,12 @@ export default function App() {
         {notice && (
           <div className="notice" role="status">
             <span>{notice}</span>
-            <button type="button" className="icon" aria-label="Dismiss message" onClick={() => setNotice("")}>
+            <button
+              type="button"
+              className="icon"
+              aria-label="Dismiss message"
+              onClick={() => setNotice("")}
+            >
               <X size={16} />
             </button>
           </div>
@@ -784,34 +748,30 @@ export default function App() {
         )}
         {!home && (
           <Profiler id="results" onRender={onResultsRender}>
-          <div ref={resultsCommitRef}>
-          <ResultsSection
-            view={view}
-            raw={raw}
-            configured={configured}
-            result={result}
-            queryError={queryError}
-            visible={visible}
-            bookmarkedIds={new Set(bookmarks.map((b) => b.tweetId))}
-            busy={busy}
-            onSearch={search}
-            onSave={() => void task(runSave(), "Search saved.")}
-            onLiveSearch={loadLive}
-            onOpenModal={(which) => setModal(which)}
-            onRetry={retrySearch}
-            onWebContext={runWebContext}
-            onLoadMore={runLoadMore}
-            onRead={read}
-            onBookmark={(post) =>
-              void task(runBookmark(post))
-            }
-            onThread={(post) =>
-              void task(runThread(post.url))
-            }
-            frontendStats={deferredFrontendStats}
-            searchPending={isSearchPending}
-          />
-          </div>
+            <div ref={resultsCommitRef}>
+              <ResultsSection
+                view={view}
+                raw={raw}
+                configured={configured}
+                result={result}
+                queryError={queryError}
+                visible={visible}
+                bookmarkedIds={new Set(bookmarks.map((b) => b.tweetId))}
+                busy={busy}
+                onSearch={search}
+                onSave={() => void task(runSave(), "Search saved.")}
+                onLiveSearch={loadLive}
+                onOpenModal={(which) => setModal(which)}
+                onRetry={retrySearch}
+                onWebContext={runWebContext}
+                onLoadMore={runLoadMore}
+                onRead={read}
+                onBookmark={(post) => void task(runBookmark(post))}
+                onThread={(post) => void task(runThread(post.url))}
+                frontendStats={deferredFrontendStats}
+                searchPending={isSearchPending}
+              />
+            </div>
           </Profiler>
         )}
       </main>
@@ -821,10 +781,12 @@ export default function App() {
           <a href="https://mdfromx.com" target="_blank" rel="noreferrer">
             Powered by x.md <ArrowUpRight size={12} />
           </a>
-          <button type="button" onClick={() => setModal(ModalKind.Setup)}>
-            <SlidersHorizontal size={13} />
-            Connections
-          </button>
+          {OPERATOR_BUILD && (
+            <button type="button" onClick={() => setModal(ModalKind.Setup)}>
+              <SlidersHorizontal size={13} />
+              Connections
+            </button>
+          )}
         </div>
       </footer>
       {modal === ModalKind.Imports && (
@@ -859,11 +821,13 @@ export default function App() {
               Import posts
             </button>
             {configured && !configured.indexing && (
-              <p className="config-warning">{indexingUnavailableMessage(configured)}</p>
+              <p className="config-warning">{IMPORTS_UNAVAILABLE}</p>
             )}
-            <button type="button" className="text-button" onClick={openDashboard}>
-              More options in the dashboard <ArrowUpRight size={13} />
-            </button>
+            {OPERATOR_BUILD && (
+              <button type="button" className="text-button" onClick={openDashboard}>
+                More options in the dashboard <ArrowUpRight size={13} />
+              </button>
+            )}
           </form>
           <div className="jobs">
             <h3>Recent imports</h3>
@@ -1004,24 +968,9 @@ export default function App() {
           ))}
         </Modal>
       )}
-      {modal === ModalKind.Setup && (
+      {OPERATOR_BUILD && modal === ModalKind.Setup && ConnectionsPanel && (
         <Modal notice={notice} title="Connections" close={() => setModal(null)}>
-          <p className="muted-copy">
-            Search is live once your data service returns results. The remaining connections are
-            optional improvements.
-          </p>
-          {connections.map((c) => (
-            <div className="connection-row" key={c.name}>
-              <div>
-                <strong>{c.name}</strong>
-                <p>{c.purpose}</p>
-                <small>
-                  {c.ready ? <Check size={12} /> : <span className="status-dot" />} {c.ready ? "Configured" : "Not configured"} · {c.env}
-                </small>
-              </div>
-            </div>
-          ))}
-          {configured?.collectorMode === "outbound" && <AccountBadge />}
+          <ConnectionsPanel />
         </Modal>
       )}
       {page && (

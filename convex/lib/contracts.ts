@@ -51,11 +51,21 @@ export const countValidator = v.union(
 export type Count = Infer<typeof countValidator>;
 
 // --- Dashboard summary -------------------------------------------------------
-// The scope a summary's counts are authorized over. Only "global" is used
-// today (accounts.ts has no per-user/collection scoping yet — see
-// to-do.md P1 "Derive authorized collection scope server-side"); "account" is
-// reserved for that later, narrower summary and is not wired to anything yet.
+// The scope a summary's counts are authorized over.
+//   - "owner": every account the signed-in caller has imported themselves,
+//     derived server-side from their own `jobs.owner` rows. This is what
+//     `convex/summary.ts` returns, and it is the ONLY scope the dashboard
+//     presents as the caller's own numbers.
+//   - "global": every account in the deployment. Never RETURNED by a summary
+//     any more — `convex/summary.ts` always reports "owner" — but still an
+//     accepted INPUT: `convex/search.ts` takes a caller-supplied scope and
+//     this is the one value its fail-closed gate allows, meaning "the whole
+//     shared corpus". Reachability differs by direction; do not delete it on
+//     the strength of the return side alone.
+//   - "account": a single account. Reserved for to-do.md P1's authorized
+//     collection access; not wired to anything yet.
 export const summaryScopeValidator = v.union(
+  v.object({ kind: v.literal("owner") }),
   v.object({ kind: v.literal("global") }),
   v.object({ kind: v.literal("account"), accountId: v.id("accounts") }),
 );
@@ -78,6 +88,41 @@ export const queueBreakdownValidator = v.object({
 });
 export type QueueBreakdown = Infer<typeof queueBreakdownValidator>;
 
+// --- Provider-reported queued work -------------------------------------------
+// What the INDEXER says is still outstanding for the in-scope accounts:
+// accountPublications.pendingWork, written from
+// publicationUpdateFields.pendingWork on any applied update
+// (convex/schema.ts, convex/publication.ts).
+//
+// Deliberately NOT a fifth field inside queueBreakdownValidator above. Those
+// four buckets are work this app can see for itself, derived from our own
+// jobs and receipts; this is the far side's self-reported backlog, in
+// whichever unit the far side chose. Sitting it beside them would invite
+// reading it as one more slice of the same total, and it is not the same
+// total.
+//
+// One Count PER UNIT, never one merged number. `pendingWork.unit` is
+// jobs | captures | posts (schema.ts pendingWorkUnitValidator) and two
+// accounts in one summary can report different units, so a single figure
+// would have to add captures (files) to posts and then label the result
+// something — exactly the "count of files labelled as a count of posts" that
+// docs/publication-contract.md "What 'unique' means" and to-do.md forbid.
+// Split per unit, every number keeps the label it was reported under.
+//
+// A unit is "known" only when at least one in-scope account actually
+// reported pendingWork in that unit. An account whose publication row has no
+// pendingWork has told us nothing — convex/publication.ts is explicit that an
+// update omitting the field means "this update has nothing to say about
+// outstanding work", not "there is none" — so silence reads "unknown", never
+// 0. A known 0 here means an account did report, in that unit, that nothing
+// is left.
+export const providerQueuedWorkValidator = v.object({
+  posts: countValidator,
+  captures: countValidator,
+  jobs: countValidator,
+});
+export type ProviderQueuedWork = Infer<typeof providerQueuedWorkValidator>;
+
 export const dashboardSummaryValidator = v.object({
   // unit "posts" — sum of accountPublications.searchablePostCount across the
   // scope below. NEVER a sum of jobs.count (accepted raw records) or
@@ -86,10 +131,18 @@ export const dashboardSummaryValidator = v.object({
   // state a true partial sum plus which accounts are excluded — see
   // docs/publication-contract.md "what unique means".
   indexedPosts: countValidator,
-  // unit "accounts" — distinct accounts with accountPublications.state ===
-  // "searchable". Links to the account-library rows below.
+  // unit "accounts" — distinct in-scope accounts with
+  // accountPublications.state === "searchable". With `scope.kind === "owner"`
+  // this is drawn from exactly the same account set as the account-library
+  // rows it links to, so the number and the list below it agree by
+  // construction rather than by coincidence.
   indexedAccounts: countValidator,
   queue: queueBreakdownValidator,
+  // The indexer's own outstanding work for the in-scope accounts, one
+  // Count per unit it can report in. See providerQueuedWorkValidator above
+  // for why this is three separate counts rather than one total, and why a
+  // unit nobody reported is "unknown" rather than 0.
+  providerQueuedWork: providerQueuedWorkValidator,
   scope: summaryScopeValidator,
   // When this summary was computed (assigned by the query/action that built
   // it). A summary is a point-in-time read, not a live guarantee.

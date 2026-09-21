@@ -76,7 +76,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
       }),
     );
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE1 library.rows:", JSON.stringify(rows));
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("waiting_for_indexing"); // no publication update ever arrived
@@ -92,9 +92,15 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     mockState.responses = new Map([[getFunctionName(libraryHistory as any), history]]);
 
     const html = renderRow(rows[0]);
-    console.log("CASE1 UI contains the real error text:", html.includes("x.md returned a malformed history page after 340 posts."));
+    console.log(
+      "CASE1 UI contains the real error text:",
+      html.includes("x.md returned a malformed history page after 340 posts."),
+    );
     console.log("CASE1 UI contains retained-count text:", html.includes("340 records retained"));
-    console.log("CASE1 UI contains stale leftover phase 'Saving raw capture' as the outcome (should NOT):", html.includes("Saving raw capture"));
+    console.log(
+      "CASE1 UI contains stale leftover phase 'Saving raw capture' as the outcome (should NOT):",
+      html.includes("Saving raw capture"),
+    );
     console.log("CASE1 UI contains Retry action:", html.includes(">Retry<"));
     expect(html).toContain("x.md returned a malformed history page after 340 posts.");
     expect(html).toContain("340 records retained");
@@ -135,7 +141,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
       }),
     );
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE2 library.rows:", JSON.stringify(rows));
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("searchable");
@@ -146,7 +152,10 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     const html = renderRow(rows[0]);
     console.log("CASE2 UI contains 'Searchable':", html.includes("Searchable"));
     console.log("CASE2 UI contains real count '512':", html.includes("512 posts"));
-    console.log("CASE2 UI contains a contradictory failure line (should NOT):", html.includes("library-row-failure"));
+    console.log(
+      "CASE2 UI contains a contradictory failure line (should NOT):",
+      html.includes("library-row-failure"),
+    );
     expect(html).toContain("Searchable");
     expect(html).toContain("512 posts");
     expect(html).not.toContain("library-row-failure");
@@ -157,7 +166,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     const { session } = await seedOwner(t);
     const now = Date.now();
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE3 library.rows (no imports at all):", JSON.stringify(rows));
     expect(rows).toEqual([]);
 
@@ -206,12 +215,16 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         searchablePostCount: 950, // sticky: last confirmed searchable count from BEFORE this failure
         searchablePostCountAsOf: failedAt - 86_400_000,
         lastPublishedAt: failedAt - 86_400_000,
-        lastError: { message: "indexer rejected generation 2: schema mismatch", observedAt: failedAt, generation: 2 },
+        lastError: {
+          message: "indexer rejected generation 2: schema mismatch",
+          observedAt: failedAt,
+          generation: 2,
+        },
         updatedAt: failedAt,
       }),
     );
 
-    const rows = await session.query(libraryRows, {});
+    const rows = (await session.query(libraryRows, {})).rows;
     console.log("CASE4 library.rows:", JSON.stringify(rows));
     expect(rows).toHaveLength(1);
     expect(rows[0].publicationState).toBe("failed");
@@ -223,8 +236,15 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
       "CASE4 UI keeps the old corpus visible alongside the failure:",
       html.includes("The previously confirmed index still has 950 posts"),
     );
-    console.log("CASE4 UI shows the real failure reason:", html.includes("indexer rejected generation 2: schema mismatch"));
-    console.log("CASE4 UI still labels state 'Publication failed', not 'Searchable':", html.includes("Publication failed"), !html.includes(">Searchable<"));
+    console.log(
+      "CASE4 UI shows the real failure reason:",
+      html.includes("indexer rejected generation 2: schema mismatch"),
+    );
+    console.log(
+      "CASE4 UI still labels state 'Publication failed', not 'Searchable':",
+      html.includes("Publication failed"),
+      !html.includes(">Searchable<"),
+    );
     expect(html).toContain("The previously confirmed index still has 950 posts");
     expect(html).toContain("indexer rejected generation 2: schema mismatch");
     expect(html).toContain("Publication failed");
@@ -234,7 +254,10 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     // searchable server-side), but this account no longer counts toward
     // indexedAccounts (its CURRENT state is not "searchable").
     const summary = await session.query(summaryQ, { now: Date.now() });
-    console.log("CASE4 summary.summary reflects sticky posts but not a current account:", JSON.stringify(summary));
+    console.log(
+      "CASE4 summary.summary reflects sticky posts but not a current account:",
+      JSON.stringify(summary),
+    );
     expect(summary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 950 });
     expect(summary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 0 });
     void jobId;
@@ -282,10 +305,22 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         connected: false,
       } as any),
     );
-    console.log("CASE5 UI shows stale caution text for indexer (not plain 'Healthy'):", html.includes("Stale reading from"));
-    console.log("CASE5 UI does NOT claim the stale indexer is live-healthy:", !/indexer[^<]*Healthy(?!<\/summary)/i.test(html));
-    console.log("CASE5 UI shows offline/disconnected receiver as Unhealthy:", html.includes("Unhealthy"));
-    console.log("CASE5 UI shows honest 'no health report yet' for search, never a live zero:", html.includes("No health report received yet"));
+    console.log(
+      "CASE5 UI shows stale caution text for indexer (not plain 'Healthy'):",
+      html.includes("Stale reading from"),
+    );
+    console.log(
+      "CASE5 UI does NOT claim the stale indexer is live-healthy:",
+      !/indexer[^<]*Healthy(?!<\/summary)/i.test(html),
+    );
+    console.log(
+      "CASE5 UI shows offline/disconnected receiver as Unhealthy:",
+      html.includes("Unhealthy"),
+    );
+    console.log(
+      "CASE5 UI shows honest 'no health report yet' for search, never a live zero:",
+      html.includes("No health report received yet"),
+    );
     expect(html).toContain("Stale reading from");
     expect(html).toContain("treat with caution");
     expect(html).toContain("Unhealthy");

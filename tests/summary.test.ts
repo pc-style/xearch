@@ -36,11 +36,12 @@ const healthQuery = anyApi.summary.health as unknown as import("convex/server").
 // (unmodified) to prove how summary.summary's global indexedAccounts/
 // indexedPosts relate to the owner-scoped account list a real caller would
 // actually see, per the "addressable" must-fix below.
-const libraryRowsQuery = anyApi.library.rows as unknown as import("convex/server").FunctionReference<
+const libraryRowsQuery = anyApi.library
+  .rows as unknown as import("convex/server").FunctionReference<
   "query",
   "public",
   { search?: string; status?: string },
-  AccountLibraryRow[]
+  { rows: AccountLibraryRow[]; truncated: boolean }
 >;
 
 async function setup() {
@@ -60,7 +61,12 @@ async function setup() {
 
 type Kind = "bulk" | "live" | "post" | "profile" | "following" | "followers" | "archive";
 type Status = "queued" | "running" | "complete" | "partial" | "failed" | "cancelled";
-type PublicationState = "downloaded" | "waiting_for_indexing" | "indexing" | "searchable" | "failed";
+type PublicationState =
+  | "downloaded"
+  | "waiting_for_indexing"
+  | "indexing"
+  | "searchable"
+  | "failed";
 
 async function insertAccount(
   t: Awaited<ReturnType<typeof setup>>["t"],
@@ -144,7 +150,12 @@ async function insertPublicationUpdate(
     handle: string;
     captureIds: string[];
     generation: number;
-    outcome: "applied" | "stale_ignored" | "duplicate_ignored" | "rejected_unauthorized" | "rejected_invalid";
+    outcome:
+      | "applied"
+      | "stale_ignored"
+      | "duplicate_ignored"
+      | "rejected_unauthorized"
+      | "rejected_invalid";
   },
 ) {
   return t.run((ctx) =>
@@ -183,10 +194,10 @@ async function insertServiceHealth(
 }
 
 describe("summary.summary", () => {
-  it("reports known zeroes for an empty corpus, never unknown and never omitted", async () => {
+  it("reports known zeroes for an empty corpus (never omitted), and unknown only where nothing was ever reported", async () => {
     const { a } = await setup();
     const result = await a.query(summaryQuery, { now: Date.now() });
-    expect(result.scope).toEqual({ kind: "global" });
+    expect(result.scope).toEqual({ kind: "owner" });
     expect(result.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 0 });
     expect(result.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 0 });
     expect(result.queue).toEqual({
@@ -194,6 +205,18 @@ describe("summary.summary", () => {
       activeDownloads: { kind: "known", unit: "jobs", value: 0 },
       savedCapturesAwaitingIndexing: { kind: "known", unit: "captures", value: 0 },
       failedRetryable: { kind: "known", unit: "jobs", value: 0 },
+    });
+    // The one figure on an empty corpus that is honestly UNKNOWN rather than
+    // a known zero: the four buckets above are things this app can check for
+    // itself (it has no jobs, no receipts — a checked zero), whereas
+    // providerQueuedWork only ever repeats what the indexer reported through
+    // pendingWork. Nobody has reported anything, in any unit, so there is
+    // nothing to state. "Unknown provider history size is 'unknown,' not
+    // zero or an invented estimate" (to-do.md).
+    expect(result.providerQueuedWork).toEqual({
+      posts: { kind: "unknown", unit: "posts" },
+      captures: { kind: "unknown", unit: "captures" },
+      jobs: { kind: "unknown", unit: "jobs" },
     });
     expect(typeof result.observedAt).toBe("number");
   });
@@ -224,6 +247,7 @@ describe("summary.summary", () => {
     // the total: jobs.count and jobs.postsReceived measure acquisition, not
     // the committed index.
     await insertJob(t, alice, { input: "one", expectedUserId: "1", count: 9_999 });
+    await insertJob(t, alice, { input: "two", expectedUserId: "2" });
     await insertPublication(t, { accountId: one, state: "searchable", searchablePostCount: 100 });
     await insertPublication(t, { accountId: two, state: "searchable", searchablePostCount: 37 });
     const result = await a.query(summaryQuery, { now: Date.now() });
@@ -236,6 +260,7 @@ describe("summary.summary", () => {
     const known = await insertAccount(t, { handle: "known-one", userId: "1" });
     const unknownAcct = await insertAccount(t, { handle: "unknown-one", userId: "2" });
     await insertJob(t, alice, { input: "known-one", expectedUserId: "1" });
+    await insertJob(t, alice, { input: "unknown-one", expectedUserId: "2" });
     await insertPublication(t, { accountId: known, state: "searchable", searchablePostCount: 42 });
     // Reported "searchable" but no uniquePostCount was ever accepted for it.
     await insertPublication(t, { accountId: unknownAcct, state: "searchable" });
@@ -365,37 +390,46 @@ describe("summary.summary", () => {
     });
   });
 
-  it("indexedAccounts/indexedPosts are GLOBAL, not owner-scoped, and are NOT addressable to a given caller's own library.rows list — a caller with zero imports of their own still sees another owner's accounts counted here while their own library is empty", async () => {
+  it("scopes indexedAccounts/indexedPosts to the caller's own imports: another owner's account is never counted into your totals, and the tile always agrees with the account list it links to", async () => {
     const { t, alice, a, b } = await setup();
     const account = await insertAccount(t, { handle: "alice-account", userId: "1" });
     // Only alice ever ran a job for this account; bob has never imported
     // anything of his own.
     await insertJob(t, alice, { input: "alice-account", expectedUserId: "1" });
-    await insertPublication(t, { accountId: account, state: "searchable", searchablePostCount: 10 });
+    await insertPublication(t, {
+      accountId: account,
+      state: "searchable",
+      searchablePostCount: 10,
+    });
 
     const bobsSummary = await b.query(summaryQuery, { now: Date.now() });
-    const bobsLibrary = await b.query(libraryRowsQuery, {});
+    const bobsLibrary = (await b.query(libraryRowsQuery, {})).rows;
 
-    // The documented, tested gap (see convex/summary.ts computeIndexTotals
-    // comment, to-do.md P1): bob sees a nonzero global indexedAccounts count
-    // here even though `library.rows` — the owner-scoped list this number is
-    // supposed to be "addressable" to per to-do.md P0 — has nothing for him
-    // to click through to. The `scope: { kind: "global" }` field on the
-    // returned summary is the frozen contract's own honest signal to the UI
-    // that this total is not scoped to the caller; the UI must not present
-    // it as linkable to the caller's own account list until to-do.md P1's
-    // real per-owner scoping exists.
-    expect(bobsSummary.scope).toEqual({ kind: "global" });
-    expect(bobsSummary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 1 });
-    expect(bobsSummary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 10 });
+    // This used to be the documented leak: bob read a nonzero GLOBAL
+    // indexedAccounts/indexedPosts built from alice's account while his own
+    // library.rows — the list the "Indexed people" tile links to — was
+    // empty, so the screen contradicted itself and every user saw everyone
+    // else's corpus counted as theirs. Both numbers are now drawn from the
+    // same owner-scoped account set library.rows uses.
+    expect(bobsSummary.scope).toEqual({ kind: "owner" });
+    expect(bobsSummary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 0 });
+    expect(bobsSummary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 0 });
     expect(bobsLibrary).toEqual([]);
 
-    // Sanity: alice, who actually ran the job, DOES see it in her own
-    // owner-scoped library — the mismatch above is specifically about a
-    // caller who has no jobs of their own, not a general library.rows bug.
-    const alicesLibrary = await a.query(libraryRowsQuery, {});
+    // Alice, who actually ran the job, sees it in both places — and the
+    // tile's number matches the length of the list it points at, which is
+    // the property "link the number to the account list" actually needs.
+    const alicesSummary = await a.query(summaryQuery, { now: Date.now() });
+    const alicesLibrary = (await a.query(libraryRowsQuery, {})).rows;
+    expect(alicesSummary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 1 });
+    expect(alicesSummary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 10 });
     expect(alicesLibrary).toHaveLength(1);
     expect(alicesLibrary[0].handle).toBe("alice-account");
+    expect(alicesSummary.indexedAccounts).toEqual({
+      kind: "known",
+      unit: "accounts",
+      value: alicesLibrary.filter((row) => row.publicationState === "searchable").length,
+    });
   });
 });
 

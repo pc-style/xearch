@@ -53,13 +53,17 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
         count: 12,
         attempt: 3,
         warnings: [],
-        error: "Paused at today's import limit. Your downloaded posts are safe. Try again tomorrow.",
+        error:
+          "Paused at today's import limit. Your downloaded posts are safe. Try again tomorrow.",
         updatedAt: Date.now(),
       }),
     );
     const a = t.withIdentity({ subject: `${userId}|session` });
     const result = await a.query(limitsAll, {});
-    console.log("PART1 limits.all() with only a stale jobs.error on record:", JSON.stringify(result));
+    console.log(
+      "PART1 limits.all() with only a stale jobs.error on record:",
+      JSON.stringify(result),
+    );
     expect(result).toEqual([
       { kind: "none", provider: "xmd" },
       { kind: "none", provider: "receiver" },
@@ -67,10 +71,15 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
     ]);
 
     const html = renderPanel(result as ProviderLimit[]);
-    console.log("PART1 rendered UI contains 'today's import limit':", html.includes("today's import limit"));
+    console.log(
+      "PART1 rendered UI contains 'today's import limit':",
+      html.includes("today's import limit"),
+    );
     console.log(
       "PART1 rendered UI has a 'No throttling reported' badge for each of xmd/receiver/search:",
-      html.includes("x.md:") && html.includes("Raw-capture receiver:") && html.includes("Search backend:"),
+      html.includes("x.md:") &&
+        html.includes("Raw-capture receiver:") &&
+        html.includes("Search backend:"),
     );
     expect(html).not.toContain("today's import limit");
     // One badge per provider, each reading "No throttling reported" (a 4th,
@@ -98,7 +107,10 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
       }),
     );
     const result = await a.query(limitsCurrent, { provider: "xmd" });
-    console.log("PART2 limits.current('xmd') with a full live throttle event:", JSON.stringify(result));
+    console.log(
+      "PART2 limits.current('xmd') with a full live throttle event:",
+      JSON.stringify(result),
+    );
     expect(result).toMatchObject({
       kind: "throttled",
       operation: "history",
@@ -108,10 +120,20 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
     if (result.kind !== "throttled") throw new Error("expected throttled");
     expect(result.nextRetryAt).toBe(observedAt + 30_000);
 
-    const html = renderPanel([result, { kind: "none", provider: "receiver" }, { kind: "none", provider: "search" }]);
+    const html = renderPanel([
+      result,
+      { kind: "none", provider: "receiver" },
+      { kind: "none", provider: "search" },
+    ]);
     const expectedRetryText = new Date(observedAt + 30_000).toLocaleTimeString();
-    console.log("PART2 rendered UI contains real reason:", html.includes("x.md rate limit reached: 429 from /v2/history."));
-    console.log("PART2 rendered UI contains computed retry time:", html.includes(expectedRetryText));
+    console.log(
+      "PART2 rendered UI contains real reason:",
+      html.includes("x.md rate limit reached: 429 from /v2/history."),
+    );
+    console.log(
+      "PART2 rendered UI contains computed retry time:",
+      html.includes(expectedRetryText),
+    );
     console.log("PART2 rendered UI contains remaining count:", html.includes("3 remaining"));
     expect(html).toContain("x.md rate limit reached: 429 from /v2/history.");
     expect(html).toContain("3 remaining");
@@ -137,10 +159,23 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
     expect(result).toMatchObject({ kind: "throttled", remaining: { kind: "unknown" } });
     expect(result).not.toHaveProperty("resetAt");
 
-    const html = renderPanel([{ kind: "none", provider: "xmd" }, { kind: "none", provider: "receiver" }, result as ProviderLimit]);
-    console.log("PART3 rendered UI contains 'remaining allowance unknown':", html.includes("remaining allowance unknown"));
-    console.log("PART3 rendered UI contains a fabricated '0 remaining':", html.includes("0 remaining"));
-    console.log("PART3 rendered UI contains a 'resets' clause (should not, resetAt absent):", html.includes(", resets"));
+    const html = renderPanel([
+      { kind: "none", provider: "xmd" },
+      { kind: "none", provider: "receiver" },
+      result as ProviderLimit,
+    ]);
+    console.log(
+      "PART3 rendered UI contains 'remaining allowance unknown':",
+      html.includes("remaining allowance unknown"),
+    );
+    console.log(
+      "PART3 rendered UI contains a fabricated '0 remaining':",
+      html.includes("0 remaining"),
+    );
+    console.log(
+      "PART3 rendered UI contains a 'resets' clause (should not, resetAt absent):",
+      html.includes(", resets"),
+    );
     expect(html).toContain("remaining allowance unknown");
     expect(html).not.toContain("0 remaining");
     expect(html).not.toContain(", resets");

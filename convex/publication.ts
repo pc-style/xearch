@@ -5,6 +5,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { publicationUpdateOutcomeValidator } from "./schema";
 import { publicationUpdateEnvelope, type PublicationUpdateEnvelope } from "./lib/contracts";
+import { resolveAccount } from "./lib/accounts";
 
 /**
  * The Convex-side receiver for Pronsh's publication-update contract:
@@ -144,7 +145,8 @@ export const receiveUpdate = httpAction(async (ctx, request) => {
   }
 
   const envelope = parseEnvelope(body);
-  if (!envelope) return json({ error: "Request body does not match publicationUpdateEnvelope." }, 400);
+  if (!envelope)
+    return json({ error: "Request body does not match publicationUpdateEnvelope." }, 400);
 
   const result: {
     outcome: "applied" | "stale_ignored" | "duplicate_ignored" | "rejected_invalid";
@@ -156,34 +158,14 @@ export const receiveUpdate = httpAction(async (ctx, request) => {
 });
 
 // --- Identity resolution ----------------------------------------------------
-// Provider account id first, handle only as a fallback when no provider id
-// was asserted at all. Deliberately does NOT fall back from a non-matching
-// providerAccountId to a handle match: once an update asserts a provider id,
-// honoring a handle match instead risks silently merging it into a
-// different real account after a handle reassignment. See
-// docs/publication-contract.md "account identity" and the frozen modeling
-// decision on accounts.by_user_id being the primary identity key.
-async function resolveAccountId(
-  ctx: MutationCtx,
-  args: { providerAccountId?: string; handle: string },
-): Promise<Id<"accounts"> | undefined> {
-  // Neither accounts.by_user_id nor accounts.by_handle is uniqueness-enforced
-  // by the schema, so `.unique()` would THROW on a duplicated row and turn a
-  // contract-level "rejected_invalid" into a 500. Read at most two and treat
-  // an ambiguous match as no match, so applyUpdate can log and reject it.
-  if (args.providerAccountId !== undefined) {
-    const matches = await ctx.db
-      .query("accounts")
-      .withIndex("by_user_id", (q) => q.eq("userId", args.providerAccountId!))
-      .take(2);
-    return matches.length === 1 ? matches[0]._id : undefined;
-  }
-  const matches = await ctx.db
-    .query("accounts")
-    .withIndex("by_handle", (q) => q.eq("handle", args.handle))
-    .take(2);
-  return matches.length === 1 ? matches[0]._id : undefined;
-}
+// Delegated to convex/lib/accounts.ts so this receiver resolves an update to
+// exactly the row convex/jobs.ts wrote and convex/library.ts displays.
+//
+// It used to resolve duplicates for one provider id as "ambiguous" and reject
+// the update. Once the write path started treating such rows as one account,
+// that disagreement meant an account visible in the library would have every
+// publication update rejected as `rejected_invalid` — it would sit at
+// "waiting for indexing" forever while the sender collected 422s.
 
 // --- Durable audit log ------------------------------------------------------
 // Every publication update is logged, accepted or not, so "duplicate
@@ -238,9 +220,12 @@ export const applyUpdate = internalMutation({
         receivedAt,
         undefined,
         "rejected_invalid",
-        "A \"failed\" update must include an error.",
+        'A "failed" update must include an error.',
       );
-      return { outcome: "rejected_invalid" as const, rejectionReason: "A \"failed\" update must include an error." };
+      return {
+        outcome: "rejected_invalid" as const,
+        rejectionReason: 'A "failed" update must include an error.',
+      };
     }
     if (args.uniquePostCount !== undefined && args.uniquePostCountAsOf === undefined) {
       const reason = "uniquePostCountAsOf is required whenever uniquePostCount is present.";
@@ -252,7 +237,7 @@ export const applyUpdate = internalMutation({
     // — accounts are created only by our own acquisition flow (jobs.finish).
     // An update that cannot resolve to an existing account is rejected, not
     // used to invent one. docs/publication-contract.md "Account identity".
-    const accountId = await resolveAccountId(ctx, args);
+    const accountId = (await resolveAccount(ctx.db, args))?._id;
     if (!accountId) {
       const reason = "No known account matches this update's providerAccountId/handle.";
       await logUpdate(ctx, args, receivedAt, undefined, "rejected_invalid", reason);

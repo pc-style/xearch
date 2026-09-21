@@ -13,6 +13,17 @@ import ProviderLimits from "./ProviderLimits";
  * with nothing re-derived client-side, so it can never drift from the
  * "never invent a number" rule in the frozen contract.
  */
+/**
+ * Plain words for the scope these figures cover. "owner" is what
+ * convex/summary.ts returns: only the accounts the signed-in person has
+ * imported themselves. Saying that out loud matters — the same tiles used to
+ * report deployment-wide totals above a personal account list.
+ */
+function scopeLabel(scope: DashboardSummary["scope"]): string {
+  if (scope.kind === "owner") return "your imports only";
+  return scope.kind === "global" ? "all accounts in this deployment" : "one account";
+}
+
 export default function OverviewStats({
   summary,
   health,
@@ -37,7 +48,7 @@ export default function OverviewStats({
         <h2>Overview</h2>
         {summary && (
           <p className="library-muted">
-            As of {formatRelative(summary.observedAt)} · scope: {summary.scope.kind}
+            As of {formatRelative(summary.observedAt)} · {scopeLabel(summary.scope)}
             {!connected && " · reconnecting — figures reflect the last data received"}
           </p>
         )}
@@ -49,26 +60,37 @@ export default function OverviewStats({
       ) : (
         <div className="library-stats-grid">
           <Stat label="Indexed posts" count={summary.indexedPosts} />
-          {/* Links to the account library below (to-do.md P0 "Indexed
-              people: ... link the number to the account list"). Honest
-              caveat, not silence: convex/summary.ts computes this GLOBALLY
-              (every accountPublications row), while the list below is
-              owner-scoped to the signed-in caller's own imports — see that
-              file's "Indexed posts / indexed people" comment. Until P1 adds
-              real per-owner scoping, this is a navigation link to "the
-              account list" (satisfying the bullet's ask), not a claim that
-              the two numbers already agree. */}
-          <Stat
-            label="Indexed people"
-            count={summary.indexedAccounts}
-            href="#account-library"
-            caveat="Counted library-wide, not only your own imports yet — view the account list below."
-          />
+          {/* Links to the account library below. Both are now built from the
+              same owner-scoped account set (convex/summary.ts), so this
+              number is genuinely the length of the list it points at — it is
+              a real link, not a navigation gesture past a mismatch. */}
+          <Stat label="Indexed people" count={summary.indexedAccounts} href="#account-library" />
           <Stat label="Waiting downloads" count={summary.queue.waitingDownloads} />
           <Stat label="Active downloads" count={summary.queue.activeDownloads} />
           <Stat
             label="Saved captures awaiting indexing"
             count={summary.queue.savedCapturesAwaitingIndexing}
+          />
+          {/* The indexer's own backlog for your accounts, one tile per unit
+              it can report in (convex/lib/contracts.ts
+              providerQueuedWorkValidator). Never added together: a capture
+              is a file and a job is a run, and neither is a post. A unit no
+              account has reported reads "not yet known" — an indexer that
+              has said nothing is not an indexer with nothing left to do. */}
+          <Stat
+            label="Queued posts"
+            count={summary.providerQueuedWork.posts}
+            caveat="reported by the indexer; work reported in other units is in its own tile"
+          />
+          <Stat
+            label="Queued captures"
+            count={summary.providerQueuedWork.captures}
+            caveat="files the indexer has still to process — not a count of posts"
+          />
+          <Stat
+            label="Queued indexer jobs"
+            count={summary.providerQueuedWork.jobs}
+            caveat="runs outstanding on the indexer's side, not downloads on ours"
           />
           <Stat label="Failed & retryable" count={summary.queue.failedRetryable} />
         </div>
@@ -79,7 +101,8 @@ export default function OverviewStats({
           {!health
             ? (["indexer", "receiver", "search"] as const).map((service) => (
                 <Badge key={service} tone="neutral">
-                  {SERVICE_DISPLAY_NAME[service]}: {isAuthenticated ? "loading…" : "connect to view"}
+                  {SERVICE_DISPLAY_NAME[service]}:{" "}
+                  {isAuthenticated ? "loading…" : "connect to view"}
                 </Badge>
               ))
             : health.map((status) => {

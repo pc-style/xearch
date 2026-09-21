@@ -4,7 +4,12 @@ import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
 import { publicationStateValidator, jobStatusValidator } from "./schema";
-import { accountLibraryRowValidator, type AccountLibraryRow, type NextAction } from "./lib/contracts";
+import {
+  accountLibraryRowValidator,
+  type AccountLibraryRow,
+  type NextAction,
+} from "./lib/contracts";
+import { ownedAccountJobs, ownerJobsForAccount, resolveJobAccount } from "./lib/accounts";
 
 /**
  * The account-library query that replaces the job wall (to-do.md P0
@@ -13,77 +18,13 @@ import { accountLibraryRowValidator, type AccountLibraryRow, type NextAction } f
  * job/receipt counters) plus that account's own acquisition jobs. Full
  * semantics: docs/publication-contract.md.
  */
-
-// Only a full-account "bulk" import ever establishes an account identity.
-// live/post/profile/following/followers/archive jobs are queries or
-// non-account artifacts — `from:theo` is a query, not an identity — and must
-// never surface as a library row (to-do.md P0).
-const ACCOUNT_JOB_KIND = "bulk" as const;
-
-// Bounded reads (Convex query guidelines: no unbounded .collect()). Generous
-// relative to how many distinct accounts or runs one person realistically
-// works through by hand.
-const MAX_OWNED_JOBS = 500;
+// Bounded reads for one account's expandable history (Convex query
+// guidelines: no unbounded .collect()). Generous relative to how many runs
+// one person works through by hand.
 const MAX_HISTORY_JOBS = 50;
 const MAX_HISTORY_RECEIPTS = 100;
 
 type AccountBucket = { account: Doc<"accounts">; jobs: Doc<"jobs">[] };
-
-async function ownedAccountJobs(ctx: QueryCtx, owner: Id<"users">) {
-  return ctx.db
-    .query("jobs")
-    .withIndex("by_owner", (q) => q.eq("owner", owner))
-    .filter((q) => q.eq(q.field("kind"), ACCOUNT_JOB_KIND))
-    .order("desc")
-    .take(MAX_OWNED_JOBS);
-}
-
-// Resolve one job to the account it belongs to. Provider account id
-// (job.expectedUserId, pinned mid-run once collectXmd confirms identity — see
-// convex/jobs.ts pinIdentity) is the primary key; a job's raw input/handle is
-// used only as a fallback when no provider id has ever been pinned for that
-// run. Given two distinct `accounts` rows, this never groups them into one
-// bucket: a job that carries a pinned provider id always groups by that id,
-// never by whatever handle string it happened to carry. See
-// docs/publication-contract.md "Account identity".
-//
-// Scope of this guarantee: it only holds among account rows that already
-// exist as distinct rows. It does not, by itself, guarantee that a handle
-// reassignment can never produce a merged row in the first place — that
-// depends on how `accounts` rows are created/updated, which happens in
-// convex/jobs.ts (`finish`), not here. As of this writing, jobs.ts's
-// account upsert there resolves purely `by_handle` and unconditionally
-// patches whatever row it finds with the new profile (including its
-// `userId`), so a real handle reassignment (old account renames away, a
-// different provider id later claims the freed handle) can still overwrite
-// an existing account row's identity in place. That write-path gap is
-// out of scope for this file/unit (library.ts only reads `accounts`); see
-// to-do.md P0 "Do not combine different identities after a handle
-// reassignment" and docs/publication-contract.md's `accountHandles`
-// section, which documents the intended create-new-row-on-reassignment
-// rule that jobs.ts does not yet implement.
-async function resolveAccount(
-  ctx: QueryCtx,
-  job: Doc<"jobs">,
-  cache: Map<string, Doc<"accounts"> | null>,
-): Promise<Doc<"accounts"> | null> {
-  const providerAccountId = job.expectedUserId;
-  const cacheKey = providerAccountId !== undefined ? `id:${providerAccountId}` : `handle:${job.input}`;
-  const cached = cache.get(cacheKey);
-  if (cached !== undefined) return cached;
-  const found =
-    providerAccountId !== undefined
-      ? await ctx.db
-          .query("accounts")
-          .withIndex("by_user_id", (q) => q.eq("userId", providerAccountId))
-          .unique()
-      : await ctx.db
-          .query("accounts")
-          .withIndex("by_handle", (q) => q.eq("handle", job.input))
-          .unique();
-  cache.set(cacheKey, found);
-  return found;
-}
 
 // Group this owner's bulk jobs by resolved account. A job whose identity
 // cannot be resolved to an existing account row is dropped, not shown as a
@@ -94,18 +35,18 @@ async function resolveAccount(
 async function groupOwnedJobsByAccount(
   ctx: QueryCtx,
   owner: Id<"users">,
-): Promise<Map<Id<"accounts">, AccountBucket>> {
-  const jobs = await ownedAccountJobs(ctx, owner);
+): Promise<{ byAccount: Map<Id<"accounts">, AccountBucket>; truncated: boolean }> {
+  const { jobs, truncated } = await ownedAccountJobs(ctx.db, owner);
   const identityCache = new Map<string, Doc<"accounts"> | null>();
   const byAccount = new Map<Id<"accounts">, AccountBucket>();
   for (const job of jobs) {
-    const account = await resolveAccount(ctx, job, identityCache);
+    const account = await resolveJobAccount(ctx.db, job, identityCache);
     if (!account) continue;
     const bucket = byAccount.get(account._id);
     if (bucket) bucket.jobs.push(job);
     else byAccount.set(account._id, { account, jobs: [job] });
   }
-  return byAccount;
+  return { byAccount, truncated };
 }
 
 function latestOf(jobs: Doc<"jobs">[]): Doc<"jobs"> {
@@ -132,10 +73,18 @@ export const rows = query({
     search: v.optional(v.string()),
     status: v.optional(publicationStateValidator),
   },
-  returns: v.array(accountLibraryRowValidator),
+  returns: v.object({
+    rows: v.array(accountLibraryRowValidator),
+    // True when this owner has more account imports than one bounded read
+    // covers, so `rows` is a page rather than their whole library. Returned
+    // rather than hidden: a list silently missing its oldest accounts looks
+    // identical to a complete one, and the counts beside it are derived from
+    // the same bound.
+    truncated: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    const byAccount = await groupOwnedJobsByAccount(ctx, owner);
+    const { byAccount, truncated } = await groupOwnedJobsByAccount(ctx, owner);
     const search = args.search?.trim().toLowerCase();
     const out: AccountLibraryRow[] = [];
     for (const [accountId, { account, jobs }] of byAccount) {
@@ -157,7 +106,14 @@ export const rows = query({
       // "waiting_for_indexing" is the honest default.
       const publicationState = publication?.state ?? "waiting_for_indexing";
       if (args.status && args.status !== publicationState) continue;
-      const latestJob = latestOf(jobs);
+      // Dismissed runs stay in `jobs` (and in this account's expandable
+      // history, which is the evidence trail) but must not be what the row
+      // reports as its latest activity or base its next action on —
+      // otherwise clearing a failure would leave the row still advertising
+      // it. An account whose every run has been dismissed keeps its row and
+      // its published counts, and simply reports no latest run.
+      const visible = jobs.filter((job) => job.dismissedAt === undefined);
+      const latestJob = visible.length > 0 ? latestOf(visible) : undefined;
       out.push({
         accountId,
         handle: account.handle,
@@ -180,17 +136,17 @@ export const rows = query({
         lastError: publication?.lastError
           ? { message: publication.lastError.message, observedAt: publication.lastError.observedAt }
           : undefined,
-        latestJob: {
+        latestJob: latestJob && {
           jobId: latestJob._id,
           status: latestJob.status,
           phase: latestJob.phase,
           updatedAt: latestJob.updatedAt,
         },
-        nextAction: nextActionFor(latestJob),
+        nextAction: latestJob ? nextActionFor(latestJob) : { kind: "none" },
       });
     }
     out.sort((a, b) => (b.latestJob?.updatedAt ?? 0) - (a.latestJob?.updatedAt ?? 0));
-    return out;
+    return { rows: out, truncated };
   },
 });
 
@@ -207,6 +163,10 @@ const historyRunValidator = v.object({
   postsReceived: v.optional(v.number()),
   attempt: v.number(),
   updatedAt: v.number(),
+  // Set when the owner dismissed this run from their feeds. History still
+  // lists it — dismissing hides a run, it never deletes the evidence — so
+  // the UI can mark it and offer to restore it.
+  dismissedAt: v.optional(v.number()),
   receipts: v.array(
     v.object({
       captureId: v.string(),
@@ -222,12 +182,29 @@ export const history = query({
   returns: v.array(historyRunValidator),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    const byAccount = await groupOwnedJobsByAccount(ctx, owner);
-    const bucket = byAccount.get(args.accountId);
-    // Same "not found" message whether the account does not exist or simply
-    // is not this owner's — never confirm another user's account exists.
-    if (!bucket || bucket.jobs.length === 0) throw new ConvexError("Account not found.");
-    const sorted = [...bucket.jobs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_HISTORY_JOBS);
+    // A targeted ownership lookup, NOT the bounded library page. Deriving
+    // this from the page meant an owner with more imports than it holds was
+    // told "not found" for an account they genuinely own, and lost both its
+    // run history and the evidence behind a dismissed run.
+    const { jobs, exhausted } = await ownerJobsForAccount(ctx.db, owner, args.accountId);
+    // Checked BEFORE looking at what was found, not only when nothing was.
+    // An incomplete scan that happened to find some runs is still incomplete:
+    // the scan walks _creationTime order while this list is presented by
+    // updatedAt, so a run it never reached can belong in the newest fifty.
+    // Returning those anyway would present a partial scan as the account's
+    // history, which is the same lie as presenting a partial count as a
+    // total.
+    if (!exhausted)
+      throw new ConvexError(
+        "Could not read this account's full history — you have too many imports to search in one request.",
+      );
+    // Same message whether the account does not exist or simply is not this
+    // owner's — never confirm another user's account exists.
+    if (jobs.length === 0) throw new ConvexError("Account not found.");
+    // Exact over the scanned window: every match was collected before
+    // sorting, so ordering by updatedAt cannot drop a job that the index's
+    // own _creationTime order happened to place later.
+    const sorted = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_HISTORY_JOBS);
     const out: Infer<typeof historyRunValidator>[] = [];
     for (const job of sorted) {
       const receipts = await ctx.db
@@ -243,6 +220,7 @@ export const history = query({
         postsReceived: job.postsReceived,
         attempt: job.attempt,
         updatedAt: job.updatedAt,
+        dismissedAt: job.dismissedAt,
         receipts: receipts.map((r) => ({
           captureId: r.captureId,
           receiptId: r.receiptId,

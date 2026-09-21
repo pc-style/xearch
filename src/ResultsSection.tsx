@@ -16,6 +16,7 @@ import type { Doc } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
 import type { Sort } from "../convex/lib/search";
 import { NerdStatsPanel } from "./library/NerdStatsPanel";
+import { OPERATOR_BUILD } from "./operatorSurface";
 import type { SearchAttemptSnapshot } from "./searchTelemetry";
 import { ModalKind, ViewMode } from "./uiState";
 
@@ -129,12 +130,7 @@ export function PostCard({
       {post.links.length > 0 && (
         <div className="links">
           {post.links.slice(0, 3).map((url) => (
-            <button
-              type="button"
-              key={url}
-              onClick={() => onRead(url)}
-              title={url}
-            >
+            <button type="button" key={url} onClick={() => onRead(url)} title={url}>
               <Link2 size={14} />
               <span>{safeHostname(url)}</span>
               <ArrowUpRight size={13} />
@@ -245,7 +241,6 @@ export function ResultsSection({
   }
   const deferredVisible = useDeferredValue(visible);
 
-
   return (
     <section className="results">
       <header className="results-header">
@@ -278,11 +273,7 @@ export function ResultsSection({
               <Bookmark size={15} />
               Save search
             </button>
-            <button
-              type="button"
-              disabled={busy || !configured?.firecrawl}
-              onClick={onWebContext}
-            >
+            <button type="button" disabled={busy || !configured?.firecrawl} onClick={onWebContext}>
               <Link2 size={15} />
               Web context
             </button>
@@ -295,11 +286,7 @@ export function ResultsSection({
               <Mail size={15} />
               Email
             </button>
-            <button
-              type="button"
-              disabled={busy || !configured?.indexing}
-              onClick={onLiveSearch}
-            >
+            <button type="button" disabled={busy || !configured?.indexing} onClick={onLiveSearch}>
               <Search size={15} />
               Find on X
             </button>
@@ -318,13 +305,13 @@ export function ResultsSection({
       ) : view === ViewMode.Search && configured?.search === false ? (
         <div className="empty">
           <Search size={30} />
-          <h2>Connect the search service.</h2>
-          <p>
-            The interface is ready. Your data service supplies the corpus and search results.
-          </p>
-          <button type="button" onClick={() => onOpenModal(ModalKind.Setup)}>
-            View connections
-          </button>
+          <h2>Search is not available on this site.</h2>
+          <p>The interface is ready. Your data service supplies the corpus and search results.</p>
+          {OPERATOR_BUILD && (
+            <button type="button" onClick={() => onOpenModal(ModalKind.Setup)}>
+              View connections
+            </button>
+          )}
         </div>
       ) : result?.status === "failed" ? (
         <div className="empty">

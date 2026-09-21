@@ -7,7 +7,7 @@ use search_query::Expr;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{ops::Bound, path::Path, time::Instant};
-use tantivy::collector::TopDocs;
+use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{
     AllQuery, BooleanQuery, ConstScoreQuery, EmptyQuery, Occur, PhraseQuery, Query, RangeQuery,
     TermQuery,
@@ -151,6 +151,32 @@ impl Engine {
     pub fn num_docs(&self) -> Result<u64> {
         self.reader.reload().map_err(storage)?;
         Ok(self.reader.searcher().num_docs())
+    }
+
+    /// Live, deduplicated document count for one author — reloaded from
+    /// disk first so a just-committed import is reflected immediately.
+    ///
+    /// This is the only honest source of a publication update's
+    /// `uniquePostCount` (see `docs/publication-contract.md` "What unique
+    /// means"): `Writer::upsert` `delete_term`s the previous document for a
+    /// tweet id before adding the replacement, so the live doc count per
+    /// author is already deduplicated across every capture and every
+    /// import ever run for that author — never a running import counter.
+    ///
+    /// # Errors
+    /// Returns [`Error::Invalid`] for an unusable author handle, or storage
+    /// errors when the index cannot be read.
+    pub fn count_author(&self, author: &str) -> Result<u64> {
+        self.reader.reload().map_err(storage)?;
+        let normalized = search_query::normalize_author(author)?;
+        let term = Term::from_field_text(self.fields.author, &normalized);
+        let query = TermQuery::new(term, IndexRecordOption::Basic);
+        let count = self
+            .reader
+            .searcher()
+            .search(&query, &Count)
+            .map_err(storage)?;
+        u64::try_from(count).map_err(|_| Error::Invalid("Author count overflowed u64.".into()))
     }
 
     fn compile(&self, expression: &Expr) -> Result<Box<dyn Query>> {

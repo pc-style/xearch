@@ -1,19 +1,50 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { kindValidator } from "./schema";
+import { kindValidator, throttleProviderValidator } from "./schema";
 import { user } from "./access";
 import { handle, statusUrl } from "./lib/xmd";
+import { canonicalQuery } from "./lib/search";
+import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 
+// Every filter a caller cares about is applied BEFORE the limit, by streaming
+// the owner's jobs newest-first and stopping once enough eligible ones are
+// found. Taking a fixed page and filtering afterwards silently shortens the
+// feed: 20 dismissed runs, or 20 account imports when the caller only wants
+// the other kinds, would hide older rows that should have been shown.
+// `scanned` bounds the read (Convex guidelines: never an unbounded scan);
+// reaching it means the owner has thousands of jobs newer than the next
+// eligible one, which is not a case worth paginating a dashboard feed for.
+const JOB_FEED_SCAN = 2_000;
+const JOB_FEED_LIMIT = 20;
+// Which kinds a caller wants. "account" is the full-history import that owns
+// a library row; "other" is everything else (live search, single post,
+// profile, follower/following lookups) — the split src/Dashboard.tsx's
+// "Other imports" feed and convex/library.ts already draw.
+const jobScopeValidator = v.union(v.literal("all"), v.literal("other"));
 export const list = query({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    includeDismissed: v.optional(v.boolean()),
+    scope: v.optional(jobScopeValidator),
+  },
+  handler: async (ctx, args) => {
     const owner = await user(ctx);
-    return ctx.db
+    const scope = args.scope ?? "all";
+    const out: Doc<"jobs">[] = [];
+    let scanned = 0;
+    for await (const job of ctx.db
       .query("jobs")
       .withIndex("by_owner", (q) => q.eq("owner", owner))
-      .order("desc")
-      .take(20);
+      .order("desc")) {
+      if (++scanned > JOB_FEED_SCAN) break;
+      if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
+      if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
+      out.push(job);
+      if (out.length >= JOB_FEED_LIMIT) break;
+    }
+    return out;
   },
 });
 // Local upgrade: recover display statistics from an already-acknowledged capture.
@@ -43,6 +74,30 @@ export const restoreSummary = internalMutation({
     });
   },
 });
+// One search, one label. `from:theo`, `@Theo` and `@theo` all mean the same
+// thing to parseQuery, but `start` used to store the raw text verbatim, so
+// the same live search appeared in the job feed under three different names
+// AND slipped past the already-active guard below, which matches on this
+// exact string. Canonical form is `@handle rest-of-query` with a lowercased
+// handle, so repeats collide instead of piling up.
+function canonicalLiveQuery(raw: string): string {
+  try {
+    return canonicalQuery(raw).canonical;
+  } catch (error) {
+    // parseQuery throws plain Errors with copy already written for a person
+    // ("Search one author at a time...", "Use @handle to filter authors...").
+    // Re-throw as ConvexError so the browser shows that text instead of a
+    // generic server-error string.
+    throw new ConvexError(error instanceof Error ? error.message : "Enter a valid search.");
+  }
+}
+/**
+ * How long an identical request from the same person is answered with the
+ * run it already made rather than a new one. Long enough to absorb a
+ * double-click and a "did that work?" retry, short enough that a deliberate
+ * re-run is never mistaken for one.
+ */
+const REPEAT_WINDOW_MS = 60_000;
 export const start = mutation({
   args: {
     kind: kindValidator,
@@ -70,7 +125,7 @@ export const start = mutation({
       );
     const input =
       args.kind === "live"
-        ? args.input.trim()
+        ? canonicalLiveQuery(args.input)
         : args.kind === "post"
           ? statusUrl(args.input)
           : handle(args.input);
@@ -89,6 +144,45 @@ export const start = mutation({
         previous.kind !== args.kind)
     )
       throw new ConvexError("Continuation does not belong to this indexing job.");
+    // A second click is not a second import.
+    //
+    // This only ever refused a *concurrent* duplicate (below), so the instant
+    // a run finished an identical one became a fresh row. Production shows
+    // exactly that: four "from:theo" live searches 11 to 15 seconds apart,
+    // each returning nothing — someone clicking again because nothing
+    // visible had happened. Inside this window an identical request gets
+    // back the run it already made.
+    //
+    // Idempotency, not a quota: nothing is refused, nothing is capped, and
+    // no allowance is tracked (the self-imposed budgets were deleted in #12
+    // and are not coming back). A deliberate re-run a minute later starts a
+    // real import. An explicit continuation is never collapsed — it carries
+    // a different cursor, which is the whole point of "Get next page" — and
+    // the lookup is owner-scoped, so it can never hand back someone else's
+    // job id.
+    if (!args.previous) {
+      const recent = await ctx.db
+        .query("jobs")
+        .withIndex("by_owner_and_input", (q) =>
+          q.eq("owner", owner).eq("kind", args.kind).eq("input", input),
+        )
+        .order("desc")
+        .first();
+      if (
+        recent &&
+        // Never a stopped run. A failed/partial/cancelled job has nothing
+        // scheduled behind it, so handing its id back would answer "start
+        // this import" by doing nothing at all — and those are exactly the
+        // statuses the UI offers "Retry import" for.
+        (recent.status === "queued" ||
+          recent.status === "running" ||
+          recent.status === "complete") &&
+        Date.now() - recent._creationTime < REPEAT_WINDOW_MS &&
+        recent.since === args.since &&
+        recent.refresh === (args.refresh ?? false)
+      )
+        return recent._id;
+    }
     for (const status of ["running", "queued"] as const) {
       if (
         await ctx.db
@@ -100,13 +194,18 @@ export const start = mutation({
       )
         throw new ConvexError("This indexing job is already active.");
     }
-    const account =
+    // A handle can be released on X and claimed by a different real account,
+    // so `by_handle` is not unique and `.unique()` would throw outright. Two
+    // matches means the handle is genuinely ambiguous: seed no identity and
+    // let the run pin its own via `pinIdentity`, rather than guessing one.
+    const candidates =
       args.kind === "bulk"
         ? await ctx.db
             .query("accounts")
             .withIndex("by_handle", (q) => q.eq("handle", input))
-            .unique()
-        : null;
+            .take(2)
+        : [];
+    const account = candidates.length === 1 ? candidates[0] : null;
     const id = await ctx.db.insert("jobs", {
       owner,
       kind: args.kind,
@@ -158,12 +257,19 @@ export const progress = internalMutation({
     await ctx.db.patch(job._id, { phase: args.phase, updatedAt: Date.now() });
   },
 });
+// Load a job this caller owns, or refuse. The same "not found" message
+// whether the job does not exist or simply is not theirs — never confirm the
+// existence of someone else's run.
+async function ownedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
+  const owner = await user(ctx);
+  const job = await ctx.db.get(jobId);
+  if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+  return job;
+}
 export const cancel = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    const job = await ownedJob(ctx, jobId);
     if (!["queued", "running"].includes(job.status)) return;
     await ctx.db.patch(jobId, {
       status: "cancelled",
@@ -175,9 +281,7 @@ export const cancel = mutation({
 export const retry = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    const job = await ownedJob(ctx, jobId);
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
     for (const status of ["queued", "running"] as const) {
@@ -199,12 +303,76 @@ export const retry = mutation({
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId });
   },
 });
+// --- Dismissing finished runs ------------------------------------------
+// A person could stop a run and retry it, but never clear it: the feed grew
+// forever and a pile of old failures buried everything current. Dismissing
+// HIDES a terminal run from the job feed and the retryable-work counter. It
+// deletes nothing — the job document and its `receipts` (the proof a capture
+// was durably stored) stay exactly as they were, and `restore` brings the
+// row back — so it does not violate to-do.md's "do not delete records just
+// to hide duplicates".
+export const dismiss = mutation({
+  args: { jobId: v.id("jobs") },
+  handler: async (ctx, { jobId }) => {
+    const job = await ownedJob(ctx, jobId);
+    // Deliberately refuses queued/running work: hiding a run that is still
+    // spending provider allowance would make it unstoppable from the UI.
+    // Stop it first, then dismiss it.
+    if (job.status === "queued" || job.status === "running")
+      throw new ConvexError("Stop this run before dismissing it.");
+    if (job.dismissedAt !== undefined) return;
+    await ctx.db.patch(jobId, { dismissedAt: Date.now() });
+  },
+});
+export const restore = mutation({
+  args: { jobId: v.id("jobs") },
+  handler: async (ctx, { jobId }) => {
+    // Ownership is the whole check here; the row itself is not needed.
+    await ownedJob(ctx, jobId);
+    await ctx.db.patch(jobId, { dismissedAt: undefined });
+  },
+});
+
+// --- Provider-reported throttling --------------------------------------
+// Records one observation that a provider asked US to slow down, exactly as
+// the provider stated it. `providerThrottleEvents` existed with a query and
+// a dashboard panel reading it, but nothing ever wrote a row, so the panel
+// read "no throttling reported" even while x.md was actively refusing us.
+//
+// This is NOT an application quota and must never become one (AGENTS.md:
+// no self-imposed rate limits, quotas or budgets — an agent-added cap
+// previously caused a production outage). Nothing reads these rows to decide
+// whether to make a request; they are a record of what the provider said,
+// shown to a person. `remaining`/`resetAt`/`retryAfterMs` are written ONLY
+// when the provider actually supplied them — never estimated or defaulted.
+export const recordThrottle = internalMutation({
+  args: {
+    jobId: v.optional(v.id("jobs")),
+    attempt: v.optional(v.number()),
+    provider: throttleProviderValidator,
+    operation: v.string(),
+    reason: v.string(),
+    remaining: v.optional(v.number()),
+    resetAt: v.optional(v.number()),
+    retryAfterMs: v.optional(v.number()),
+    observedAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { observedAt, ...rest } = args;
+    await ctx.db.insert("providerThrottleEvents", {
+      ...rest,
+      // The observation time is the provider's if it gave one, otherwise the
+      // instant we recorded it — never left unset, since limits.ts orders on
+      // it to decide which observation is current.
+      observedAt: observedAt ?? Date.now(),
+    });
+  },
+});
+
 export const receipts = query({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const owner = await user(ctx),
-      job = await ctx.db.get(jobId);
-    if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+    await ownedJob(ctx, jobId);
     return ctx.db
       .query("receipts")
       .withIndex("by_capture", (q) => q.eq("jobId", jobId))
@@ -339,14 +507,68 @@ export const finish = internalMutation({
       await ctx.scheduler.runAfter(Math.max(1000, args.retryAfter!), internal.importer.run, {
         jobId: job._id,
       });
-    if (args.profile) {
-      const profile = args.profile;
-      const account = await ctx.db
-        .query("accounts")
-        .withIndex("by_handle", (q) => q.eq("handle", profile.handle))
-        .unique();
-      if (account) await ctx.db.patch(account._id, profile);
-      else await ctx.db.insert("accounts", profile);
-    }
+    if (args.profile) await upsertAccount(ctx, args.profile);
   },
 });
+
+export type Profile = { handle: string; userId: string; name: string; avatar?: string };
+
+// Account identity is the provider account id, never the handle.
+//
+// This used to look the account up purely `by_handle` and unconditionally
+// patch whatever row it found — including that row's `userId`. On X a handle
+// can be released and later claimed by a completely different account, so
+// that write spliced the new owner's identity onto the previous owner's row:
+// one person's posts, another person's name, and a single merged row in the
+// account library. The read side (convex/library.ts, convex/publication.ts)
+// was already written to treat the provider id as truth and never merge two
+// ids that shared a handle; this is the write side finally agreeing with it.
+// See to-do.md P0 "Do not combine different identities after a handle
+// reassignment" and docs/publication-contract.md "Account identity".
+export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise<Id<"accounts">> {
+  const existing = await canonicalAccountForUserId(ctx.db, profile.userId);
+  let accountId: Id<"accounts">;
+  if (existing) {
+    // Same provider id: this IS that account, whatever handle it now uses,
+    // so patching is how a rename gets picked up. Skipped when nothing
+    // actually changed: `finish` runs once per page and a multi-page import
+    // returns the same profile every time, so writing unconditionally
+    // rewrote an identical row up to sixty times per import — and every
+    // write re-fires the library and summary queries watching this document.
+    if (
+      existing.handle !== profile.handle ||
+      existing.name !== profile.name ||
+      existing.avatar !== profile.avatar
+    )
+      await ctx.db.patch(existing._id, profile);
+    accountId = existing._id;
+  } else {
+    // No row for this provider id. Deliberately does NOT adopt a row that
+    // merely holds this handle today: an unknown id arriving on a known
+    // handle is exactly a reassignment, and it gets its own row.
+    accountId = await ctx.db.insert("accounts", profile);
+  }
+  await recordHandle(ctx, accountId, profile.handle);
+  return accountId;
+}
+
+// Append-only handle history, so "which account held @x when" is answerable
+// from data instead of guessed. Nothing wrote this table before, which is
+// why the reassignment case had no evidence trail at all.
+const MAX_TRACKED_HANDLES = 50;
+async function recordHandle(ctx: MutationCtx, accountId: Id<"accounts">, handleText: string) {
+  const now = Date.now();
+  const known = await ctx.db
+    .query("accountHandles")
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .take(MAX_TRACKED_HANDLES);
+  const existing = known.find((row) => row.handle === handleText);
+  if (existing) await ctx.db.patch(existing._id, { lastSeenAt: now });
+  else
+    await ctx.db.insert("accountHandles", {
+      accountId,
+      handle: handleText,
+      firstSeenAt: now,
+      lastSeenAt: now,
+    });
+}

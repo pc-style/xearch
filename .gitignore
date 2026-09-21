@@ -24,3 +24,4 @@ coverage/
 backups/
 raw/
 quarantine/
+dist-operator

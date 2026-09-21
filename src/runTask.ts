@@ -14,8 +14,13 @@ export function runTask(
 ): void {
   work().then(
     () => {
-      handlers.onSuccess?.();
-      handlers.onSettled?.();
+      try {
+        handlers.onSuccess?.();
+      } catch (error) {
+        handlers.onError?.(error);
+      } finally {
+        handlers.onSettled?.();
+      }
     },
     (error: unknown) => {
       handlers.onError?.(error);

@@ -10,13 +10,16 @@
 
 import type * as access from "../access.js";
 import type * as auth from "../auth.js";
+import type * as backfill from "../backfill.js";
 import type * as cleanup from "../cleanup.js";
 import type * as crons from "../crons.js";
 import type * as email from "../email.js";
+import type * as health from "../health.js";
 import type * as http from "../http.js";
 import type * as importer from "../importer.js";
 import type * as integrations from "../integrations.js";
 import type * as jobs from "../jobs.js";
+import type * as lib_accounts from "../lib/accounts.js";
 import type * as lib_collect from "../lib/collect.js";
 import type * as lib_contracts from "../lib/contracts.js";
 import type * as lib_handoff from "../lib/handoff.js";
@@ -40,13 +43,16 @@ import type {
 declare const fullApi: ApiFromModules<{
   access: typeof access;
   auth: typeof auth;
+  backfill: typeof backfill;
   cleanup: typeof cleanup;
   crons: typeof crons;
   email: typeof email;
+  health: typeof health;
   http: typeof http;
   importer: typeof importer;
   integrations: typeof integrations;
   jobs: typeof jobs;
+  "lib/accounts": typeof lib_accounts;
   "lib/collect": typeof lib_collect;
   "lib/contracts": typeof lib_contracts;
   "lib/handoff": typeof lib_handoff;

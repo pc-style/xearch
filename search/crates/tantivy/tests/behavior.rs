@@ -180,6 +180,53 @@ fn absent_metrics_sort_last_and_popularity_never_relaxes_matching() {
 }
 
 #[test]
+fn count_author_deduplicates_reimports_and_normalizes_the_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(dir.path(), true).unwrap();
+    let mut bob = post(1, "hello");
+    bob.author = "bob".into();
+    {
+        let mut writer = engine.writer().unwrap();
+        writer.upsert(&bob).unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(engine.count_author("bob").unwrap(), 1, "one post so far");
+    assert_eq!(
+        engine.count_author("@Bob").unwrap(),
+        1,
+        "author counting must normalize like ingestion does"
+    );
+    assert_eq!(engine.count_author("alice").unwrap(), 0);
+
+    // Re-importing the exact same tweet id must not double the count: this
+    // is what makes count_author an honest uniquePostCount source per
+    // docs/publication-contract.md, unlike a running import counter.
+    {
+        let mut writer = engine.writer().unwrap();
+        writer.upsert(&bob).unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(
+        engine.count_author("bob").unwrap(),
+        1,
+        "reimporting the same post must not inflate the unique count"
+    );
+
+    let mut second = post(2, "world");
+    second.author = "bob".into();
+    {
+        let mut writer = engine.writer().unwrap();
+        writer.upsert(&second).unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(
+        engine.count_author("bob").unwrap(),
+        2,
+        "a genuinely new post must be counted"
+    );
+}
+
+#[test]
 fn pagination_window_capping_and_warning() {
     let dir = tempfile::tempdir().unwrap();
     let engine = search_tantivy::open(dir.path(), true).unwrap();

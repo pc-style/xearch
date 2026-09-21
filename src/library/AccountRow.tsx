@@ -4,8 +4,7 @@ import { api } from "../../convex/_generated/api";
 import type { AccountLibraryRow, NextAction } from "../../convex/lib/contracts";
 import type { HistoryRun } from "../../convex/library";
 import type { Id } from "../../convex/_generated/dataModel";
-import { describeError } from "../errors";
-import { runTask } from "../runTask";
+import { useTask } from "../errors";
 import { acquisitionStatusLabel, describeRunOutcome } from "../jobText";
 import {
   PUBLICATION_STATE_META,
@@ -27,8 +26,7 @@ import { Badge } from "./format.tsx";
  */
 export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   const [expanded, setExpanded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const { busy, message: error, run: act } = useTask();
   const job = row.latestJob;
   // A failed/partial latest job's own `phase` field is stale progress text
   // left over from before it stopped (convex/jobs.ts finish never clears it
@@ -44,15 +42,6 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   const retry = useMutation(api.jobs.retry);
   const start = useMutation(api.jobs.start);
   const cancel = useMutation(api.jobs.cancel);
-
-  const act = (fn: () => Promise<unknown>) => {
-    setBusy(true);
-    setError("");
-    runTask(fn, {
-      onError: (e) => setError(describeError(e)),
-      onSettled: () => setBusy(false),
-    });
-  };
 
   const currentRun = job && history?.find((h) => h.jobId === job.jobId);
   const stateMeta = PUBLICATION_STATE_META[row.publicationState];

@@ -8,6 +8,13 @@ import {
 import { formatDuration } from "./format";
 import { NerdSection } from "../uiState";
 
+const SECTION_LABELS: Record<NerdSection, string> = {
+  [NerdSection.Frontend]: "Frontend",
+  [NerdSection.Backend]: "Backend",
+  [NerdSection.Connection]: "Connection",
+  [NerdSection.Render]: "Render",
+};
+
 type SessionResult = Doc<"sessions">;
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -41,30 +48,40 @@ export function NerdStatsPanel({
   return (
     <details className="stats-panel" open={false}>
       <summary>
-        Stats for nerds — {(() => { const us = apiStats?.totalUs ?? backend?.totalUs; return us === undefined ? "—" : formatDuration(us); })()}
+        Stats for nerds —{" "}
+        {(() => {
+          const us = apiStats?.totalUs ?? backend?.totalUs;
+          return us === undefined ? "—" : formatDuration(us);
+        })()}
         {metrics.submitToTerminalMs !== null && (
           <> · client {formatDurationMs(metrics.submitToTerminalMs)}</>
         )}
       </summary>
       <div className="stats-grid">
-        <strong>{NerdSection.Frontend}</strong>
+        <strong>{SECTION_LABELS[NerdSection.Frontend]}</strong>
         <Row label="Submit → mutation" value={formatDurationMs(metrics.submitToMutationStartMs)} />
         <Row label="Mutation → session" value={formatDurationMs(metrics.mutationMs)} />
-        <Row label="Session → first result" value={formatDurationMs(metrics.sessionToFirstResultMs)} />
-        <Row label="Submit → first result" value={formatDurationMs(metrics.submitToFirstResultMs)} />
+        <Row
+          label="Session → first result"
+          value={formatDurationMs(metrics.sessionToFirstResultMs)}
+        />
+        <Row
+          label="Submit → first result"
+          value={formatDurationMs(metrics.submitToFirstResultMs)}
+        />
         <Row label="First → terminal" value={formatDurationMs(metrics.firstResultToTerminalMs)} />
         <Row label="Submit → terminal" value={formatDurationMs(metrics.submitToTerminalMs)} />
         <Row label="First result → paint" value={formatDurationMs(metrics.firstResultToPaintMs)} />
         <Row label="Trigger" value={frontend?.trigger ?? "—"} />
         <Row label="Status" value={frontend?.status ?? "—"} />
 
-        <strong>{NerdSection.Render}</strong>
+        <strong>{SECTION_LABELS[NerdSection.Render]}</strong>
         <Row label="Commit (actual)" value={formatDurationMs(metrics.actualDurationMs)} />
         <Row label="Commit (base)" value={formatDurationMs(metrics.baseDurationMs)} />
 
         {backend && (
           <>
-            <strong>{NerdSection.Backend}</strong>
+            <strong>{SECTION_LABELS[NerdSection.Backend]}</strong>
             <Row label="Total" value={formatDuration(backend.totalUs)} />
             <Row label="Reload index" value={formatDuration(backend.reloadUs)} />
             <Row label="Fingerprint" value={formatDuration(backend.fingerprintUs)} />
@@ -72,7 +89,10 @@ export function NerdStatsPanel({
             <Row label="Retrieve" value={formatDuration(backend.retrieveUs)} />
             <Row label="Retrieve + rank" value={`${backend.rankingCalls} calls`} />
             <Row label="Materialize rows" value={formatDuration(backend.materializeUs)} />
-            <Row label="Hits / returned" value={`${backend.candidateHits} / ${backend.returnedRows}`} />
+            <Row
+              label="Hits / returned"
+              value={`${backend.candidateHits} / ${backend.returnedRows}`}
+            />
             <Row label="Index" value={`${backend.indexDocs} docs / ${backend.segments} segments`} />
           </>
         )}
@@ -88,7 +108,7 @@ export function NerdStatsPanel({
           </>
         )}
 
-        <strong>{NerdSection.Connection}</strong>
+        <strong>{SECTION_LABELS[NerdSection.Connection]}</strong>
         <Row
           label="Submit → session reconnects"
           value={

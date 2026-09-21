@@ -30,10 +30,11 @@ export default function AccountLibrary({
 }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<PublicationState | "">("");
-  const rows = useQuery(
+  const library = useQuery(
     api.library.rows,
     isAuthenticated ? { search: search.trim() || undefined, status: status || undefined } : "skip",
   );
+  const rows = library?.rows;
   const filtersActive = search.trim().length > 0 || status !== "";
 
   return (
@@ -88,6 +89,12 @@ export default function AccountLibrary({
         </div>
       ) : (
         <div className="library-rows">
+          {library?.truncated && (
+            <p className="library-muted" role="status">
+              Showing your most recent accounts. You have more imported than this list can load at
+              once, so the figures above report "not yet known" rather than a partial total.
+            </p>
+          )}
           {rows.map((row) => (
             <AccountRow key={row.accountId} row={row} />
           ))}

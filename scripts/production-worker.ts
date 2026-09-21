@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { ConvexHttpClient } from "convex/browser";
 import { collectXmd } from "../convex/lib/collect";
-import { XmdClient, ProviderError } from "../convex/lib/xmd";
+import { XmdClient, ProviderError, string } from "../convex/lib/xmd";
 import { deliverCapture } from "../convex/lib/handoff";
 const env = parseEnv(await readFile(".env.local", "utf8"));
 if (!env.X_MD_API_KEY) throw new Error("Local X_MD_API_KEY is required.");
@@ -14,15 +14,25 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     stopping = true;
   });
-async function healthy() {
+// One real observation of the loopback capture receiver, with the failure
+// text kept verbatim: it is both this worker's own "can I still save
+// anything" check AND, forwarded through worker:poll, the only thing that
+// ever observes the receiver for the dashboard's service-health panel
+// (convex/health.ts). `healthy: true` here always means a response was
+// actually received — never that a setting is present.
+async function receiverHealth(): Promise<{ healthy: boolean; error?: string }> {
   try {
-    return (
-      await fetch("http://127.0.0.1:4319/health", {
-        signal: AbortSignal.timeout(3000),
-      })
-    ).ok;
-  } catch {
-    return false;
+    const response = await fetch("http://127.0.0.1:4319/health", {
+      signal: AbortSignal.timeout(3000),
+    });
+    return response.ok
+      ? { healthy: true }
+      : { healthy: false, error: `Capture receiver answered HTTP ${response.status}.` };
+  } catch (error) {
+    return {
+      healthy: false,
+      error: error instanceof Error ? error.message : "Capture receiver did not respond.",
+    };
   }
 }
 console.log(
@@ -33,8 +43,12 @@ console.log(
 for (;;) {
   if (stopping) break;
   try {
-    const online = await healthy();
-    const job = await client.action("worker:poll" as any, { token, online });
+    const receiver = await receiverHealth();
+    const job = await client.action("worker:poll" as any, {
+      token,
+      online: receiver.healthy,
+      receiver,
+    });
     if (job) {
       console.log(`Downloading ${job.kind} for ${job.input}`);
       const report = (args: Record<string, unknown>) =>
@@ -45,12 +59,13 @@ for (;;) {
           ...args,
         });
       const heartbeat = setInterval(() => {
-        void healthy()
-          .then((online) =>
+        void receiverHealth()
+          .then((receiver) =>
             client.action("worker:poll" as any, {
               token,
               heartbeatOnly: true,
-              online,
+              online: receiver.healthy,
+              receiver,
             }),
           )
           .catch(() => {});
@@ -87,10 +102,53 @@ for (;;) {
             await report({ event: "phase", phase });
           },
         );
-        const { profile: _rawProfile, ...summary } = result;
-        await report({ event: "finish", ...summary });
+        // The profile is what creates the account row, so it must travel —
+        // it used to be destructured off and dropped here, which left the
+        // production `accounts` table permanently empty even though every
+        // job had its identity pinned. Same shape and same validation
+        // convex/importer.ts applies on the in-Convex path: a handle that
+        // is actually a handle, an id we really pinned, and an avatar only
+        // when it is an https URL.
+        const { profile: rawProfile, ...summary } = result;
+        const screenName = rawProfile && string(rawProfile.screen_name);
+        await report({
+          event: "finish",
+          ...summary,
+          profile:
+            screenName && /^[A-Za-z0-9_]{1,15}$/.test(screenName) && result.expectedUserId
+              ? {
+                  handle: screenName.toLowerCase(),
+                  userId: result.expectedUserId,
+                  name: string(rawProfile!.name) ?? screenName,
+                  avatar: string(rawProfile!.avatar_url)?.startsWith("https://")
+                    ? string(rawProfile!.avatar_url)
+                    : undefined,
+                }
+              : undefined,
+        });
         console.log("Batch saved; production progress updated.");
       } catch (error) {
+        // This worker is the only thing that talks to x.md in production, so
+        // it is the only place a provider's "slow down" is ever observed.
+        // Reported separately from the finish below: the job's outcome and
+        // what the provider said are two different facts, and the throttle
+        // observation must survive even if the finish is rejected as a stale
+        // attempt.
+        if (error instanceof ProviderError && error.throttle) {
+          const throttle = error.throttle;
+          await report({
+            event: "throttle",
+            throttle: {
+              provider: throttle.provider,
+              operation: throttle.operation,
+              reason: throttle.reason ?? error.message,
+              remaining: throttle.remaining,
+              resetAt: throttle.resetAt,
+              retryAfterMs: throttle.retryAfterMs,
+              observedAt: throttle.observedAt,
+            },
+          }).catch(() => {});
+        }
         await report({
           event: "finish",
           error:
@@ -110,6 +168,9 @@ for (;;) {
   }
   if (!stopping) await new Promise((resolve) => setTimeout(resolve, 5000));
 }
+// Shutdown: `online: false` is a statement about this worker, not about the
+// receiver, so no `receiver` field goes with it. Claiming the receiver is
+// down because we are stopping would be an observation we never made.
 await client
   .action("worker:poll" as any, { token, heartbeatOnly: true, online: false })
   .catch(() => {});

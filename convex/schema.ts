@@ -230,9 +230,26 @@ export default defineSchema({
     error: v.optional(v.string()),
     updatedAt: v.number(),
     readyAt: v.optional(v.number()),
+    // When the owner dismissed this finished run from their feeds, if they
+    // did. Dismissing HIDES a run; it never deletes it, and it never touches
+    // the `receipts` rows that prove a capture was durably stored — to-do.md
+    // P0 "Preserve receipts and failure evidence; do not delete records just
+    // to hide duplicates". Only a terminal run can be dismissed (see
+    // convex/jobs.ts `dismiss`), and `restore` clears this field again.
+    dismissedAt: v.optional(v.number()),
   })
     .index("by_status", ["status"])
     .index("by_owner", ["owner"])
+    // Kind belongs in the index, not in a `.filter()`: Convex applies a
+    // filter after the index scan, so filtering by kind would still read
+    // every job an owner has run to find their account imports among them.
+    .index("by_owner_and_kind", ["owner", "kind"])
+    // One person's runs of one exact request, newest first — Convex appends
+    // `_creationTime` as the trailing column of every index, so `.order("desc")
+    // .first()` on this is "what did they last ask for this?". Used by
+    // `jobs.start` to answer a repeated click with the run it already made
+    // instead of a second one.
+    .index("by_owner_and_input", ["owner", "kind", "input"])
     .index("by_input", ["kind", "input", "status"]),
   // One row per account: the current publication pipeline state plus the
   // last confirmed-searchable snapshot. These are deliberately separate
@@ -312,7 +329,13 @@ export default defineSchema({
     lastSuccessAt: v.optional(v.number()),
     lastError: v.optional(v.object({ message: v.string(), observedAt: v.number() })),
     observedAt: v.number(),
-  }).index("by_service", ["service"]),
+  })
+    .index("by_service", ["service"])
+    // `service` alone cannot answer "the newest observation": an index
+    // orders by its own columns, and picking a row without observedAt in the
+    // key means picking an arbitrary one. Readers use this and take the
+    // first in descending order.
+    .index("by_service_and_observed", ["service", "observedAt"]),
   receipts: defineTable({
     jobId: v.id("jobs"),
     captureId: v.string(),

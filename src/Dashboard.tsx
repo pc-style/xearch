@@ -1,11 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import { useConvexAuth, useConvexConnectionState, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
 import "./dashboard.css";
 import { indexingUnavailableMessage } from "./integrationStatus";
-import { describeError } from "./errors";
-import { runTask } from "./runTask";
+import { describeError, useTask } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import Library from "./library/Library";
 
@@ -15,6 +14,8 @@ function Job({ job }: { job: Doc<"jobs"> }) {
   const receipts = useQuery(api.jobs.receipts, expanded ? { jobId: job._id } : "skip");
   const cancel = useMutation(api.jobs.cancel),
     retry = useMutation(api.jobs.retry),
+    dismiss = useMutation(api.jobs.dismiss),
+    restore = useMutation(api.jobs.restore),
     start = useMutation(api.jobs.start);
   const act = async (fn: () => Promise<unknown>) => {
     setError("");
@@ -25,8 +26,9 @@ function Job({ job }: { job: Doc<"jobs"> }) {
     }
   };
   const active = job.status === "queued" || job.status === "running";
+  const dismissed = job.dismissedAt !== undefined;
   return (
-    <article className="control-job">
+    <article className={dismissed ? "control-job is-dismissed" : "control-job"}>
       <div className="control-job-heading">
         <h3>{job.input}</h3>
         <span className={`job-status ${job.status}`}>{jobLabel(job)}</span>
@@ -86,6 +88,17 @@ function Job({ job }: { job: Doc<"jobs"> }) {
             {job.kind === "bulk" ? "Continue remaining history" : "Download next page"}
           </button>
         )}
+        {/* Clearing a finished run only hides it: the run and the receipts
+            proving its captures were stored are kept, and "Bring back" puts
+            it straight back in the list. Never offered while the run is
+            still active — stop it first, or it would keep spending provider
+            allowance with no row to stop it from. */}
+        {!active &&
+          (dismissed ? (
+            <button onClick={() => act(() => restore({ jobId: job._id }))}>Bring back</button>
+          ) : (
+            <button onClick={() => act(() => dismiss({ jobId: job._id }))}>Clear from list</button>
+          ))}
         <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
           {expanded ? "Hide technical details" : "Technical details"}
         </button>
@@ -122,43 +135,31 @@ export default function Dashboard({
 }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
-  const config = useQuery(api.integrations.configured, {});
-  const jobs = useQuery(api.jobs.list, isAuthenticated ? {} : "skip");
+  // `integrations.operator` requires a session, so asking for it before one
+  // exists throws into the app's error boundary — which only offers a
+  // reload. The dashboard is reachable directly by URL, so that is a normal
+  // first load, not an edge case.
+  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
+  const [showDismissed, setShowDismissed] = useState(false);
+  // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
+  // out here, after the server had already limited the page, could hide
+  // older non-account runs behind 20 newer account imports.
+  const jobs = useQuery(
+    api.jobs.list,
+    isAuthenticated ? { includeDismissed: showDismissed, scope: "other" } : "skip",
+  );
   // Account-history ("bulk") jobs are represented per-account in <Library>
   // above (convex/library.ts groups exactly this kind); this feed exists
   // only for the non-account job kinds to-do.md P0 says must stay out of
   // the indexed-people list (live search, single post, profile, followers,
-  // following, archive).
-  const otherJobs = jobs?.filter((job) => job.kind !== "bulk") ?? [];
+  // following, archive). The split is applied server-side via `scope`.
+
   const start = useMutation(api.jobs.start);
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
     [input, setInput] = useState(""),
     [since, setSince] = useState(""),
-    [refresh, setRefresh] = useState(false),
-    [busy, setBusy] = useState(false),
-    [message, setMessage] = useState("");
-  function submitImport(e: FormEvent): void {
-    e.preventDefault();
-    setBusy(true);
-    setMessage("");
-    runTask(
-      async () => {
-        await ensureSession();
-        await start({
-          kind,
-          input,
-          since: kind === "bulk" && since ? since : undefined,
-          refresh: kind === "bulk" && refresh,
-        });
-      },
-      {
-        onSuccess: () =>
-          setMessage("Import started. You can leave this page open or come back later."),
-        onError: (err) => setMessage(describeError(err)),
-        onSettled: () => setBusy(false),
-      },
-    );
-  }
+    [refresh, setRefresh] = useState(false);
+  const { busy, message, setMessage, run } = useTask();
   return (
     <main className="control-room">
       <header className="control-header">
@@ -175,7 +176,18 @@ export default function Dashboard({
         <aside>
           <form
             className="control-form"
-            onSubmit={submitImport}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              await run(async () => {
+                await ensureSession();
+                await start({
+                  kind,
+                  input,
+                  since: kind === "bulk" && since ? since : undefined,
+                  refresh: kind === "bulk" && refresh,
+                });
+              }, "Import started. You can leave this page open or come back later.");
+            }}
           >
             <h2>Start an import</h2>
             <label>
@@ -257,11 +269,22 @@ export default function Dashboard({
             ).map(([name, ready]) => (
               <div key={name}>
                 <span>{name}</span>
-                {/* `config` is undefined while the query is in flight or the
-                    socket is down. Rendering that as "Not connected" states a
-                    fact we do not have yet -- the same configuration-versus-
-                    connectivity conflation to-do.md P0 calls out. */}
-                <span>{!config ? "Checking…" : ready ? "Configured" : "Not connected"}</span>
+                {/* Three different "we don't know" states, and none of them
+                    may be rendered as "Not connected": no session means we
+                    never asked, `undefined` means the query is in flight or
+                    the socket is down, and only a resolved `false` is a fact
+                    about configuration. Collapsing them is the
+                    configuration-versus-connectivity conflation to-do.md P0
+                    calls out. */}
+                <span>
+                  {!isAuthenticated
+                    ? "Sign in to view"
+                    : !config
+                      ? "Checking…"
+                      : ready
+                        ? "Configured"
+                        : "Not connected"}
+                </span>
               </div>
             ))}
             <p>Configuration status, not a live health check. Provider keys stay on the backend.</p>
@@ -276,6 +299,16 @@ export default function Dashboard({
               account history imports, so they don't create or update a row in the account library
               above.
             </p>
+            {isAuthenticated && (
+              <label className="control-feed-toggle">
+                <input
+                  type="checkbox"
+                  checked={showDismissed}
+                  onChange={(e) => setShowDismissed(e.target.checked)}
+                />
+                Show runs I've cleared
+              </label>
+            )}
             {!isAuthenticated ? (
               <button
                 onClick={async () => {
@@ -290,13 +323,17 @@ export default function Dashboard({
               </button>
             ) : !jobs ? (
               <p>Loading jobs…</p>
-            ) : otherJobs.length === 0 ? (
+            ) : jobs.length === 0 ? (
               <div className="control-empty">
-                <h3>No other imports yet</h3>
-                <p>Live searches, single posts, and profile/follower lookups will show up here.</p>
+                <h3>{showDismissed ? "Nothing here" : "No other imports yet"}</h3>
+                <p>
+                  {showDismissed
+                    ? "You haven't cleared any runs, and there are no others to show."
+                    : "Live searches, single posts, and profile/follower lookups will show up here."}
+                </p>
               </div>
             ) : (
-              otherJobs.map((job) => <Job key={job._id} job={job} />)
+              jobs.map((job) => <Job key={job._id} job={job} />)
             )}
           </section>
         </div>

@@ -1,4 +1,5 @@
 import { action, query, internalMutation, internalQuery } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import { internal, components } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import { FirecrawlClient } from "@firecrawl/firecrawl-convex";
@@ -9,28 +10,78 @@ import { deliverCapture } from "./lib/handoff";
 import { serviceToken } from "./lib/serviceAuth";
 import { parseQuery } from "./lib/search";
 const firecrawl = new FirecrawlClient(components.firecrawl);
-export const configured = query({
-  args: {},
-  handler: async (ctx) => {
-    const outbound = process.env.COLLECTOR_MODE === "outbound";
-    const worker = outbound
-      ? await ctx.db
-          .query("collector")
-          .withIndex("by_name", (q) => q.eq("name", "desktop"))
-          .unique()
-      : null;
-    const saving = outbound
-      ? !!worker?.online && Date.now() - worker.lastSeen < 45_000
-      : !!process.env.RAW_CAPTURE_URL;
-    return {
-      xmd: !!process.env.X_MD_API_KEY,
+/**
+ * What this deployment says about itself, and who is allowed to hear it.
+ *
+ * `configured` below is the client-facing app's bootstrap. It answers before
+ * anyone has signed in, so it reports only the capabilities a visitor can
+ * see buttons for: search, imports, link reading, query help, email. It says
+ * nothing about how this deployment is operated.
+ *
+ * `operator` reports the rest — which collector mode is running, and whether
+ * the download worker is alive right now — and requires a session.
+ *
+ * Be honest about what that session gate is worth: anonymous sign-in is a
+ * supported provider here, so anyone willing to take a token can read
+ * `operator` too. What it buys is that deployment shape is no longer in the
+ * unauthenticated bootstrap response, which is the thing a drive-by scan
+ * reads. The real boundary for the operator UI is that it is not built into
+ * the public bundle at all (src/operatorBuild.ts) and is served only from
+ * the VM, behind the exe.dev proxy's login.
+ */
+async function deployment(ctx: QueryCtx) {
+  const outbound = process.env.COLLECTOR_MODE === "outbound";
+  const worker = outbound
+    ? await ctx.db
+        .query("collector")
+        .withIndex("by_name", (q) => q.eq("name", "desktop"))
+        .unique()
+    : null;
+  // No wall clock in here. A Convex query re-runs when a document it read
+  // changes, never because time passed, so `Date.now() - lastSeen < 45s`
+  // decided in this handler froze at the last write: a worker that stopped
+  // heartbeating kept reading as live, and the UI kept offering imports it
+  // could not run. `worker.online` is expiry-driven instead —
+  // convex/worker.ts schedules `expire` 45s after every heartbeat, and
+  // that write is what re-runs this query. Liveness now decays through the
+  // database rather than through a clock nobody is watching.
+  //
+  // `saving` answers two different questions by mode: in receiver mode
+  // whether an env var is set (configuration), in outbound mode whether the
+  // worker is up (liveness). Only `operator` returns the discriminant that
+  // tells those apart, so no consumer can mistake one for the other.
+  const saving = outbound ? !!worker?.online : !!process.env.RAW_CAPTURE_URL;
+  return {
+    outbound,
+    worker,
+    saving,
+    // The client-facing surface: one boolean per button a visitor can see.
+    capabilities: {
       indexing: !!process.env.X_MD_API_KEY && saving,
       search: !!process.env.SEARCH_API_URL,
-      handoff: saving,
-      collectorMode: outbound ? ("outbound" as const) : ("receiver" as const),
       firecrawl: !!process.env.FIRECRAWL_API_KEY,
       openai: !!process.env.OPENAI_API_KEY,
       email: !!process.env.AGENTMAIL_API_KEY && !!process.env.AGENTMAIL_INBOX_ID,
+    },
+  };
+}
+export const configured = query({
+  args: {},
+  handler: async (ctx) => (await deployment(ctx)).capabilities,
+});
+export const operator = query({
+  args: {},
+  handler: async (ctx) => {
+    await user(ctx);
+    const { outbound, worker, saving, capabilities } = await deployment(ctx);
+    return {
+      ...capabilities,
+      xmd: !!process.env.X_MD_API_KEY,
+      handoff: saving,
+      handoffState: outbound
+        ? { kind: "live" as const, lastSeenAt: worker?.online ? worker.lastSeen : null }
+        : { kind: "configured" as const, ok: saving },
+      collectorMode: outbound ? ("outbound" as const) : ("receiver" as const),
     };
   },
 });

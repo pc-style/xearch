@@ -60,7 +60,15 @@ function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummar
       savedCapturesAwaitingIndexing: { kind: "known", unit: "captures", value: 0 },
       failedRetryable: { kind: "known", unit: "jobs", value: 0 },
     },
-    scope: { kind: "global" },
+    // Nothing has told us about outstanding indexer work, which is
+    // "unknown" per unit — never a known zero. See convex/lib/contracts.ts
+    // providerQueuedWorkValidator.
+    providerQueuedWork: {
+      posts: { kind: "unknown", unit: "posts" },
+      captures: { kind: "unknown", unit: "captures" },
+      jobs: { kind: "unknown", unit: "jobs" },
+    },
+    scope: { kind: "owner" },
     observedAt: Date.now(),
     ...overrides,
   };
@@ -119,7 +127,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
 
   it("renders the empty state distinctly from loading once queries resolve with no data", () => {
     reset();
-    setQuery(api.library.rows, []);
+    setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
     const html = renderLibrary();
@@ -134,7 +142,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     reset();
     mockState.connected = false;
     const row = makeRow();
-    setQuery(api.library.rows, [row]);
+    setQuery(api.library.rows, { rows: [row], truncated: false });
     setQuery(
       summaryQuery,
       makeSummary({ indexedAccounts: { kind: "known", unit: "accounts", value: 1 } }),
@@ -163,7 +171,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
         updatedAt: Date.now(),
       },
     });
-    setQuery(api.library.rows, [failedButIndexed]);
+    setQuery(api.library.rows, { rows: [failedButIndexed], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
     const html = renderLibrary();
@@ -189,7 +197,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
 
   it("renders provider limits honestly: none observed vs. a real throttle fact, never jobs.error", () => {
     reset();
-    setQuery(api.library.rows, []);
+    setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
     const limits: ProviderLimit[] = [
@@ -215,7 +223,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
 
   it("shows the provider-limits panel as loading, distinctly, before that query resolves", () => {
     reset();
-    setQuery(api.library.rows, []);
+    setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
     // limitsAllQuery deliberately left unset in mockState.responses.

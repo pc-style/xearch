@@ -13,6 +13,7 @@ search-tantivy.workspace = true
 search-ingest.workspace = true
 search-indexer.workspace = true
 search-api.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 axum.workspace = true
