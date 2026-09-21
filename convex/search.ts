@@ -75,8 +75,7 @@ export const start = mutation({
 export const results = query({
   args: { sessionId: v.id("sessions") },
   handler: async (ctx, { sessionId }) => {
-    // Auth transition on a live subscription: return no session rather than
-    // throwing the "Start a session" guard.
+    // See maybeUser: no session during an auth transition, not a throw.
     const owner = await maybeUser(ctx);
     if (!owner) return null;
     const session = await ctx.db.get(sessionId);

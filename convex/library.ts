@@ -83,8 +83,7 @@ export const rows = query({
     truncated: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    // No identity means an auth transition on a still-live subscription, not
-    // a real request: render an empty library instead of throwing.
+    // See maybeUser: an empty library during an auth transition, not a throw.
     const owner = await maybeUser(ctx);
     if (!owner) return { rows: [], truncated: false };
     const { byAccount, truncated } = await groupOwnedJobsByAccount(ctx, owner);
@@ -184,8 +183,7 @@ export const history = query({
   args: { accountId: v.id("accounts") },
   returns: v.array(historyRunValidator),
   handler: async (ctx, args) => {
-    // Same auth-transition guard as `rows`: an empty history is the honest
-    // render while there is no identity, never a thrown ConvexError.
+    // See maybeUser: an empty history during an auth transition, not a throw.
     const owner = await maybeUser(ctx);
     if (!owner) return [];
     // A targeted ownership lookup, NOT the bounded library page. Deriving
