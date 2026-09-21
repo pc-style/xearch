@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../convex/_generated/api";
+import { OPERATOR_BUILD } from "./operatorSurface";
 import type { Doc } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
 import type { Sort } from "../convex/lib/search";
@@ -297,11 +298,17 @@ export function ResultsSection({
       ) : view === "search" && configured?.search === false ? (
         <div className="empty">
           <Search size={30} />
-          <h2>Connect the search service.</h2>
+          <h2>Search is not available on this site.</h2>
           <p>The interface is ready. Your data service supplies the corpus and search results.</p>
-          <button type="button" onClick={() => onOpenModal("setup")}>
-            View connections
-          </button>
+          {/* The Connections panel exists only in the operator build, so in
+              the public one this button opened a modal that renders nothing.
+              A visitor cannot connect a search service anyway — that is an
+              operator's job — so the public copy no longer asks them to. */}
+          {OPERATOR_BUILD && (
+            <button type="button" onClick={() => onOpenModal("setup")}>
+              View connections
+            </button>
+          )}
         </div>
       ) : result?.status === "failed" ? (
         <div className="empty">

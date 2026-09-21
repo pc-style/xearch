@@ -91,6 +91,13 @@ function canonicalLiveQuery(raw: string): string {
     throw new ConvexError(error instanceof Error ? error.message : "Enter a valid search.");
   }
 }
+/**
+ * How long an identical request from the same person is answered with the
+ * run it already made rather than a new one. Long enough to absorb a
+ * double-click and a "did that work?" retry, short enough that a deliberate
+ * re-run is never mistaken for one.
+ */
+const REPEAT_WINDOW_MS = 60_000;
 export const start = mutation({
   args: {
     kind: kindValidator,
@@ -137,6 +144,45 @@ export const start = mutation({
         previous.kind !== args.kind)
     )
       throw new ConvexError("Continuation does not belong to this indexing job.");
+    // A second click is not a second import.
+    //
+    // This only ever refused a *concurrent* duplicate (below), so the instant
+    // a run finished an identical one became a fresh row. Production shows
+    // exactly that: four "from:theo" live searches 11 to 15 seconds apart,
+    // each returning nothing — someone clicking again because nothing
+    // visible had happened. Inside this window an identical request gets
+    // back the run it already made.
+    //
+    // Idempotency, not a quota: nothing is refused, nothing is capped, and
+    // no allowance is tracked (the self-imposed budgets were deleted in #12
+    // and are not coming back). A deliberate re-run a minute later starts a
+    // real import. An explicit continuation is never collapsed — it carries
+    // a different cursor, which is the whole point of "Get next page" — and
+    // the lookup is owner-scoped, so it can never hand back someone else's
+    // job id.
+    if (!args.previous) {
+      const recent = await ctx.db
+        .query("jobs")
+        .withIndex("by_owner_and_input", (q) =>
+          q.eq("owner", owner).eq("kind", args.kind).eq("input", input),
+        )
+        .order("desc")
+        .first();
+      if (
+        recent &&
+        // Never a stopped run. A failed/partial/cancelled job has nothing
+        // scheduled behind it, so handing its id back would answer "start
+        // this import" by doing nothing at all — and those are exactly the
+        // statuses the UI offers "Retry import" for.
+        (recent.status === "queued" ||
+          recent.status === "running" ||
+          recent.status === "complete") &&
+        Date.now() - recent._creationTime < REPEAT_WINDOW_MS &&
+        recent.since === args.since &&
+        recent.refresh === (args.refresh ?? false)
+      )
+        return recent._id;
+    }
     for (const status of ["running", "queued"] as const) {
       if (
         await ctx.db
@@ -465,7 +511,7 @@ export const finish = internalMutation({
   },
 });
 
-type Profile = { handle: string; userId: string; name: string; avatar?: string };
+export type Profile = { handle: string; userId: string; name: string; avatar?: string };
 
 // Account identity is the provider account id, never the handle.
 //
@@ -479,7 +525,7 @@ type Profile = { handle: string; userId: string; name: string; avatar?: string }
 // ids that shared a handle; this is the write side finally agreeing with it.
 // See to-do.md P0 "Do not combine different identities after a handle
 // reassignment" and docs/publication-contract.md "Account identity".
-async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise<Id<"accounts">> {
+export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise<Id<"accounts">> {
   const existing = await canonicalAccountForUserId(ctx.db, profile.userId);
   let accountId: Id<"accounts">;
   if (existing) {
