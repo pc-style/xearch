@@ -49,7 +49,8 @@ const authUiResponses = vi.hoisted(() => new Map<string, unknown>());
 const authUiActions = vi.hoisted(() => ({ signIn: vi.fn(), signOut: vi.fn() }));
 
 vi.mock("convex/react", () => ({
-  useQuery: (ref: Parameters<typeof getFunctionName>[0]) => authUiResponses.get(getFunctionName(ref)),
+  useQuery: (ref: Parameters<typeof getFunctionName>[0]) =>
+    authUiResponses.get(getFunctionName(ref)),
 }));
 
 vi.mock("@convex-dev/auth/react", () => ({
@@ -210,7 +211,10 @@ describe("digest preview and explicit send", () => {
     expect(sent.subject).toBe(preview.subject);
     expect(sent.text).toBe(preview.text);
     const deliveries = await t.run((ctx) =>
-      ctx.db.query("deliveries").withIndex("by_owner", (q) => q.eq("owner", userId)).collect(),
+      ctx.db
+        .query("deliveries")
+        .withIndex("by_owner", (q) => q.eq("owner", userId))
+        .collect(),
     );
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]).toMatchObject({ outboundId: "outbound_test_id", query: "@theo convex" });
@@ -226,7 +230,9 @@ describe("digest preview and explicit send", () => {
         raw: "convex",
         sort: "relevance",
         status: "complete",
-        rows: [{ tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] }],
+        rows: [
+          { tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] },
+        ],
         warnings: [],
       }),
     );
@@ -248,7 +254,9 @@ describe("digest preview and explicit send", () => {
         raw: "convex",
         sort: "relevance",
         status: "complete",
-        rows: [{ tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] }],
+        rows: [
+          { tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] },
+        ],
         warnings: [],
       }),
     );
@@ -276,7 +284,9 @@ describe("digest preview and explicit send", () => {
         raw: "convex",
         sort: "relevance",
         status: "complete",
-        rows: [{ tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] }],
+        rows: [
+          { tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] },
+        ],
         warnings: [],
       }),
     );
@@ -303,14 +313,16 @@ describe("digest preview and explicit send", () => {
         raw: "convex",
         sort: "relevance",
         status: "complete",
-        rows: [{ tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] }],
+        rows: [
+          { tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] },
+        ],
         warnings: [],
       }),
     );
     await expect(t.query(api.email.preview, { sessionId })).rejects.toThrow("Start a session");
-    await expect(t.mutation(api.email.send, { sessionId, recipient: "solo@example.com" })).rejects.toThrow(
-      "Start a session",
-    );
+    await expect(
+      t.mutation(api.email.send, { sessionId, recipient: "solo@example.com" }),
+    ).rejects.toThrow("Start a session");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 });
@@ -347,7 +359,9 @@ describe("an anonymous-only session can never pass the verified-email send gate"
         raw: "convex",
         sort: "relevance",
         status: "complete",
-        rows: [{ tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] }],
+        rows: [
+          { tweetId: "1", author: "x", text: "hi", url: "https://x.com/x/status/1", links: [] },
+        ],
         warnings: [],
       }),
     );

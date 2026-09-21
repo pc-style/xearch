@@ -68,16 +68,18 @@ describe("provider throttling reaches the dashboard from the real acquisition pa
       provider: "xmd",
     });
 
-    vi.stubGlobal("fetch", async () =>
-      new Response(JSON.stringify(RATE_LIMITED_BODY), {
-        status: 429,
-        headers: {
-          "Content-Type": "application/json",
-          "Retry-After": "423",
-          "RateLimit-Policy": '"api-ip";q=600;w=60, "import-key";q=20;w=900',
-          RateLimit: '"api-ip";r=599;t=27, "import-key";r=3;t=873',
-        },
-      }),
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify(RATE_LIMITED_BODY), {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "423",
+            "RateLimit-Policy": '"api-ip";q=600;w=60, "import-key";q=20;w=900',
+            RateLimit: '"api-ip";r=599;t=27, "import-key";r=3;t=873',
+          },
+        }),
     );
 
     const jobId = await queuedJob(t, alice);
@@ -112,11 +114,13 @@ describe("provider throttling reaches the dashboard from the real acquisition pa
     vi.stubEnv("RAW_CAPTURE_URL", "https://capture.example/captures");
     vi.stubEnv("COLLECTOR_MODE", "receiver");
 
-    vi.stubGlobal("fetch", async () =>
-      new Response(JSON.stringify(RATE_LIMITED_BODY), {
-        status: 429,
-        headers: { "Content-Type": "application/json" },
-      }),
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify(RATE_LIMITED_BODY), {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        }),
     );
 
     await t.action(internal.importer.run, { jobId: await queuedJob(t, alice) });

@@ -96,7 +96,10 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     expect(rowsBefore).toHaveLength(1);
     expect(rowsBefore[0].publicationState).toBe("waiting_for_indexing");
     const uiBefore = renderedLabel(rowsBefore[0]);
-    console.log("STEP1 UI label present:", uiBefore.includes(PUBLICATION_STATE_META.waiting_for_indexing.label));
+    console.log(
+      "STEP1 UI label present:",
+      uiBefore.includes(PUBLICATION_STATE_META.waiting_for_indexing.label),
+    );
     expect(uiBefore).toContain("Waiting for indexing");
     expect(await t.run((ctx) => ctx.db.query("accountPublications").collect())).toEqual([]);
 
@@ -104,7 +107,12 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     const jobsBeforeUpdate = await t.run((ctx) => ctx.db.query("jobs").collect());
     const applied = await t.mutation(
       applyUpdate,
-      envelope({ generation: 1, reportedState: "searchable", uniquePostCount: 480, uniquePostCountAsOf: Date.now() }),
+      envelope({
+        generation: 1,
+        reportedState: "searchable",
+        uniquePostCount: 480,
+        uniquePostCountAsOf: Date.now(),
+      }),
     );
     console.log("STEP2 applyUpdate result:", JSON.stringify(applied));
     expect(applied).toEqual({ outcome: "applied", committedGeneration: 1 });
@@ -126,12 +134,20 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     // --- Step 3: the same update sent twice -> idempotent, no double count ---
     const duplicate = await t.mutation(
       applyUpdate,
-      envelope({ generation: 1, reportedState: "searchable", uniquePostCount: 480, uniquePostCountAsOf: Date.now() }),
+      envelope({
+        generation: 1,
+        reportedState: "searchable",
+        uniquePostCount: 480,
+        uniquePostCountAsOf: Date.now(),
+      }),
     );
     console.log("STEP3 duplicate result:", JSON.stringify(duplicate));
     expect(duplicate).toEqual({ outcome: "duplicate_ignored", committedGeneration: 1 });
     const rowAfterDup = await t.run((ctx) =>
-      ctx.db.query("accountPublications").withIndex("by_account", (q) => q.eq("accountId", accountId)).unique(),
+      ctx.db
+        .query("accountPublications")
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .unique(),
     );
     console.log("STEP3 stored row after duplicate:", JSON.stringify(rowAfterDup));
     expect(rowAfterDup?.searchablePostCount).toBe(480); // not doubled, not re-summed
@@ -142,12 +158,19 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     // --- Step 4: stale/out-of-order update -> cannot regress state ---
     const stale = await t.mutation(
       applyUpdate,
-      envelope({ generation: 0, reportedState: "failed", error: { message: "an old retry, arriving late" } }),
+      envelope({
+        generation: 0,
+        reportedState: "failed",
+        error: { message: "an old retry, arriving late" },
+      }),
     );
     console.log("STEP4 stale result:", JSON.stringify(stale));
     expect(stale).toEqual({ outcome: "stale_ignored", committedGeneration: 1 });
     const rowAfterStale = await t.run((ctx) =>
-      ctx.db.query("accountPublications").withIndex("by_account", (q) => q.eq("accountId", accountId)).unique(),
+      ctx.db
+        .query("accountPublications")
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .unique(),
     );
     console.log("STEP4 stored row after stale update:", JSON.stringify(rowAfterStale));
     expect(rowAfterStale?.state).toBe("searchable"); // did not regress to "failed"
@@ -159,14 +182,36 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     const unauth = await t.fetch("/publication/update", {
       method: "POST",
       headers: { Authorization: "Bearer wrong-secret", "Content-Type": "application/json" },
-      body: JSON.stringify(envelope({ generation: 2, reportedState: "searchable", uniquePostCount: 9999, uniquePostCountAsOf: Date.now() })),
+      body: JSON.stringify(
+        envelope({
+          generation: 2,
+          reportedState: "searchable",
+          uniquePostCount: 9999,
+          uniquePostCountAsOf: Date.now(),
+        }),
+      ),
     });
-    console.log("STEP5 unauthorized HTTP status:", unauth.status, JSON.stringify(await unauth.clone().json().catch(() => undefined)));
+    console.log(
+      "STEP5 unauthorized HTTP status:",
+      unauth.status,
+      JSON.stringify(
+        await unauth
+          .clone()
+          .json()
+          .catch(() => undefined),
+      ),
+    );
     expect(unauth.status).toBe(401);
     const rowAfterUnauth = await t.run((ctx) =>
-      ctx.db.query("accountPublications").withIndex("by_account", (q) => q.eq("accountId", accountId)).unique(),
+      ctx.db
+        .query("accountPublications")
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .unique(),
     );
-    console.log("STEP5 stored row after unauthorized attempt (unchanged):", JSON.stringify(rowAfterUnauth));
+    console.log(
+      "STEP5 stored row after unauthorized attempt (unchanged):",
+      JSON.stringify(rowAfterUnauth),
+    );
     expect(rowAfterUnauth?.searchablePostCount).toBe(480); // the 9999 in the rejected body never landed
     expect(rowAfterUnauth?.committedGeneration).toBe(1);
   });

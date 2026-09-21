@@ -209,9 +209,9 @@ describe("one live search, one name", () => {
     // other two spellings now collide with the first instead of each opening
     // a new row for the same search.
     for (const spelling of ["@Theo", "@theo", "from:@theo"]) {
-      await expect(
-        a.mutation(api.jobs.start, { kind: "live", input: spelling }),
-      ).rejects.toThrow("already active");
+      await expect(a.mutation(api.jobs.start, { kind: "live", input: spelling })).rejects.toThrow(
+        "already active",
+      );
     }
   });
 

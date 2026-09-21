@@ -37,10 +37,7 @@ type Db = QueryCtx["db"];
  * across calls and independent of read order, which is what lets the write
  * path and every read path land on the same row.
  */
-export function canonicalAccountForUserId(
-  db: Db,
-  userId: string,
-): Promise<Doc<"accounts"> | null> {
+export function canonicalAccountForUserId(db: Db, userId: string): Promise<Doc<"accounts"> | null> {
   return db
     .query("accounts")
     .withIndex("by_user_id", (q) => q.eq("userId", userId))

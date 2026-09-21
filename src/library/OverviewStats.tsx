@@ -101,7 +101,8 @@ export default function OverviewStats({
           {!health
             ? (["indexer", "receiver", "search"] as const).map((service) => (
                 <Badge key={service} tone="neutral">
-                  {SERVICE_DISPLAY_NAME[service]}: {isAuthenticated ? "loading…" : "connect to view"}
+                  {SERVICE_DISPLAY_NAME[service]}:{" "}
+                  {isAuthenticated ? "loading…" : "connect to view"}
                 </Badge>
               ))
             : health.map((status) => {

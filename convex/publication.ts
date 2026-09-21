@@ -145,7 +145,8 @@ export const receiveUpdate = httpAction(async (ctx, request) => {
   }
 
   const envelope = parseEnvelope(body);
-  if (!envelope) return json({ error: "Request body does not match publicationUpdateEnvelope." }, 400);
+  if (!envelope)
+    return json({ error: "Request body does not match publicationUpdateEnvelope." }, 400);
 
   const result: {
     outcome: "applied" | "stale_ignored" | "duplicate_ignored" | "rejected_invalid";
@@ -219,9 +220,12 @@ export const applyUpdate = internalMutation({
         receivedAt,
         undefined,
         "rejected_invalid",
-        "A \"failed\" update must include an error.",
+        'A "failed" update must include an error.',
       );
-      return { outcome: "rejected_invalid" as const, rejectionReason: "A \"failed\" update must include an error." };
+      return {
+        outcome: "rejected_invalid" as const,
+        rejectionReason: 'A "failed" update must include an error.',
+      };
     }
     if (args.uniquePostCount !== undefined && args.uniquePostCountAsOf === undefined) {
       const reason = "uniquePostCountAsOf is required whenever uniquePostCount is present.";
