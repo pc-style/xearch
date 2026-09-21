@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { describeError } from "../errors";
+import { runTask } from "../runTask";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -37,7 +38,7 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
   const emailFieldId = useId();
   const codeFieldId = useId();
 
-  const requestCode = async (e: FormEvent) => {
+  const requestCode = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = email.trim().toLowerCase();
     if (!EMAIL_PATTERN.test(trimmed)) {
@@ -46,19 +47,18 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
     }
     setPending(true);
     setError("");
-    try {
-      await signIn("email", { email: trimmed });
-      setEmail(trimmed);
-      setCode("");
-      setStep("verify");
-    } catch (err) {
-      setError(describeError(err));
-    } finally {
-      setPending(false);
-    }
+    runTask(() => signIn("email", { email: trimmed }), {
+      onSuccess: () => {
+        setEmail(trimmed);
+        setCode("");
+        setStep("verify");
+      },
+      onError: (err) => setError(describeError(err)),
+      onSettled: () => setPending(false),
+    });
   };
 
-  const verifyCode = async (e: FormEvent) => {
+  const verifyCode = (e: FormEvent) => {
     e.preventDefault();
     const trimmedCode = code.trim();
     if (!trimmedCode) {
@@ -67,15 +67,14 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
     }
     setPending(true);
     setError("");
-    try {
-      await signIn("email", { email, code: trimmedCode });
-      setCode("");
-      onSignedIn?.();
-    } catch (err) {
-      setError(describeError(err));
-    } finally {
-      setPending(false);
-    }
+    runTask(() => signIn("email", { email, code: trimmedCode }), {
+      onSuccess: () => {
+        setCode("");
+        onSignedIn?.();
+      },
+      onError: (err) => setError(describeError(err)),
+      onSettled: () => setPending(false),
+    });
   };
 
   const useDifferentEmail = () => {

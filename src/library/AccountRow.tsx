@@ -5,6 +5,7 @@ import type { AccountLibraryRow, NextAction } from "../../convex/lib/contracts";
 import type { HistoryRun } from "../../convex/library";
 import type { Id } from "../../convex/_generated/dataModel";
 import { describeError } from "../errors";
+import { runTask } from "../runTask";
 import { acquisitionStatusLabel, describeRunOutcome } from "../jobText";
 import {
   PUBLICATION_STATE_META,
@@ -44,16 +45,13 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   const start = useMutation(api.jobs.start);
   const cancel = useMutation(api.jobs.cancel);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
-    try {
-      await fn();
-    } catch (e) {
-      setError(describeError(e));
-    } finally {
-      setBusy(false);
-    }
+    runTask(fn, {
+      onError: (e) => setError(describeError(e)),
+      onSettled: () => setBusy(false),
+    });
   };
 
   const currentRun = job && history?.find((h) => h.jobId === job.jobId);

@@ -1,5 +1,4 @@
 import { useConvexAuth, useConvexConnectionState, useQuery } from "convex/react";
-import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { summaryQuery, healthQuery } from "./summaryApi";
 import { limitsAllQuery } from "./limitsApi";
@@ -8,14 +7,13 @@ import ActiveQueue from "./ActiveQueue";
 import AccountLibrary from "./AccountLibrary";
 import RecentActivity from "./RecentActivity";
 import "../dashboard.css";
+import { useDashboardClock } from "./clock";
 
 // convex/summary.ts's `summary`/`health` queries take `now` as a REQUIRED
 // arg (a query must never read the wall clock itself) and expect the caller
 // to refresh it so `observedAt`/`stale` actually advance — see that file's
 // own comment. An interval, not a one-time `Date.now()` at mount, is what
 // makes that true.
-const NOW_REFRESH_MS = 30_000;
-
 /**
  * The new import/library dashboard (to-do.md P0 "Replace the job wall with
  * an account library"). A single mountable entry component, in the exact
@@ -35,11 +33,7 @@ const NOW_REFRESH_MS = 30_000;
 export default function Library({ ensureSession }: { ensureSession: () => Promise<unknown> }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), NOW_REFRESH_MS);
-    return () => clearInterval(id);
-  }, []);
+  const now = useDashboardClock();
   const summary = useQuery(summaryQuery, isAuthenticated ? { now } : "skip");
   const health = useQuery(healthQuery, isAuthenticated ? { now } : "skip");
   const limits = useQuery(limitsAllQuery, isAuthenticated ? {} : "skip");
