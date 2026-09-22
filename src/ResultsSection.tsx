@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useState } from "react";
 import {
   ArrowUpRight,
   Bookmark,
@@ -12,11 +12,13 @@ import {
 } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../convex/_generated/api";
-import { OPERATOR_BUILD } from "./operatorSurface";
 import type { Doc } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
 import type { Sort } from "../convex/lib/search";
-import { formatDuration } from "./library/format";
+import { NerdStatsPanel } from "./library/NerdStatsPanel";
+import { OPERATOR_BUILD } from "./operatorSurface";
+import type { SearchAttemptSnapshot } from "./searchTelemetry";
+import { ModalKind, ViewMode } from "./uiState";
 
 type SessionResult = Doc<"sessions">;
 
@@ -207,8 +209,10 @@ export function ResultsSection({
   onRead,
   onBookmark,
   onThread,
+  frontendStats,
+  searchPending,
 }: {
-  view: "search" | "bookmarks";
+  view: ViewMode;
   raw: string;
   configured: FunctionReturnType<typeof api.integrations.configured> | undefined;
   result: SessionResult | undefined;
@@ -218,7 +222,7 @@ export function ResultsSection({
   busy: boolean;
   onSearch: (query: string, nextSort?: Sort) => void;
   onSave: () => void;
-  onOpenModal: (modal: "imports" | "saved" | "email" | "setup") => void;
+  onOpenModal: (modal: ModalKind) => void;
   onRetry: () => void;
   onLiveSearch: () => void;
   onWebContext: () => void;
@@ -226,23 +230,26 @@ export function ResultsSection({
   onRead: (url: string) => void;
   onBookmark: (post: ResultPost) => void;
   onThread: (post: ResultPost) => void;
+  frontendStats?: SearchAttemptSnapshot | null;
+  searchPending?: boolean;
 }) {
-  const resultsTitle = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {
-    if (view !== "bookmarks") return;
-    resultsTitle.current?.scrollIntoView({ block: "start" });
-    resultsTitle.current?.focus({ preventScroll: true });
-  }, [view]);
+  // Effect-free focus/scroll: callback ref runs at commit time, no useEffect.
+  function resultsTitleRef(node: HTMLHeadingElement | null) {
+    if (!node || view !== ViewMode.Bookmarks) return;
+    node.scrollIntoView({ block: "start" });
+    node.focus({ preventScroll: true });
+  }
+  const deferredVisible = useDeferredValue(visible);
 
   return (
     <section className="results">
       <header className="results-header">
         <div>
-          <h1 ref={resultsTitle} tabIndex={-1}>
-            {view === "bookmarks" ? "Bookmarks" : raw}
+          <h1 ref={resultsTitleRef} tabIndex={-1}>
+            {view === ViewMode.Bookmarks ? "Bookmarks" : raw}
           </h1>
           <p>
-            {view === "bookmarks"
+            {view === ViewMode.Bookmarks
               ? `${bookmarkedIds.size} saved posts in this browser's session`
               : configured === undefined
                 ? "Checking your search service connection"
@@ -255,7 +262,7 @@ export function ResultsSection({
                       : "Finding matching posts…"}
           </p>
         </div>
-        {view === "search" && (
+        {view === ViewMode.Search && (
           <div className="result-tools">
             <button
               type="button"
@@ -274,7 +281,7 @@ export function ResultsSection({
               type="button"
               title="Email top results"
               disabled={!visible.length || !configured?.email}
-              onClick={() => onOpenModal("email")}
+              onClick={() => onOpenModal(ModalKind.Email)}
             >
               <Mail size={15} />
               Email
@@ -291,21 +298,17 @@ export function ResultsSection({
           <h2>Adjust your search</h2>
           <p>{queryError}</p>
         </div>
-      ) : view === "search" && configured === undefined ? (
+      ) : view === ViewMode.Search && configured === undefined ? (
         <div className="empty" role="status">
           Checking your connections…
         </div>
-      ) : view === "search" && configured?.search === false ? (
+      ) : view === ViewMode.Search && configured?.search === false ? (
         <div className="empty">
           <Search size={30} />
           <h2>Search is not available on this site.</h2>
           <p>The interface is ready. Your data service supplies the corpus and search results.</p>
-          {/* The Connections panel exists only in the operator build, so in
-              the public one this button opened a modal that renders nothing.
-              A visitor cannot connect a search service anyway — that is an
-              operator's job — so the public copy no longer asks them to. */}
           {OPERATOR_BUILD && (
-            <button type="button" onClick={() => onOpenModal("setup")}>
+            <button type="button" onClick={() => onOpenModal(ModalKind.Setup)}>
               View connections
             </button>
           )}
@@ -314,11 +317,11 @@ export function ResultsSection({
         <div className="empty">
           <h2>Search could not complete</h2>
           <p>{result.error}</p>
-          <button type="button" onClick={onRetry}>
+          <button type="button" onClick={onRetry} disabled={busy}>
             Retry search
           </button>
         </div>
-      ) : view === "search" && (!result || result.status !== "complete") ? (
+      ) : view === ViewMode.Search && (!result || result.status !== "complete") ? (
         <div className="empty" role="status">
           Finding matching posts…
         </div>
@@ -326,17 +329,17 @@ export function ResultsSection({
         <div className="empty">
           <Search size={30} />
           <h2>
-            {view === "bookmarks"
+            {view === ViewMode.Bookmarks
               ? "Keep the posts worth finding again."
               : "No matches in your library yet."}
           </h2>
           <p>
-            {view === "bookmarks"
+            {view === ViewMode.Bookmarks
               ? "Use the bookmark button on any result."
               : "Import an account's history, try fewer keywords, or find more posts on X."}
           </p>
-          {view === "search" && (
-            <button type="button" onClick={() => onOpenModal("imports")}>
+          {view === ViewMode.Search && (
+            <button type="button" onClick={() => onOpenModal(ModalKind.Imports)}>
               <Plus size={15} />
               Import an account
             </button>
@@ -348,63 +351,16 @@ export function ResultsSection({
             Results and ordering come from your search service. Engagement reflects the source
             snapshot.
           </p>
-          {result?.stats && (
-            <details className="stats-panel">
-              <summary>
-                Stats for nerds —{" "}
-                {formatDuration(result.stats.api?.totalUs ?? result.stats.backend.totalUs)}
-              </summary>
-              <div className="stats-grid">
-                <strong>Backend</strong>
-                <span>Total</span>
-                <span>{formatDuration(result.stats.backend.totalUs)}</span>
-                <span>Reload index</span>
-                <span>{formatDuration(result.stats.backend.reloadUs)}</span>
-                <span>Fingerprint</span>
-                <span>{formatDuration(result.stats.backend.fingerprintUs)}</span>
-                <span>Compile query</span>
-                <span>{formatDuration(result.stats.backend.compileUs)}</span>
-                <span>Retrieve</span>
-                <span>{formatDuration(result.stats.backend.retrieveUs)}</span>
-                <span>Retrieve + rank candidates</span>
-                <span>{result.stats.backend.rankingCalls} calls</span>
-                <span>Materialize rows</span>
-                <span>{formatDuration(result.stats.backend.materializeUs)}</span>
-                <span>Hits / returned</span>
-                <span>
-                  {result.stats.backend.candidateHits} / {result.stats.backend.returnedRows}
-                </span>
-                <span>Index</span>
-                <span>
-                  {result.stats.backend.indexDocs} docs / {result.stats.backend.segments} segments
-                </span>
-                {result.stats.api && (
-                  <>
-                    <strong>API</strong>
-                    <span>Auth</span>
-                    <span>{formatDuration(result.stats.api.authUs)}</span>
-                    <span>Parse</span>
-                    <span>{formatDuration(result.stats.api.parseUs)}</span>
-                    <span>Queue</span>
-                    <span>{formatDuration(result.stats.api.queueUs)}</span>
-                    <span>Engine wall</span>
-                    <span>{formatDuration(result.stats.api.engineUs)}</span>
-                    <span>Post-process</span>
-                    <span>{formatDuration(result.stats.api.postprocessUs)}</span>
-                    <span>API total</span>
-                    <span>{formatDuration(result.stats.api.totalUs)}</span>
-                  </>
-                )}
-              </div>
-            </details>
+          {(result?.stats || frontendStats) && (
+            <NerdStatsPanel frontend={frontendStats ?? null} result={result} />
           )}
-          {result?.warnings.map((warning) => (
-            <p className="scope-note" key={warning}>
-              {warning}
+          {searchPending && (
+            <p className="scope-note" role="status">
+              Updating results…
             </p>
-          ))}
+          )}
           <div className="post-list">
-            {visible.map((post) => (
+            {deferredVisible.map((post) => (
               <PostCard
                 key={post.tweetId}
                 post={post}
@@ -417,7 +373,7 @@ export function ResultsSection({
               />
             ))}
           </div>
-          {view === "search" && result?.nextCursor && (
+          {view === ViewMode.Search && result?.nextCursor && (
             <button type="button" className="load-more" disabled={busy} onClick={onLoadMore}>
               Next page
             </button>

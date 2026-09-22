@@ -1,10 +1,12 @@
 import {
+  Profiler,
   Suspense,
-  useCallback,
-  useEffect,
+  useDeferredValue,
   useId,
   useRef,
   useState,
+  useSyncExternalStore,
+  useTransition,
   type CSSProperties,
   type FormEvent,
   type ReactNode,
@@ -30,16 +32,55 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import * as Effect from "effect/Effect";
 import { ResultsSection, Avatar } from "./ResultsSection";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE } from "./integrationStatus";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
-import { useTask } from "./errors";
+import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
 import { parseQuery, type Sort } from "../convex/lib/search";
+import { pushLocation, replaceLocation, useLocation } from "./locationStore";
+import { runTask } from "./runTask";
+import { searchFlow, type SearchRequest as FlowSearchRequest } from "./searchFlow";
+import {
+  createSearchTelemetryStore,
+  SearchStatus,
+  SearchTrigger,
+  type ConvexConnectionState,
+  type SearchAttemptId,
+} from "./searchTelemetry";
+import { ModalKind, ViewMode } from "./uiState";
+
+type SearchRequest = FlowSearchRequest & {
+  readonly attemptId: SearchAttemptId;
+  readonly trigger: SearchTrigger;
+  readonly includeStats: boolean;
+};
+
+type ProfilerPhase = "mount" | "update" | "nested-update";
+type ResultsProfiler = (
+  id: string,
+  phase: ProfilerPhase,
+  actualDuration: number,
+  baseDuration: number,
+  startTime: number,
+  commitTime: number,
+) => void;
+
+function connectionObservation(connection: {
+  isWebSocketConnected: boolean;
+  hasEverConnected: boolean;
+}): ConvexConnectionState {
+  return {
+    isWebSocketConnected: connection.isWebSocketConnected,
+    hasEverConnected: connection.hasEverConnected,
+    connectionCount: connection.hasEverConnected ? 1 : 0,
+  };
+}
 
 const sorts: { value: Sort; label: string }[] = [
   { value: "relevance", label: "Relevant" },
@@ -48,21 +89,6 @@ const sorts: { value: Sort; label: string }[] = [
   { value: "newest", label: "Newest" },
   { value: "oldest", label: "Oldest" },
 ];
-const fromLocation = () => {
-  const params = new URLSearchParams(location.search);
-  return {
-    raw: params.get("q") ?? "",
-    sort: (sorts.find((s) => s.value === params.get("sort"))?.value ?? "relevance") as Sort,
-    includeStats: params.get("stats") === "1",
-  };
-};
-const safeHostname = (url: string) => {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return "Linked page";
-  }
-};
 function Modal({
   title,
   children,
@@ -74,14 +100,13 @@ function Modal({
   close: () => void;
   notice?: string;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  useEffect(() => {
-    ref.current?.showModal();
-  }, []);
+  function open(node: HTMLDialogElement | null) {
+    if (node && !node.open) node.showModal();
+  }
   return (
     <dialog
-      ref={ref}
+      ref={open}
       aria-labelledby={titleId}
       onCancel={close}
       onClose={(e) => {
@@ -106,34 +131,42 @@ function Modal({
 }
 
 export default function App() {
-  const initial = fromLocation();
-  const [draft, setDraft] = useState(initial.raw),
-    [raw, setRaw] = useState(initial.raw),
-    [sort, setSort] = useState<Sort>(initial.sort),
-    [statsForNerds, setStatsForNerds] = useState(initial.includeStats),
-    [searchRequest, setSearchRequest] = useState<{
-      raw: string;
-      sort: Sort;
-      includeStats: boolean;
-    } | null>(() =>
-      initial.raw.trim()
-        ? { raw: initial.raw, sort: initial.sort, includeStats: initial.includeStats }
+  const { isAuthenticated } = useConvexAuth();
+  const { signIn } = useAuthActions();
+  const connection = useConvexConnectionState();
+  const route = useLocation();
+  const [initialRoute] = useState(route);
+  const [telemetry] = useState(() => createSearchTelemetryStore());
+  const connectionSnapshot = connectionObservation(connection);
+  const [attemptCounter, setAttemptCounter] = useState(initialRoute.version);
+  const [appliedRouteVersion, setAppliedRouteVersion] = useState(route.version);
+  function allocateAttempt(): number {
+    const next = Math.max(attemptCounter, route.version) + 1;
+    setAttemptCounter(next);
+    return next;
+  }
+  const [draft, setDraft] = useState(initialRoute.raw),
+    [raw, setRaw] = useState(initialRoute.raw),
+    [sort, setSort] = useState<Sort>(initialRoute.sort),
+    [statsForNerds, setStatsForNerds] = useState(initialRoute.includeStats),
+    [searchRequest, setSearchRequest] = useState<SearchRequest | null>(() =>
+      initialRoute.raw.trim()
+        ? {
+            raw: initialRoute.raw,
+            sort: initialRoute.sort,
+            includeStats: initialRoute.includeStats,
+            attemptId: initialRoute.version,
+            trigger: SearchTrigger.InitialUrl,
+          }
         : null,
     );
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(null);
-  const [view, setView] = useState<"search" | "bookmarks">("search"),
-    [modal, setModal] = useState<"imports" | "saved" | "email" | "setup" | null>(null);
-  // The busy flag and the one notice line live in src/errors.ts alongside
-  // `describeError`: the place that decides what a person is told when
-  // something throws also owns saying it. `task` is that module's runner,
-  // reached through the hook so this component never holds the setters the
-  // runner writes through.
-  const { busy, message: notice, setMessage: setNotice, run: task } = useTask();
-  const [accountInput, setAccountInput] = useState(""),
+  const [view, setView] = useState<ViewMode>(ViewMode.Search),
+    [modal, setModal] = useState<ModalKind | null>(null);
+  const [notice, setNotice] = useState(""),
+    [busy, setBusy] = useState(false),
+    [accountInput, setAccountInput] = useState(""),
     [since, setSince] = useState("");
-  const [dashboard, setDashboard] = useState(
-    () => OPERATOR_BUILD && new URLSearchParams(location.search).has("dashboard"),
-  );
   const [page, setPage] = useState<{
     title: string;
     text: string;
@@ -148,42 +181,75 @@ export default function App() {
       query: string;
       explanation: string;
     } | null>(null);
-  const { isAuthenticated } = useConvexAuth();
-  const { signIn } = useAuthActions();
-  const connection = useConvexConnectionState();
-  const session = useRef<Promise<unknown> | null>(null);
+  const session = useRef<Promise<void> | null>(null);
   const authReady = useRef(isAuthenticated);
   const authWaiters = useRef<(() => void)[]>([]);
-  useEffect(() => {
+  function authProbe(node: HTMLSpanElement | null) {
+    if (!node) return;
     authReady.current = isAuthenticated;
     if (isAuthenticated) {
       for (const resolve of authWaiters.current.splice(0)) resolve();
     }
-  }, [isAuthenticated]);
-  const ensureSession = useCallback(async () => {
+  }
+  async function ensureSession(): Promise<void> {
     if (authReady.current) return;
+    if (session.current) return session.current;
     const pending = (async () => {
       await signIn("anonymous");
       // signIn stores tokens before the Convex websocket confirms authentication.
       if (!authReady.current)
         await new Promise<void>((resolve, reject) => {
+          let timer: ReturnType<typeof setTimeout>;
           const done = () => {
             clearTimeout(timer);
             resolve();
           };
-          const timer = setTimeout(() => {
+          timer = setTimeout(() => {
             authWaiters.current = authWaiters.current.filter((fn) => fn !== done);
             reject(new Error("Session connection timed out. Try again."));
           }, 20_000);
           authWaiters.current.push(done);
         });
     })();
-    pending.finally(() => {
-      session.current = null;
-    });
     session.current = pending;
-    await pending;
-  }, [signIn]);
+    return pending.then(
+      () => {
+        if (session.current === pending) session.current = null;
+      },
+      (error: unknown) => {
+        if (session.current === pending) session.current = null;
+        throw error;
+      },
+    );
+  }
+
+  if (route.version !== appliedRouteVersion) {
+    setAppliedRouteVersion(route.version);
+    setAttemptCounter((count) => Math.max(count, route.version));
+    const queryChanged =
+      route.raw !== raw || route.sort !== sort || route.includeStats !== statsForNerds;
+    if (queryChanged) {
+      setRaw(route.raw);
+      setDraft(route.raw);
+      setSort(route.sort);
+      setStatsForNerds(route.includeStats);
+      setSessionId(null);
+      setSearchRequest(
+        route.raw.trim()
+          ? {
+              raw: route.raw,
+              sort: route.sort,
+              includeStats: route.includeStats,
+              attemptId: route.version,
+              trigger: SearchTrigger.InitialUrl,
+            }
+          : null,
+      );
+      setView(ViewMode.Search);
+      setProposal(null);
+    }
+  }
+  const dashboard = route.dashboard;
   const accountResults = useQuery(api.search.accounts);
   const accounts = accountResults ?? [];
   const configured = useQuery(api.integrations.configured);
@@ -205,7 +271,10 @@ export default function App() {
     api.search.results,
     sessionId && isAuthenticated ? { sessionId } : "skip",
   );
-  const result = snapshot?.raw === raw && snapshot.sort === sort ? snapshot : undefined;
+  const result =
+    snapshot?._id === sessionId && snapshot.raw === raw && snapshot.sort === sort
+      ? snapshot
+      : undefined;
   const jobs = useQuery(api.jobs.list, isAuthenticated ? {} : "skip") ?? [];
   const saved = useQuery(api.search.saved, isAuthenticated ? {} : "skip") ?? [];
   const bookmarks = useQuery(api.search.bookmarks, isAuthenticated ? {} : "skip") ?? [];
@@ -216,7 +285,7 @@ export default function App() {
   // session to preview.
   const emailPreview = useQuery(
     api.email.preview,
-    modal === "email" && sessionId && isAuthenticated ? { sessionId } : "skip",
+    modal === ModalKind.Email && sessionId && isAuthenticated ? { sessionId } : "skip",
   );
   const startSearch = useMutation(api.search.start);
   const start = useMutation(api.jobs.start),
@@ -227,7 +296,111 @@ export default function App() {
   const webContext = useAction(api.integrations.webContext);
   const readLink = useAction(api.integrations.readLink),
     interpret = useAction(api.integrations.interpret);
+  const telemetrySnapshot = useSyncExternalStore(
+    telemetry.subscribe,
+    telemetry.getSnapshot,
+    telemetry.getServerSnapshot,
+  );
+  const activeFrontendStats =
+    telemetrySnapshot && telemetrySnapshot.attemptId === searchRequest?.attemptId
+      ? telemetrySnapshot
+      : null;
+  const deferredFrontendStats = useDeferredValue(activeFrontendStats);
+  const [isSearchPending, startSearchTransition] = useTransition();
+  // Written only from event handlers and commit-phase ref callbacks, read only
+  // from async continuations — never touched during render.
+  const latestAttempt = useRef<number | null>(null);
+  const kickedAttempt = useRef<number | null>(null);
+  function runSearch(request: SearchRequest): boolean {
+    telemetry.startAttempt({
+      attemptId: request.attemptId,
+      trigger: request.trigger,
+      connection: connectionSnapshot,
+    });
+    if (!configured?.search || queryError) return false;
+    latestAttempt.current = request.attemptId;
+    setBusy(true);
+    setNotice("");
+    void Effect.runPromise(
+      searchFlow(
+        {
+          ensureSession,
+          beforeStart: () => telemetry.markMutationStarted(request.attemptId),
+          startSearch,
+        },
+        request,
+      ),
+    ).then(
+      (id) => {
+        if (latestAttempt.current !== request.attemptId) return;
+        telemetry.markSession(request.attemptId, id, connectionSnapshot);
+        setSessionId(id);
+        setBusy(false);
+      },
+      (error: unknown) => {
+        if (latestAttempt.current !== request.attemptId) return;
+        setNotice(describeError(error));
+        setBusy(false);
+      },
+    );
+    return true;
+  }
+  // Effect-free search kick: this ref callback re-runs on every commit (plain
+  // function identity), so it picks up the initial request and later route
+  // changes without any useEffect. Popstate itself is covered by
+  // locationStore's useSyncExternalStore subscription.
+  function kickPendingRef(node: HTMLElement | null) {
+    if (node === null || searchRequest === null) return;
+    if (kickedAttempt.current === searchRequest.attemptId) return;
+    if (runSearch(searchRequest)) kickedAttempt.current = searchRequest.attemptId;
+  }
+  // Commit-phase telemetry: Profiler onRender (no useEffect) records render cost,
+  // and the results ref below records first/terminal commits when Convex data lands.
+  const onResultsRender: ResultsProfiler = (_id, _phase, actualDuration, baseDuration) => {
+    const attempt = searchRequest?.attemptId;
+    if (attempt !== undefined) telemetry.recordProfiler(attempt, actualDuration, baseDuration);
+  };
+  function resultsCommitRef(node: HTMLElement | null) {
+    const req = searchRequest;
+    if (!node || !req || !result || result._id !== sessionId) return;
+    if (result.status === "complete" || result.status === "failed") {
+      telemetry.markTerminal({
+        attemptId: req.attemptId,
+        status: result.status === "complete" ? SearchStatus.Complete : SearchStatus.Failed,
+        rowCount: result.rows.length,
+        sessionId: result._id,
+        connection: connectionSnapshot,
+      });
+    } else {
+      telemetry.markResultCommit({
+        attemptId: req.attemptId,
+        status: result.status === "running" ? SearchStatus.Running : SearchStatus.Queued,
+        rowCount: result.rows.length,
+        sessionId: result._id,
+        connection: connectionSnapshot,
+      });
+    }
+  }
 
+  // NB: `task` is deliberately a plain void function: it only ever runs in
+  // event handlers, so the closure it needs is the one formed per render.
+  // Outcome handling lives in the module-level runTask helper, keeping
+  // try/finally syntax (which this React Compiler build cannot compile) out
+  // of the component.
+  function task(work: Promise<unknown>, success?: string, onSettled?: () => void): void {
+    setNotice("");
+    setBusy(true);
+    runTask(() => work, {
+      onSuccess: () => {
+        if (success !== undefined) setNotice(success);
+      },
+      onError: (e) => setNotice(describeError(e)),
+      onSettled: () => {
+        setBusy(false);
+        onSettled?.();
+      },
+    });
+  }
   // Event-handler bodies, kept out of the JSX so the async state updates they
   // perform are plain functions instead of inline-updater closures.
   const submitImport = async () => {
@@ -238,7 +411,7 @@ export default function App() {
   const runLoadLive = async () => {
     await ensureSession();
     await start({ kind: "live", input: raw.replace(/(^|\s)@([\w]+)/g, "$1from:$2") });
-    setModal("imports");
+    setModal(ModalKind.Imports);
   };
   const runRead = async (url: string) => {
     await ensureSession();
@@ -255,7 +428,7 @@ export default function App() {
   const runThread = async (url: string) => {
     await ensureSession();
     await start({ kind: "post", input: url });
-    setModal("imports");
+    setModal(ModalKind.Imports);
   };
   const runLoadMore = async () => {
     const next = result?.nextCursor;
@@ -282,95 +455,74 @@ export default function App() {
   };
   const importAccount = (e: FormEvent) => {
     e.preventDefault();
-    void task(submitImport, "Indexing started. Raw captures are handed to your data service.");
+    void task(submitImport(), "Indexing started. Raw captures are handed to your data service.");
   };
-  const loadLive = () => void task(runLoadLive, "Looking for more posts on X.");
+  const loadLive = () => void task(runLoadLive(), "Looking for more posts on X.");
   const read = (url: string) => {
     setReading(true);
-    void task(() => runRead(url)).finally(() => setReading(false));
+    task(runRead(url), undefined, () => setReading(false));
   };
-  const visible = view === "bookmarks" ? bookmarks : (result?.rows ?? []);
-  const home = !raw && view === "search";
+  const deferredRaw = useDeferredValue(raw);
+  const visible = view === ViewMode.Bookmarks ? bookmarks : (result?.rows ?? []);
+  const home = !deferredRaw && view === ViewMode.Search;
   const openDashboard = () => {
+    if (!OPERATOR_BUILD) return;
     setModal(null);
-    setDashboard(true);
-    const url = new URL(location.href);
-    url.searchParams.set("dashboard", "1");
-    history.replaceState(null, "", url);
+    pushLocation({ dashboard: true });
   };
   const search = (query: string, nextSort: Sort = sort) => {
-    setRaw(query.trim());
-    setDraft(query.trim());
+    const trimmed = query.trim();
+    const attemptId = allocateAttempt();
+    const request: SearchRequest = {
+      raw: trimmed,
+      sort: nextSort,
+      includeStats: statsForNerds,
+      attemptId,
+      trigger: SearchTrigger.Submit,
+    };
+    setRaw(trimmed);
+    setDraft(trimmed);
     setSort(nextSort);
     setSessionId(null);
-    setSearchRequest({ raw: query.trim(), sort: nextSort, includeStats: statsForNerds });
-    setView("search");
+    setSearchRequest(request);
+    setView(ViewMode.Search);
     setProposal(null);
-    const url = new URL(location.href);
-    if (query.trim()) url.searchParams.set("q", query.trim());
-    else url.searchParams.delete("q");
-    url.searchParams.set("sort", nextSort);
-    if (statsForNerds) url.searchParams.set("stats", "1");
-    else url.searchParams.delete("stats");
-    history.pushState(null, "", url);
+    pushLocation({ raw: trimmed, sort: nextSort, includeStats: statsForNerds });
+    startSearchTransition(() => {
+      if (runSearch(request)) kickedAttempt.current = request.attemptId;
+    });
   };
-  useEffect(() => {
-    const pop = () => {
-      const state = fromLocation();
-      setRaw(state.raw);
-      setDraft(state.raw);
-      setSort(state.sort);
-      setStatsForNerds(state.includeStats);
-      setSessionId(null);
-      setSearchRequest(
-        state.raw.trim()
-          ? { raw: state.raw, sort: state.sort, includeStats: state.includeStats }
-          : null,
-      );
-      setView("search");
+  const retrySearch = () => {
+    const attemptId = allocateAttempt();
+    const request: SearchRequest = {
+      raw,
+      sort,
+      includeStats: statsForNerds,
+      attemptId,
+      trigger: SearchTrigger.Retry,
     };
-    addEventListener("popstate", pop);
-    return () => removeEventListener("popstate", pop);
-  }, []);
-  useEffect(() => {
-    if (!searchRequest || queryError || !configured?.search) return;
-    let active = true;
-    // Every setState here runs after an await, never synchronously in the effect body.
-    void (async () => {
-      await ensureSession();
-      if (!active) return;
-      const { raw: query, sort: requestedSort, includeStats } = searchRequest;
-      await task(
-        async () => {
-          const id = await startSearch({ raw: query, sort: requestedSort, includeStats });
-          if (active) setSessionId(id);
-        },
-        // A superseded search must not clear the newer one's spinner or
-        // overwrite its notice, so this run goes quiet once cleanup has run.
-        { alive: () => active },
-      );
-    })();
-    return () => {
-      active = false;
-    };
-  }, [searchRequest, configured?.search, queryError, ensureSession, startSearch, task]);
+    setSessionId(null);
+    setSearchRequest(request);
+    startSearchTransition(() => {
+      if (runSearch(request)) kickedAttempt.current = request.attemptId;
+    });
+  };
 
-  if (dashboard && Dashboard)
+  if (OPERATOR_BUILD && dashboard && Dashboard)
     return (
       <Suspense fallback={null}>
+        <span ref={authProbe} hidden />
         <Dashboard
           ensureSession={ensureSession}
           close={() => {
-            setDashboard(false);
-            const url = new URL(location.href);
-            url.searchParams.delete("dashboard");
-            history.replaceState(null, "", url);
+            replaceLocation({ dashboard: false });
           }}
         />
       </Suspense>
     );
   return (
     <div className={`app ${home ? "is-home" : "has-results"}`}>
+      <span ref={authProbe} hidden />
       <header className="topbar">
         <button
           type="button"
@@ -391,7 +543,7 @@ export default function App() {
             type="button"
             aria-label="Saved searches"
             onClick={() => {
-              setModal("saved");
+              setModal(ModalKind.Saved);
             }}
           >
             <Clock3 size={15} />
@@ -400,8 +552,10 @@ export default function App() {
           <button
             type="button"
             aria-label="Bookmarks"
-            aria-pressed={view === "bookmarks"}
-            onClick={() => setView(view === "bookmarks" ? "search" : "bookmarks")}
+            aria-pressed={view === ViewMode.Bookmarks}
+            onClick={() =>
+              setView(view === ViewMode.Bookmarks ? ViewMode.Search : ViewMode.Bookmarks)
+            }
           >
             <Bookmark size={15} />
             <span>Bookmarks</span>
@@ -411,7 +565,7 @@ export default function App() {
             type="button"
             aria-label="Import account"
             className="import-nav"
-            onClick={() => setModal("imports")}
+            onClick={() => setModal(ModalKind.Imports)}
           >
             <Plus size={16} />
             <span>Import account</span>
@@ -426,7 +580,7 @@ export default function App() {
             : "Connecting to your search library…"}
         </p>
       )}
-      <main>
+      <main ref={kickPendingRef}>
         <section className="search-stage" aria-label="Search X posts">
           {home && (
             <>
@@ -521,7 +675,7 @@ export default function App() {
                   className="text-button ai"
                   disabled={busy || !draft.trim()}
                   title="Suggest a clearer search"
-                  onClick={() => void task(proposeSearch)}
+                  onClick={() => void task(proposeSearch())}
                 >
                   <Sparkles size={13} />
                   Help me search
@@ -563,7 +717,11 @@ export default function App() {
                 <>
                   <span className="status-dot muted" />
                   Connect your sources to start searching.
-                  <button type="button" className="text-button" onClick={() => setModal("imports")}>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setModal(ModalKind.Imports)}
+                  >
                     Import an account <Plus size={13} />
                   </button>
                 </>
@@ -590,26 +748,32 @@ export default function App() {
           </div>
         )}
         {!home && (
-          <ResultsSection
-            view={view}
-            raw={raw}
-            configured={configured}
-            result={result}
-            queryError={queryError}
-            visible={visible}
-            bookmarkedIds={new Set(bookmarks.map((b) => b.tweetId))}
-            busy={busy}
-            onSearch={search}
-            onSave={() => void task(runSave, "Search saved.")}
-            onLiveSearch={loadLive}
-            onOpenModal={(which) => setModal(which)}
-            onRetry={() => setSearchRequest({ raw, sort, includeStats: statsForNerds })}
-            onWebContext={runWebContext}
-            onLoadMore={runLoadMore}
-            onRead={read}
-            onBookmark={(post) => void task(() => runBookmark(post))}
-            onThread={(post) => void task(() => runThread(post.url))}
-          />
+          <Profiler id="results" onRender={onResultsRender}>
+            <div ref={resultsCommitRef}>
+              <ResultsSection
+                view={view}
+                raw={raw}
+                configured={configured}
+                result={result}
+                queryError={queryError}
+                visible={visible}
+                bookmarkedIds={new Set(bookmarks.map((b) => b.tweetId))}
+                busy={busy}
+                onSearch={search}
+                onSave={() => void task(runSave(), "Search saved.")}
+                onLiveSearch={loadLive}
+                onOpenModal={(which) => setModal(which)}
+                onRetry={retrySearch}
+                onWebContext={runWebContext}
+                onLoadMore={runLoadMore}
+                onRead={read}
+                onBookmark={(post) => void task(runBookmark(post))}
+                onThread={(post) => void task(runThread(post.url))}
+                frontendStats={deferredFrontendStats}
+                searchPending={isSearchPending}
+              />
+            </div>
+          </Profiler>
         )}
       </main>
       <footer className="site-footer">
@@ -619,14 +783,14 @@ export default function App() {
             Powered by x.md <ArrowUpRight size={12} />
           </a>
           {OPERATOR_BUILD && (
-            <button type="button" onClick={() => setModal("setup")}>
+            <button type="button" onClick={() => setModal(ModalKind.Setup)}>
               <SlidersHorizontal size={13} />
               Connections
             </button>
           )}
         </div>
       </footer>
-      {modal === "imports" && (
+      {modal === ModalKind.Imports && (
         <Modal notice={notice} title="Import an account" close={() => setModal(null)}>
           <p className="muted-copy">
             Collect an account’s public history through x.md. Raw captures go to your data service
@@ -694,15 +858,17 @@ export default function App() {
                       type="button"
                       disabled={busy}
                       onClick={() =>
-                        void task(async () => {
-                          await ensureSession();
-                          await start({
-                            kind: job.kind,
-                            input: job.input,
-                            since: job.since,
-                            previous: job._id,
-                          });
-                        })
+                        void task(
+                          (async () => {
+                            await ensureSession();
+                            await start({
+                              kind: job.kind,
+                              input: job.input,
+                              since: job.since,
+                              previous: job._id,
+                            });
+                          })(),
+                        )
                       }
                     >
                       {job.nextUntil
@@ -717,7 +883,7 @@ export default function App() {
           </div>
         </Modal>
       )}
-      {modal === "saved" && (
+      {modal === ModalKind.Saved && (
         <Modal title="Saved searches" close={() => setModal(null)}>
           <p className="muted-copy">Saved privately to this browser's guest session.</p>
           {!saved.length && (
@@ -742,7 +908,7 @@ export default function App() {
                 type="button"
                 className="icon"
                 aria-label={`Remove ${item.query}`}
-                onClick={() => void task(() => runRemoveSaved(item._id))}
+                onClick={() => void task(runRemoveSaved(item._id))}
               >
                 <X size={16} />
               </button>
@@ -750,7 +916,7 @@ export default function App() {
           ))}
         </Modal>
       )}
-      {modal === "email" && (
+      {modal === ModalKind.Email && (
         <Modal notice={notice} title="Email these results" close={() => setModal(null)}>
           {me === undefined ? (
             <p className="muted-copy">Checking your account…</p>
@@ -778,10 +944,13 @@ export default function App() {
                 className="stack-form"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void task(async () => {
-                    await ensureSession();
-                    await send({ sessionId: sessionId!, recipient: verifiedEmail });
-                  }, "Email queued. Delivery status appears below.");
+                  void task(
+                    (async () => {
+                      await ensureSession();
+                      await send({ sessionId: sessionId!, recipient: verifiedEmail });
+                    })(),
+                    "Email queued. Delivery status appears below.",
+                  );
                 }}
               >
                 <p>
@@ -800,11 +969,9 @@ export default function App() {
           ))}
         </Modal>
       )}
-      {modal === "setup" && ConnectionsPanel && (
+      {OPERATOR_BUILD && modal === ModalKind.Setup && ConnectionsPanel && (
         <Modal notice={notice} title="Connections" close={() => setModal(null)}>
-          <Suspense fallback={<p className="muted-copy">Loading…</p>}>
-            <ConnectionsPanel />
-          </Suspense>
+          <ConnectionsPanel />
         </Modal>
       )}
       {page && (
