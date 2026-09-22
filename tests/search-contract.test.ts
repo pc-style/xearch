@@ -273,6 +273,31 @@ describe("authorized collection scope (fails closed)", () => {
       sort: "relevance",
       scope: { kind: "global" },
     });
+    if (sessionId === null) throw new Error("a non-empty query must start a session");
     expect(await t.run((ctx) => ctx.db.get(sessionId))).not.toHaveProperty("scope");
+  });
+});
+
+describe("expected conditions return data, never a reported exception", () => {
+  it("treats an empty or whitespace-only query as a no-op that starts no session", async () => {
+    const { a } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+    // The client sends an empty query only through a race it already guards;
+    // starting no search (null) keeps that out of error tracking, where a
+    // thrown ConvexError would land as an uncaught high-severity issue.
+    expect(await a.mutation(api.search.start, { raw: "", sort: "relevance" })).toBeNull();
+    expect(await a.mutation(api.search.start, { raw: "   ", sort: "relevance" })).toBeNull();
+  });
+
+  it("returns empty from live-subscription queries during an auth transition", async () => {
+    const { t, a } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+    const sessionId = await a.mutation(api.search.start, { raw: "local first", sort: "relevance" });
+    if (sessionId === null) throw new Error("a non-empty query must start a session");
+    // `t` has no identity — the state a still-live subscription re-runs in
+    // after sign-out or a reconnect before the token is back.
+    expect(await t.query(api.search.saved, {})).toEqual([]);
+    expect(await t.query(api.search.bookmarks, {})).toEqual([]);
+    expect(await t.query(api.search.results, { sessionId })).toBeNull();
   });
 });

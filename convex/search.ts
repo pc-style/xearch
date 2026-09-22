@@ -17,8 +17,8 @@ import {
 import { decodeSearchResponse } from "./lib/results";
 import { serviceToken } from "./lib/serviceAuth";
 import { summaryScopeValidator } from "./lib/contracts";
-import { user } from "./access";
-import type { Doc } from "./_generated/dataModel";
+import { user, maybeUser } from "./access";
+import type { Doc, Id } from "./_generated/dataModel";
 export const accounts = query({
   args: {},
   handler: (ctx) => ctx.db.query("accounts").withIndex("by_handle").take(100),
@@ -36,10 +36,16 @@ export const start = mutation({
     scope: v.optional(summaryScopeValidator),
     includeStats: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<Id<"sessions"> | null> => {
+    // An empty or whitespace-only query is not a search. The client treats it
+    // as "go home" and never sends it, so reaching here is a client-side race,
+    // not something the person did wrong. Do nothing and return no session:
+    // throwing here forwards a deliberate ConvexError to error tracking as an
+    // uncaught exception, filing a high-severity false alarm for input the UI
+    // already guards.
+    if (!args.raw.trim()) return null;
     const owner = await user(ctx);
     parseQuery(args.raw);
-    if (!args.raw.trim()) throw new ConvexError("Enter a search.");
     if (!process.env.SEARCH_API_URL)
       throw new ConvexError(
         "The search service is not connected yet. Configure SEARCH_API_URL to use your corpus.",
@@ -69,7 +75,9 @@ export const start = mutation({
 export const results = query({
   args: { sessionId: v.id("sessions") },
   handler: async (ctx, { sessionId }) => {
-    const owner = await user(ctx);
+    // See maybeUser: no session during an auth transition, not a throw.
+    const owner = await maybeUser(ctx);
+    if (!owner) return null;
     const session = await ctx.db.get(sessionId);
     if (!session || session.owner !== owner) throw new ConvexError("Search session not found.");
     return session;
@@ -159,7 +167,8 @@ export const execute = internalAction({
 export const saved = query({
   args: {},
   handler: async (ctx) => {
-    const owner = await user(ctx);
+    const owner = await maybeUser(ctx);
+    if (!owner) return [];
     return ctx.db
       .query("saved")
       .withIndex("by_owner", (q) => q.eq("owner", owner))
@@ -198,7 +207,8 @@ export const removeSaved = mutation({
 export const bookmarks = query({
   args: {},
   handler: async (ctx) => {
-    const owner = await user(ctx);
+    const owner = await maybeUser(ctx);
+    if (!owner) return [];
     const marks = await ctx.db
       .query("bookmarks")
       .withIndex("by_owner", (q) => q.eq("owner", owner))
