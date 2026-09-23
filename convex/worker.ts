@@ -25,12 +25,15 @@ export const heartbeat = internalMutation({
       .withIndex("by_name", (q) => q.eq("name", "desktop"))
       .unique();
     const lastSeen = Date.now();
-    if (existing) await ctx.db.patch(existing._id, { online, lastSeen });
-    else await ctx.db.insert("collector", { name: "desktop", online, lastSeen });
-    if (online)
-      await ctx.scheduler.runAfter(45_000, internal.worker.expire, {
-        lastSeen,
-      });
+    if (existing?.expiry) {
+      const pending = await ctx.db.system.get(existing.expiry);
+      if (pending?.state.kind === "pending") await ctx.scheduler.cancel(existing.expiry);
+    }
+    const expiry = online
+      ? await ctx.scheduler.runAfter(45_000, internal.worker.expire, { lastSeen })
+      : undefined;
+    if (existing) await ctx.db.patch(existing._id, { online, lastSeen, expiry });
+    else await ctx.db.insert("collector", { name: "desktop", online, lastSeen, expiry });
   },
 });
 export const expire = internalMutation({
