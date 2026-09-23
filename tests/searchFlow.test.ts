@@ -23,13 +23,29 @@ describe("searchFlow", () => {
       },
       startSearch: async (receivedRequest) => {
         events.push("startSearch");
-        expect(receivedRequest).toBe(request);
+        expect(receivedRequest).toEqual(request);
         return sessionId;
       },
     };
 
     await expect(Effect.runPromise(searchFlow(dependencies, request))).resolves.toBe(sessionId);
     expect(events).toEqual(["ensureSession", "startSearch"]);
+  });
+
+  it("sends only the mutation's own arguments, not caller telemetry fields", async () => {
+    let received: object | undefined;
+    const dependencies: SearchFlowDependencies = {
+      ensureSession: async () => {},
+      startSearch: async (receivedRequest) => {
+        received = receivedRequest;
+        return sessionId;
+      },
+    };
+    const wider = { ...request, attemptId: 7, trigger: "submit" };
+
+    await Effect.runPromise(searchFlow(dependencies, wider));
+    expect(received).not.toHaveProperty("attemptId");
+    expect(received).not.toHaveProperty("trigger");
   });
 
   it("preserves an ensureSession failure and does not start a search", async () => {
