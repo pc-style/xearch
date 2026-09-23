@@ -180,6 +180,9 @@ export default defineSchema({
     name: v.string(),
     online: v.boolean(),
     lastSeen: v.number(),
+    // The one pending `worker.expire`. Each heartbeat cancels it before it
+    // schedules the next, so polls never pile up scheduled functions.
+    expiry: v.optional(v.id("_scheduled_functions")),
   }).index("by_name", ["name"]),
   // Control-plane metadata only. Corpus bytes and normalization belong
   // downstream. Identity is keyed on the provider account id (userId); handle
