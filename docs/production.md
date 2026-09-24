@@ -140,6 +140,33 @@ Neither the indexer heartbeat nor the search cron has been observed running
 against the production deployment yet: `SERVICE_HEALTH_TOKEN` is not set there,
 and nothing in this change deploys itself.
 
+## Automatic account discovery
+
+`scripts/discover-accounts.mjs` expands the indexed accounts to the people they
+interact with most. It reads the raw captures already on this machine (no
+provider is contacted), counts replies, quotes, @mentions and reposts from
+indexed accounts per target handle, and queues an account-history import for
+every target at or above `DISCOVERY_MIN_INTERACTIONS` (default 25) that is
+neither indexed nor already the subject of a bulk import in any state. The
+threshold is the relevance criterion; there is deliberately no per-run cap
+(see "Rate limiting" in AGENTS.md). Discovered runs are tagged
+(`jobs.origin = "discovered"`, `jobs.discoveredFrom`) and the dashboard says
+which accounts led to them.
+
+```sh
+# Rank only, start nothing:
+CONVEX_DEPLOYMENT=prod:utmost-kudu-321 node scripts/discover-accounts.mjs
+# Queue the imports:
+CONVEX_DEPLOYMENT=prod:utmost-kudu-321 node scripts/discover-accounts.mjs --apply
+```
+
+It goes through `convex run` on internal functions, so it needs the deploy
+key the VM already uses and neither a browser session nor the operator token.
+`deploy/systemd/xearch-discover.timer` runs it hourly once enabled
+(`systemctl --user enable --now xearch-discover.timer`); it logs to
+`~/xearch-data/logs/discover.log`. Enabling the timer is a deliberate step:
+every run can start paid imports.
+
 ## VM services
 
 The VM runs the static frontend and raw capture receiver and, after a coordinated

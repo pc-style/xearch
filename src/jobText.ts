@@ -321,3 +321,30 @@ export function describeRunOutcome(run: {
 
   return `${retained}.`;
 }
+
+/**
+ * One line saying why a discovered run exists: which indexed accounts
+ * interact with this one, and how often. Empty for runs a person started.
+ */
+export function discoveredVia(
+  job:
+    | {
+        origin?: "manual" | "discovered";
+        discoveredFrom?: { handle: string; interactions: number }[];
+      }
+    | null
+    | undefined,
+): string {
+  if (!job || job.origin !== "discovered") return "";
+  const from = job.discoveredFrom ?? [];
+  const total = from.reduce((sum, f) => sum + f.interactions, 0);
+
+  const names = from
+    .slice(0, 3)
+    .map((f) => `@${f.handle}`)
+    .join(", ");
+
+  return names
+    ? `Discovered via ${names} (${total} interactions)`
+    : "Discovered from interactions with indexed accounts";
+}

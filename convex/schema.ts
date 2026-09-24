@@ -188,6 +188,13 @@ export const publicationUpdateFields = {
   observedAt: v.number(),
 };
 
+export const jobOriginValidator = v.union(v.literal("manual"), v.literal("discovered"));
+
+export const discoveredFromValidator = v.object({
+  handle: v.string(),
+  interactions: v.number(),
+});
+
 export default defineSchema({
   ...authTables,
   collector: defineTable({
@@ -230,6 +237,12 @@ export default defineSchema({
     owner: v.id("users"),
     kind: kindValidator,
     input: v.string(),
+    // How this run came to exist. "discovered": scripts/discover-accounts.mjs
+    // queued it because indexed accounts interact with this one a lot;
+    // `discoveredFrom` is that evidence. Absent on rows written before this
+    // field existed, which all came from a person.
+    origin: v.optional(jobOriginValidator),
+    discoveredFrom: v.optional(v.array(discoveredFromValidator)),
     since: v.optional(v.string()),
     until: v.optional(v.string()),
     refresh: v.boolean(),

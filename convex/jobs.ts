@@ -1,10 +1,10 @@
 import { Match } from "effect";
 import { v, ConvexError } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { kindValidator, throttleProviderValidator } from "./schema";
+import { kindValidator, throttleProviderValidator, discoveredFromValidator } from "./schema";
 import schema from "./schema";
 import { user, requireOperator } from "./access";
 import { activeThrottleUntil, loadProviderLimit } from "./limits";
@@ -297,6 +297,107 @@ export const start = mutation({
       count: 0,
       attempt: 0,
       warnings: [],
+      origin: "manual",
+      updatedAt: Date.now(),
+    });
+
+    await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+
+    return id;
+  },
+});
+
+// --- Automatic discovery --------------------------------------------------
+// scripts/discover-accounts.mjs runs on the VM (hourly, once enabled) and
+// queues account-history imports for people the indexed accounts interact
+// with a lot. It is an internal function on purpose: only the deploy key
+// (the CLI on the VM) can call it, so it needs neither a browser session nor
+// the operator token, and it never becomes a public entry point. The job it
+// writes is tagged so the dashboard can say where it came from.
+
+/** What the discovery script needs in one read: who is indexed, what is already queued or imported. */
+export const discoveryState = internalQuery({
+  args: {},
+  returns: v.object({
+    indexed: v.array(v.string()),
+    existingInputs: v.array(v.string()),
+  }),
+  handler: async (ctx) => {
+    const accounts = await ctx.db.query("accounts").withIndex("by_handle").take(1000);
+
+    const jobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_kind", (q) => q.eq("kind", "bulk"))
+      .take(5000);
+
+    return {
+      indexed: accounts.map((account) => account.handle.toLowerCase()),
+      existingInputs: [...new Set(jobs.map((job) => job.input.toLowerCase()))],
+    };
+  },
+});
+
+const DISCOVERY_OWNER_EMAIL = "discovery@xearch.internal";
+
+// The audit-trail owner for discovered runs: one system user, created on
+// first use. Not an operator, not signable-in (no verification time), it
+// exists only so `jobs.owner` can say "the discovery job did this".
+async function discoveryOwner(ctx: MutationCtx): Promise<Id<"users">> {
+  const existing = await ctx.db
+    .query("users")
+    .withIndex("email", (q) => q.eq("email", DISCOVERY_OWNER_EMAIL))
+    .first();
+
+  if (existing) return existing._id;
+
+  return ctx.db.insert("users", {
+    isAnonymous: false,
+    email: DISCOVERY_OWNER_EMAIL,
+    name: "Automatic discovery",
+  });
+}
+
+export const startDiscovered = internalMutation({
+  args: {
+    input: v.string(),
+    discoveredFrom: v.array(discoveredFromValidator),
+  },
+  returns: v.union(v.id("jobs"), v.null()),
+  handler: async (ctx, args) => {
+    const input = handle(args.input);
+
+    // Never a second import for an account anyone already asked for, whatever
+    // state that run is in: a person's retry or the run's own auto-continue
+    // owns it from here.
+    const existing = await ctx.db
+      .query("jobs")
+      .withIndex("by_input", (q) => q.eq("kind", "bulk").eq("input", input))
+      .first();
+
+    if (existing) return null;
+
+    const candidates = await ctx.db
+      .query("accounts")
+      .withIndex("by_handle", (q) => q.eq("handle", input))
+      .take(2);
+
+    const account = candidates.length === 1 ? candidates[0] : null;
+
+    const id = await ctx.db.insert("jobs", {
+      owner: await discoveryOwner(ctx),
+      kind: "bulk",
+      input,
+      refresh: false,
+      autoContinue: true,
+      pages: 0,
+      postsReceived: 0,
+      expectedUserId: account?.userId,
+      status: "queued",
+      count: 0,
+      attempt: 0,
+      warnings: [],
+      origin: "discovered",
+      discoveredFrom: args.discoveredFrom,
       updatedAt: Date.now(),
     });
 
