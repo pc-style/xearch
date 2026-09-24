@@ -5,12 +5,7 @@ import type { AccountLibraryRow, NextAction } from "../../convex/lib/contracts";
 import type { HistoryRun } from "../../convex/library";
 import type { Id } from "../../convex/_generated/dataModel";
 import { useTask } from "../errors";
-import {
-  DOWNLOAD_COMPLETE_CAVEAT,
-  acquisitionStatusLabel,
-  describeRunOutcome,
-  discoveredVia,
-} from "../jobText";
+import { acquisitionStatusLabel, describeRunOutcome, discoveredVia } from "../jobText";
 import {
   PUBLICATION_STATE_META,
   acquisitionStatusTone,
@@ -82,17 +77,21 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         </div>
       </div>
 
-      <p className="library-muted">{stateMeta.detail}</p>
-
+      {/* Compact one-line row body (QA finding 5,
+          /tmp/issues-t3-dashboard-current.md #5): identity/badges above,
+          then just the searchable count and one short state line. Every
+          other publication note (the "Download complete" caveat, deep-
+          history backfill progress, discovered-via text, the good-corpus-
+          despite-failure note, the last publication error, and the failed-
+          run explanation) moves behind the row's existing expand control —
+          same `expanded` state as "Show history" already used, not a new
+          toggle. The section-level disclaimer above the whole list (see
+          AccountLibrary.tsx) replaces this row repeating
+          DOWNLOAD_COMPLETE_CAVEAT on every completed account. */}
       <div className="library-row-meta">
         <span>
           Searchable posts: <strong>{countWithUnit(row.searchablePostCount)}</strong>
-          {row.searchablePostCountAsOf !== undefined &&
-            ` (as of ${formatRelative(row.searchablePostCountAsOf)})`}
         </span>
-        {row.lastPublishedAt !== undefined && (
-          <span>Last published {formatRelative(row.lastPublishedAt)}</span>
-        )}
         {job && (
           <span>
             {job.status === "running" || job.status === "queued" ? "Downloading" : "Last run"}{" "}
@@ -101,36 +100,6 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           </span>
         )}
       </div>
-
-      {/* /tmp/issues.md item 2: "Download complete" (the badge above, from
-          acquisitionStatusLabel) reads like the account's entire X history
-          is now in the index. It only ever means x.md finished handing over
-          what it had for that one run. The row already states the real,
-          current searchable count above (never invented here), so this only
-          adds the one clarifying line — not a second number. */}
-      {job?.status === "complete" && <p className="library-muted">{DOWNLOAD_COMPLETE_CAVEAT}</p>}
-      {discoveredVia(job) && <p className="library-muted">{discoveredVia(job)}</p>}
-      {row.backfill && <p className="library-muted">{backfillSummary(row.backfill)}</p>}
-      {row.publicationState === "failed" && hasGoodCorpus && (
-        <p className="library-row-note">
-          The previously confirmed index still has {countWithUnit(row.searchablePostCount)}{" "}
-          searchable — the failure below is about the latest refresh only, not the existing corpus.
-        </p>
-      )}
-      {row.lastError && (
-        <p className="library-row-failure">
-          Publication error ({formatRelative(row.lastError.observedAt)}): {row.lastError.message}
-        </p>
-      )}
-      {needsFailureDetail && (
-        <p className="library-row-failure">
-          {history === undefined
-            ? "Loading failure details…"
-            : currentRun
-              ? describeRunOutcome(currentRun)
-              : "Download failed. Expand history below for details."}
-        </p>
-      )}
 
       <div className="library-row-actions">
         <NextActionControl
@@ -160,7 +129,44 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         </p>
       )}
 
-      {expanded && <AccountHistory history={history} />}
+      {expanded && (
+        <div className="library-row-details">
+          <p className="library-muted">{stateMeta.detail}</p>
+          {row.searchablePostCountAsOf !== undefined && (
+            <p className="library-muted">
+              Searchable count as of {formatRelative(row.searchablePostCountAsOf)}
+            </p>
+          )}
+          {row.lastPublishedAt !== undefined && (
+            <p className="library-muted">Last published {formatRelative(row.lastPublishedAt)}</p>
+          )}
+          {discoveredVia(job) && <p className="library-muted">{discoveredVia(job)}</p>}
+          {row.backfill && <p className="library-muted">{backfillSummary(row.backfill)}</p>}
+          {row.publicationState === "failed" && hasGoodCorpus && (
+            <p className="library-row-note">
+              The previously confirmed index still has {countWithUnit(row.searchablePostCount)}{" "}
+              searchable — the failure below is about the latest refresh only, not the existing
+              corpus.
+            </p>
+          )}
+          {row.lastError && (
+            <p className="library-row-failure">
+              Publication error ({formatRelative(row.lastError.observedAt)}):{" "}
+              {row.lastError.message}
+            </p>
+          )}
+          {needsFailureDetail && (
+            <p className="library-row-failure">
+              {history === undefined
+                ? "Loading failure details…"
+                : currentRun
+                  ? describeRunOutcome(currentRun)
+                  : "Download failed. Expand history below for details."}
+            </p>
+          )}
+          <AccountHistory history={history} />
+        </div>
+      )}
     </article>
   );
 }
@@ -173,8 +179,8 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
  * DOWNLOADED, not indexed — so this always says "downloaded", never "found"
  * or a bare count that could be misread as this many are now searchable;
  * whether they are is the indexer's own separate job (see
- * DOWNLOAD_COMPLETE_CAVEAT above, which makes the same distinction for the
- * ordinary bulk-download badge).
+ * AccountLibrary.tsx's DOWNLOAD_COMPLETE_CAVEAT note, which makes the same
+ * distinction for the ordinary bulk-download badge).
  */
 function backfillSummary(backfill: NonNullable<AccountLibraryRow["backfill"]>): string {
   const downloaded = `${backfill.postsFound.toLocaleString()} post${backfill.postsFound === 1 ? "" : "s"} downloaded`;
