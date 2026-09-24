@@ -54,6 +54,10 @@ function fixture() {
   for (const name of ["vm-update.sh", "reindex.sh"]) {
     executable(join(code, "scripts", name), '#!/bin/sh\nprintf "reindex\\n" >> "$TEST_LOG"\n');
   }
+  executable(
+    join(code, "scripts/deploy-operator-site.sh"),
+    '#!/bin/sh\nprintf "operator-site\\n" >> "$TEST_LOG"\nexit "${TEST_OPERATOR_STATUS:-0}"\n',
+  );
   const mock = (name: string, body: string) => {
     executable(
       join(bin, name),
@@ -66,7 +70,11 @@ function fixture() {
   rev-parse) cat "$TEST_ROOT/head" ;;
   fetch) exit "\${TEST_FETCH_STATUS:-0}" ;;
   merge) printf 'new-sha\\n' > "$TEST_ROOT/head" ;;
-  diff) exit "\${TEST_DIFF_STATUS:-1}" ;;
+  diff)
+    case "$*" in
+      *"-- search"*) exit "\${TEST_DIFF_SEARCH_STATUS:-\${TEST_DIFF_STATUS:-1}}" ;;
+      *) exit "\${TEST_DIFF_APP_STATUS:-\${TEST_DIFF_STATUS:-1}}" ;;
+    esac ;;
   *) exit 99 ;;
 esac`,
   );
@@ -157,7 +165,10 @@ describe("vm-update", () => {
     expect(commands).not.toMatch(
       /xearch-capture|xearch-production-worker|xearch-frontend|daemon-reload|\benable\b|\bimport\b|^reindex$/m,
     );
-    expect(commands).not.toMatch(/convex|deploy|upload/);
+    expect(commands).not.toMatch(/convex|static-hosting|upload/);
+    // The operator site is served from this checkout and nothing else
+    // republishes it; --force counts as "everything changed".
+    expect(commands).toMatch(/^operator-site$/m);
     expect(readFileSync(f.installed, "utf8")).toBe(readFileSync(join(f.root, "binary"), "utf8"));
     expect(readFileSync(f.marker, "utf8")).toBe("new-sha\n");
     expect(readFileSync(f.dropIn, "utf8")).toBe("fixture runtime override\n");
@@ -230,6 +241,33 @@ describe("vm-update", () => {
     f.clearLog();
     expect(f.run("vm-update.sh", { TEST_DIFF_STATUS: "0" }, ["--force"]).status).toBe(0);
     expect(f.commands()).toContain("try-restart xearch-search-indexer.service");
+  });
+
+  it("republishes the operator site only when application code changed", () => {
+    const f = fixture();
+    f.write(f.marker, "old-sha\n");
+    // Only the search crate moved: rebuild search, leave the site alone.
+    expect(
+      f.run("vm-update.sh", { TEST_DIFF_SEARCH_STATUS: "1", TEST_DIFF_APP_STATUS: "0" }).status,
+    ).toBe(0);
+    expect(f.commands()).toContain("cargo build");
+    expect(f.commands()).not.toMatch(/^operator-site$/m);
+    f.clearLog();
+    f.write(f.marker, "old-sha\n");
+    // Only application code moved: publish the site, do not rebuild search.
+    expect(
+      f.run("vm-update.sh", { TEST_DIFF_SEARCH_STATUS: "0", TEST_DIFF_APP_STATUS: "1" }).status,
+    ).toBe(0);
+    expect(f.commands()).toMatch(/^operator-site$/m);
+    expect(f.commands()).not.toMatch(/cargo|try-restart/);
+    expect(readFileSync(f.marker, "utf8")).toBe("new-sha\n");
+  });
+
+  it("does not mark a failed operator publication as applied", () => {
+    const f = fixture();
+    f.write(f.marker, "old-sha\n");
+    expect(f.run("vm-update.sh", { TEST_OPERATOR_STATUS: "1" }).status).not.toBe(0);
+    expect(readFileSync(f.marker, "utf8")).toBe("old-sha\n");
   });
 
   it("handles absent legacy units without reinstalling them", () => {
