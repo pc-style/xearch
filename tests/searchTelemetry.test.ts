@@ -75,4 +75,44 @@ describe("searchTelemetry / Load more attempts", () => {
 
     expect(store.getSnapshot()?.actualDurationMs).toBe(40);
   });
+
+  // Documents why App.tsx's `resultsCommitRef`/`onResultsRender` need their
+  // own `sessionAttemptRef` guard on top of this store: between starting a
+  // new attempt and that attempt's own session resolving, `current.sessionId`
+  // is still null, so `commitResult`'s mismatch guard (`current.sessionId &&
+  // input.sessionId !== current.sessionId`) doesn't fire — it has nothing to
+  // compare against yet. A caller that reads a stale, already-complete
+  // result (still keyed by the PREVIOUS attempt's session, as `runLoadMore`
+  // deliberately leaves `sessionId` while its new page loads) and reports it
+  // for the new attempt would have it accepted here, wrongly, and then have
+  // the new attempt's real completion silently dropped once the actual page
+  // arrives (a terminal attempt never re-commits).
+  it("accepts a terminal input for an unrelated session when no session is confirmed yet", () => {
+    const store = createSearchTelemetryStore({ clock: () => 100 });
+    const attempt = store.startAttempt({ trigger: SearchTrigger.NextPage });
+    // No markSession call: this attempt's real session hasn't resolved yet.
+
+    const changed = store.markTerminal({
+      attemptId: attempt,
+      status: SearchStatus.Complete,
+      rowCount: 20,
+      // A stale session from a previous attempt — not this one's.
+      sessionId: sessionId(1),
+    });
+
+    expect(changed).toBe(true);
+    expect(store.getSnapshot()?.terminalRowCount).toBe(20);
+
+    // The real session for this attempt resolving afterwards is then
+    // ignored, because the attempt already looks terminal.
+    const realCompletion = store.markTerminal({
+      attemptId: attempt,
+      status: SearchStatus.Complete,
+      rowCount: 40,
+      sessionId: sessionId(2),
+    });
+
+    expect(realCompletion).toBe(false);
+    expect(store.getSnapshot()?.terminalRowCount).toBe(20);
+  });
 });

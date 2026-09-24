@@ -449,6 +449,15 @@ export default function App() {
   // from async continuations — never touched during render.
   const latestAttempt = useRef<number | null>(null);
   const kickedAttempt = useRef<number | null>(null);
+  // Which attempt's session is actually confirmed (`markSession` has run for
+  // it). `runLoadMore` starts a new attempt but deliberately leaves the OLD
+  // session in `sessionId` until the new page resolves (see its comment) —
+  // without this guard, `resultsCommitRef`/`onResultsRender` below would
+  // read that stale `result` (still keyed by the old session) as if it
+  // belonged to the new attempt, mark it terminal early, and then ignore
+  // the real completion once the new page actually lands (`commitResult`
+  // never re-marks a terminal attempt).
+  const sessionAttemptRef = useRef<number | null>(null);
 
   function runSearch(request: SearchRequest): boolean {
     telemetry.startAttempt({
@@ -473,7 +482,9 @@ export default function App() {
     ).then(
       (id) => {
         if (latestAttempt.current !== request.attemptId) return;
-        telemetry.markSession(request.attemptId, id, connectionSnapshot);
+
+        if (telemetry.markSession(request.attemptId, id, connectionSnapshot))
+          sessionAttemptRef.current = request.attemptId;
         setSessionId(id);
         setBusy(false);
       },
@@ -520,13 +531,19 @@ export default function App() {
   const onResultsRender: ResultsProfiler = (_id, _phase, actualDuration, baseDuration) => {
     const attempt = searchRequest?.attemptId;
 
-    if (attempt !== undefined) telemetry.recordProfiler(attempt, actualDuration, baseDuration);
+    if (attempt !== undefined && sessionAttemptRef.current === attempt)
+      telemetry.recordProfiler(attempt, actualDuration, baseDuration);
   };
 
   function resultsCommitRef(node: HTMLElement | null) {
     const req = searchRequest;
 
     if (!node || !req || !result || result._id !== sessionId) return;
+
+    // Guards against a stale `result` (still keyed by a session from before
+    // `runLoadMore` started a new attempt) being read as if it belonged to
+    // that new attempt — see `sessionAttemptRef`'s declaration above.
+    if (sessionAttemptRef.current !== req.attemptId) return;
 
     if (result.status === "complete" || result.status === "failed") {
       telemetry.markTerminal({

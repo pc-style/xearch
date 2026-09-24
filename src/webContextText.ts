@@ -12,6 +12,7 @@ import {
   restoreBalancedParens,
   shortenUrlForDisplay as shortenUrl,
   TRAILING_PUNCTUATION,
+  truncateSegments,
 } from "./linkify";
 
 export interface WebContextTextSegment {
@@ -51,7 +52,11 @@ const BULLET_PREFIX = /^(?:[-*+]|\d+\.)\s+/;
 
 const BLOCKQUOTE_PREFIX = /^>+\s?/;
 
-const IMAGE_MARKDOWN = /!\[[^\]]*\]\([^)]*\)/g;
+// Matches only the *start* of a Markdown image, up through its opening "(":
+// the same reasoning as `INLINE_START` above applies — a fixed `[^)]*`
+// class would stop at the first ")", leaving the rest of an image URL like
+// `https://example.com/a(b).png)` behind as stray text.
+const IMAGE_START = /!\[[^\]]*\]\(/g;
 
 // Markdown escapes a fixed set of punctuation with a leading backslash
 // (Firecrawl does this for dates like `2024\-01\-15`); unescape all of them.
@@ -128,6 +133,36 @@ function scanBalancedHref(text: string, start: number): { href: string; end: num
   return null;
 }
 
+/**
+ * Remove every complete Markdown image (`![alt](url)`), scanning each url
+ * for its matching closing ")" the same way `scanBalancedHref` does for
+ * links, instead of stopping at the first ")". A malformed/unterminated
+ * image is left in place rather than swallowing the rest of the document.
+ */
+function stripMarkdownImages(text: string): string {
+  let result = "";
+  let cursor = 0;
+
+  IMAGE_START.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = IMAGE_START.exec(text))) {
+    const start = match.index;
+    const hrefStart = IMAGE_START.lastIndex;
+    const parsed = scanBalancedHref(text, hrefStart);
+
+    if (!parsed) continue; // unterminated image target; leave it as plain text
+
+    result += text.slice(cursor, start);
+    cursor = parsed.end;
+    IMAGE_START.lastIndex = cursor;
+  }
+
+  result += text.slice(cursor);
+
+  return result;
+}
+
 function parseInlineSegments(text: string): WebContextSegment[] {
   const segments: WebContextSegment[] = [];
   let cursor = 0;
@@ -194,7 +229,7 @@ function parseInlineSegments(text: string): WebContextSegment[] {
 
 /** Convert Firecrawl's Markdown-ish dump into paragraphs of text/link segments. */
 export function parseWebContextMarkdown(markdown: string): WebContextParagraph[] {
-  const withoutImages = markdown.replace(IMAGE_MARKDOWN, "");
+  const withoutImages = stripMarkdownImages(markdown);
   const paragraphs: WebContextParagraph[] = [];
   let offset = 0;
 
@@ -250,9 +285,14 @@ export interface TruncatedWebContext {
 }
 
 /**
- * Keep whole paragraphs up to `maxChars` of plain text. Always keeps at
- * least the first paragraph, even if it alone exceeds the cap, so a single
- * long paragraph can never collapse the preview to nothing.
+ * Keep whole paragraphs up to `maxChars` of plain text. Always shows at
+ * least some of the first paragraph, even if it alone exceeds the cap: an
+ * oversized first paragraph is truncated at the segment level (links stay
+ * whole — see `truncateSegments`) rather than shown in full, so the
+ * collapsed preview never exceeds `maxChars` regardless of how Firecrawl
+ * broke its response into paragraphs. The full paragraph is still what a
+ * caller re-parses for the expanded view — this only ever affects the
+ * collapsed one.
  */
 export function truncateWebContextParagraphs(
   paragraphs: readonly WebContextParagraph[],
@@ -262,12 +302,22 @@ export function truncateWebContextParagraphs(
   let used = 0;
 
   for (const paragraph of paragraphs) {
-    if (shown.length > 0 && used + paragraphLength(paragraph) > maxChars) {
+    const length = paragraphLength(paragraph);
+
+    if (shown.length > 0 && used + length > maxChars) {
+      return { shown, truncated: true };
+    }
+
+    if (used + length > maxChars) {
+      // The very first paragraph alone already exceeds the cap: cut it at
+      // a segment boundary instead of showing it whole.
+      shown.push({ key: paragraph.key, segments: truncateSegments(paragraph.segments, maxChars) });
+
       return { shown, truncated: true };
     }
 
     shown.push(paragraph);
-    used += paragraphLength(paragraph);
+    used += length;
 
     if (used >= maxChars) {
       return { shown, truncated: shown.length < paragraphs.length };

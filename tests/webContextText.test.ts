@@ -24,6 +24,14 @@ describe("parseWebContextMarkdown", () => {
     expect(paragraphs[0].segments.some((s) => s.type === "link")).toBe(false);
   });
 
+  it("drops an image whose URL contains parentheses, without leaving a remainder", () => {
+    const paragraphs = parseWebContextMarkdown("Before ![alt](https://example.com/a(b).png) after");
+
+    expect(paragraphs).toHaveLength(1);
+    expect(plainText(paragraphs[0])).toBe("Before after");
+    expect(paragraphs[0].segments.some((s) => s.type === "link")).toBe(false);
+  });
+
   it("turns a markdown link into a link segment with its own label", () => {
     const paragraphs = parseWebContextMarkdown(
       "See [our announcement](https://anthropic.com/news)",
@@ -153,10 +161,27 @@ describe("truncateWebContextParagraphs", () => {
     expect(result.truncated).toBe(true);
   });
 
-  it("always keeps at least the first paragraph, even if it alone exceeds the cap", () => {
+  it("cuts an oversized first paragraph at the cap instead of showing it in full", () => {
     const paragraphs = [paragraph("a".repeat(5000), "a"), paragraph("b", "b")];
     const result = truncateWebContextParagraphs(paragraphs, 100);
-    expect(result.shown).toEqual([paragraphs[0]]);
+    expect(result.shown).toHaveLength(1);
+    expect(result.shown[0]?.key).toBe("a");
+    // Segment-level truncation (see truncateSegments): a 100-char text
+    // segment plus the appended "…", never the full 5,000 characters.
+    expect(result.shown[0]?.segments).toEqual([
+      { type: "text", value: "a".repeat(100) },
+      { type: "text", value: "…" },
+    ]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("cuts an oversized SOLE paragraph at the cap (no second paragraph to prove truncation)", () => {
+    const paragraphs = [paragraph("a".repeat(5000), "a")];
+    const result = truncateWebContextParagraphs(paragraphs, 100);
+    expect(result.shown[0]?.segments).toEqual([
+      { type: "text", value: "a".repeat(100) },
+      { type: "text", value: "…" },
+    ]);
     expect(result.truncated).toBe(true);
   });
 
