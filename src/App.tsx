@@ -37,6 +37,7 @@ import { ResultsSection, Avatar } from "./ResultsSection";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { useLiveNow } from "./library/clock";
+import { useStableQuery } from "./library/stableQuery";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { operatorArgs } from "./operatorToken";
 import { describeError } from "./errors";
@@ -435,7 +436,11 @@ export default function App() {
   // tight 45s `isWorkerLive` window, which a rounded `now` corrupts in
   // either rounding direction (see that hook's comment).
   const now = useLiveNow();
-  const configured = useQuery(api.integrations.configured, { now });
+  // `useStableQuery`, not `useQuery`: `now` ticks every 5s, and a bare
+  // `useQuery` reports `undefined` on every argument change until the new
+  // result lands, which put the whole page back into "Loading the search
+  // library…" on each tick.
+  const configured = useStableQuery(api.integrations.configured, { now });
   const libraryLoading = accountResults === undefined || configured === undefined;
   // The caller's own identity (convex/auth.ts `me`) — never a client-supplied
   // id. `verifiedEmail` narrows straight to the one address `email.send` will
