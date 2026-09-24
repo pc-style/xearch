@@ -34,7 +34,8 @@ export async function user(ctx: QueryCtx | MutationCtx | ActionCtx) {
  * (convex/auth.ts, src/auth/EmailSignIn.tsx) already gives every caller a
  * verified email once they sign in with a code. `requireOperator` accepts
  * exactly the identities whose verified email is listed in the
- * `OPERATOR_EMAILS` env var (comma-separated, case-insensitive). An
+ * `OPERATOR_EMAILS` env var (comma-separated, case-insensitive; an entry
+ * like "@pcstyle.dev" admits every verified address on that domain). An
  * anonymous session has no email at all and is refused; a verified email
  * not on the list is refused with the same message so the list itself is
  * never confirmed or denied to the caller.
@@ -50,6 +51,21 @@ function operatorEmails(env: Record<string, string | undefined> = process.env): 
       .map((entry) => entry.trim().toLowerCase())
       .filter(Boolean),
   );
+}
+
+/**
+ * Whether a verified email is an operator. An entry is either a full
+ * address ("me@pcstyle.dev") or a domain ("@pcstyle.dev"), which admits every
+ * verified address on that domain — the operator's own domain, not a public
+ * mail provider, is the intended use.
+ */
+export function isOperatorEmail(email: string, entries: Set<string>): boolean {
+  const address = email.trim().toLowerCase();
+  const at = address.lastIndexOf("@");
+
+  if (at <= 0 || at === address.length - 1) return false;
+
+  return entries.has(address) || entries.has(address.slice(at));
 }
 
 // The `users` row is the authoritative record of whether an email is
@@ -86,7 +102,7 @@ export async function requireOperator(ctx: QueryCtx | MutationCtx | ActionCtx) {
   // claim carried on the identity/JWT itself.
   const email = account?.emailVerificationTime ? account.email?.trim().toLowerCase() : undefined;
 
-  if (!id || !email || !operatorEmails().has(email))
+  if (!id || !email || !isOperatorEmail(email, operatorEmails()))
     throw new ConvexError("Sign in as an operator to import.");
 
   return id;

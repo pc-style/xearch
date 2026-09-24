@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
+import { isOperatorEmail } from "../convex/access";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -118,6 +119,49 @@ describe("the operator authorization boundary", () => {
     await expect(
       spoofed.mutation(api.jobs.start, { kind: "live", input: "from:theo" }),
     ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it('admits every verified address on a domain listed as "@domain", and nothing else', async () => {
+    vi.stubEnv("OPERATOR_EMAILS", "@pcstyle.dev, someone@else.example");
+    const t = convexTest(schema, modules);
+
+    const onDomain = await insertUser(t, {
+      isAnonymous: false,
+      email: "Adam@PCstyle.dev",
+      verified: true,
+    });
+
+    const lookalike = await insertUser(t, {
+      isAnonymous: false,
+      email: "adam@notpcstyle.dev",
+      verified: true,
+    });
+
+    const subdomain = await insertUser(t, {
+      isAnonymous: false,
+      email: "adam@mail.pcstyle.dev",
+      verified: true,
+    });
+
+    const unverifiedOnDomain = await insertUser(t, {
+      isAnonymous: false,
+      email: "guest@pcstyle.dev",
+      verified: false,
+    });
+
+    const as = (id: string) => t.withIdentity({ subject: `${id}|s` });
+    expect(await as(onDomain).query(api.access.isOperator, {})).toBe(true);
+    expect(await as(lookalike).query(api.access.isOperator, {})).toBe(false);
+    expect(await as(subdomain).query(api.access.isOperator, {})).toBe(false);
+    expect(await as(unverifiedOnDomain).query(api.access.isOperator, {})).toBe(false);
+  });
+
+  it("does not let a bare domain entry match a malformed address", () => {
+    const entries = new Set(["@pcstyle.dev"]);
+    expect(isOperatorEmail("me@pcstyle.dev", entries)).toBe(true);
+    expect(isOperatorEmail("@pcstyle.dev", entries)).toBe(false);
+    expect(isOperatorEmail("pcstyle.dev", entries)).toBe(false);
+    expect(isOperatorEmail("me@", entries)).toBe(false);
   });
 
   it("fails closed when OPERATOR_EMAILS is unset or empty, even for a verified allowlisted-looking email", async () => {
