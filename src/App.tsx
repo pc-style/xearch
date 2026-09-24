@@ -38,7 +38,7 @@ import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { useLiveNow } from "./library/clock";
 import { useStableQuery } from "./library/stableQuery";
-import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
+import { ConnectionsPanel, Dashboard, OPERATOR_BUILD, QueueTimeline } from "./operatorSurface";
 import { operatorArgs } from "./operatorToken";
 import { describeError } from "./errors";
 import { dedupeJobsByInput, inlineImportStatus } from "./jobText";
@@ -289,6 +289,7 @@ export default function App() {
 
   const [threadJobs, setThreadJobs] = useState<Record<string, Id<"jobs">>>({});
   const pushedDashboardEntry = useRef(false);
+  const pushedQueueEntry = useRef(false);
 
   const [page, setPage] = useState<{
     title: string;
@@ -426,6 +427,7 @@ export default function App() {
   // build never has `OPERATOR_BUILD` true, so this always falls through to
   // the original, unswapped behavior there.
   const dashboard = OPERATOR_BUILD ? !route.search && !route.raw : route.dashboard;
+  const queue = route.queue;
   const accountResults = useQuery(api.search.accounts);
   const accounts = accountResults ?? [];
   // `configured.indexing` decays with real time (worker liveness), not only
@@ -801,6 +803,19 @@ export default function App() {
     pushLocation({ search: false, raw: "" });
   };
 
+  // Reachable both from Dashboard's own "Queue" nav link and ActiveQueue's
+  // "See timeline" link (both nested well below this component — Library,
+  // AccountRow, etc. — so this is threaded down as a prop rather than each
+  // of them calling `pushLocation` directly, which is what let the entry
+  // this pushes go un-tracked before: CodeRabbit found that a `replaceLocation`
+  // close() rewrote the pushed history entry in place instead of popping it,
+  // leaving a duplicate dashboard entry behind on the stack).
+  const openQueue = () => {
+    if (!OPERATOR_BUILD) return;
+    pushedQueueEntry.current = true;
+    pushLocation({ queue: true });
+  };
+
   const search = (query: string, nextSort?: Sort) => {
     const trimmed = query.trim();
     const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort);
@@ -896,12 +911,44 @@ export default function App() {
     );
   }
 
+  // Checked BEFORE `dashboard`: Dashboard's own "Queue" nav link
+  // (src/Dashboard.tsx) navigates by setting `queue=1` without touching
+  // `search`/`raw`, so a URL that would otherwise resolve to the dashboard
+  // (see the `dashboard` inversion above) plus `queue=1` means "on the Queue
+  // page, reached from the dashboard" — the Queue branch must win that URL,
+  // not Dashboard's.
+  if (OPERATOR_BUILD && queue && QueueTimeline)
+    return (
+      <Suspense fallback={null}>
+        <span ref={authProbe} hidden />
+        <QueueTimeline
+          close={() => {
+            // Same back-vs-clear-the-flag rule as `openDashboard`'s own
+            // close below: `openQueue` pushed exactly one history entry to
+            // get here, so undo it with a real Back instead of rewriting
+            // this entry in place — a `replaceLocation` here would leave a
+            // duplicate dashboard entry on the stack (CodeRabbit). A direct
+            // link/reload into `?queue=1` never pushed that entry, so there
+            // is nothing to go back to; fall back to clearing the flag on
+            // the current entry instead.
+            if (pushedQueueEntry.current) {
+              pushedQueueEntry.current = false;
+              window.history.back();
+            } else {
+              replaceLocation({ queue: false });
+            }
+          }}
+        />
+      </Suspense>
+    );
+
   if (OPERATOR_BUILD && dashboard && Dashboard)
     return (
       <Suspense fallback={null}>
         <span ref={authProbe} hidden />
         <Dashboard
           ensureSession={ensureSession}
+          onOpenQueue={openQueue}
           close={() => {
             // `openDashboard` pushed exactly one history entry to get here,
             // so undo it with a real Back instead of rewriting this entry

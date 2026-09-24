@@ -99,9 +99,11 @@ export function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean
 export default function Dashboard({
   ensureSession,
   close,
+  onOpenQueue,
 }: {
   ensureSession: () => Promise<void>;
   close: () => void;
+  onOpenQueue: () => void;
 }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
@@ -189,6 +191,15 @@ export default function Dashboard({
       <header className="control-header">
         <div>
           <button onClick={close}>Back to search</button>
+          {/* Reachable from the dashboard nav, per spec. Goes through
+              App.tsx's `onOpenQueue` (not a direct `pushLocation` here) so
+              the pushed history entry is tracked and QueueTimeline's own
+              close can pop it with a real Back instead of rewriting it in
+              place (CodeRabbit — a `replaceLocation` close left a duplicate
+              dashboard entry on the stack). */}
+          <button type="button" onClick={onOpenQueue}>
+            Queue
+          </button>
           {/* CodeRabbit (PR #48): the heading used to always say "Import an
               account" even once the Advanced disclosure had a non-bulk kind
               selected, so the submit button started a different job than
@@ -327,7 +338,12 @@ export default function Dashboard({
               values, so the two queries would not actually share one Convex
               subscription the way the comment near this file's own `config`
               declaration claims. */}
-          <Library ensureSession={ensureSession} config={config} liveNow={liveNow} />
+          <Library
+            ensureSession={ensureSession}
+            config={config}
+            liveNow={liveNow}
+            onOpenQueue={onOpenQueue}
+          />
           <section className="control-feed" aria-label="Other imports">
             <h2>Other imports</h2>
             <p className="control-feed-note">

@@ -15,6 +15,10 @@ export interface LocationSnapshot {
    * false in the public build's URLs, where it does nothing.
    */
   readonly search: boolean;
+  // The operator Queue page (src/library/QueueTimeline.tsx), reachable at
+  // `?queue=1` the same way `dashboard` is reachable at `?dashboard=1` — see
+  // src/App.tsx's `queue` render branch.
+  readonly queue: boolean;
   readonly view: ViewMode;
   /** Read-only: the app has no path-based routes (dashboard, search, etc.
    * are all query params on "/"), so this exists only so a caller can tell
@@ -31,6 +35,7 @@ export interface LocationPatch {
   readonly includeStats?: boolean;
   readonly dashboard?: boolean;
   readonly search?: boolean;
+  readonly queue?: boolean;
   readonly view?: ViewMode;
 }
 
@@ -53,6 +58,7 @@ const SERVER_SNAPSHOT: LocationSnapshot = Object.freeze({
   includeStats: false,
   dashboard: false,
   search: false,
+  queue: false,
   view: ViewMode.Search,
   path: "/",
 });
@@ -92,6 +98,7 @@ function parseUrl(input: string | URL): Omit<LocationSnapshot, "version"> {
     includeStats: url.searchParams.get("stats") === "1",
     dashboard: url.searchParams.has("dashboard"),
     search: url.searchParams.has("search"),
+    queue: url.searchParams.has("queue"),
     view: isView(viewValue) ? viewValue : ViewMode.Search,
     path: url.pathname,
   };
@@ -215,6 +222,11 @@ function applyPatch(url: URL, patch: LocationPatch): void {
   if (patch.search !== undefined) {
     if (patch.search) url.searchParams.set("search", "1");
     else url.searchParams.delete("search");
+  }
+
+  if (patch.queue !== undefined) {
+    if (patch.queue) url.searchParams.set("queue", "1");
+    else url.searchParams.delete("queue");
   }
 
   if (patch.view !== undefined) {

@@ -266,6 +266,7 @@ function renderLibrary(): string {
           ensureSession: () => Promise.resolve(),
           config: mockState.config,
           liveNow: mockState.liveNow,
+          onOpenQueue: () => {},
         }),
       ),
     );

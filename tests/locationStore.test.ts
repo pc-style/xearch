@@ -85,4 +85,16 @@ describe("previewPatch", () => {
 
     expect(clearedAndPinned).toBe("/?search=1");
   });
+
+  it("reaches the Queue page at ?queue=1, toggled independently of dashboard", () => {
+    expect(previewPatch("https://xearch.invalid/", { queue: true })).toBe("/?queue=1");
+    expect(previewPatch("https://xearch.invalid/?queue=1", { queue: false })).toBe("/");
+  });
+});
+
+describe("parseLocation queue route", () => {
+  it("reads ?queue=1 as the queue route", () => {
+    expect(parseLocation("https://xearch.invalid/?queue=1").queue).toBe(true);
+    expect(parseLocation("https://xearch.invalid/").queue).toBe(false);
+  });
 });

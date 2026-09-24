@@ -19,9 +19,15 @@ import { operatorArgs } from "../operatorToken";
 export default function ActiveQueue({
   rows,
   isAuthenticated,
+  // Optional (unlike Library.tsx/Dashboard.tsx's own required onOpenQueue,
+  // which src/App.tsx always supplies in the real tree): tests/signed-out-
+  // states.test.ts renders this alongside RecentActivity from one shared
+  // props object that has no reason to know about Queue navigation.
+  onOpenQueue,
 }: {
   rows: AccountLibraryRow[] | undefined;
   isAuthenticated: boolean;
+  onOpenQueue?: () => void;
 }) {
   if (!rows)
     return (
@@ -44,7 +50,19 @@ export default function ActiveQueue({
 
   return (
     <section className="library-section" aria-label="Active queue">
-      <h2>Active queue</h2>
+      <div className="library-section-head">
+        <h2>Active queue</h2>
+        {/* The full worker timeline — every queued/running/retryable job,
+            with wait reasons and ETAs — is a separate operator page
+            (src/library/QueueTimeline.tsx); this strip stays the compact
+            "what's downloading right now" summary. Goes through the
+            App-provided `onOpenQueue` (not a direct `pushLocation`) so the
+            pushed history entry is tracked for a correct Back — see
+            src/App.tsx's `openQueue`. */}
+        <button type="button" className="text-button" onClick={() => onOpenQueue?.()}>
+          See timeline
+        </button>
+      </div>
       {active.length === 0 ? (
         <p className="library-muted">Nothing is downloading right now.</p>
       ) : (

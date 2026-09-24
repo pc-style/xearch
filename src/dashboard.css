@@ -623,6 +623,81 @@
   overflow-wrap: anywhere;
 }
 
+/* Queue timeline (src/library/QueueTimeline.tsx) */
+.queue-timeline {
+  display: grid;
+  gap: 20px;
+}
+.queue-timeline-summary {
+  display: grid;
+  gap: 4px;
+}
+.queue-timeline-summary > p:first-child {
+  margin: 0;
+  font-size: 14px;
+  color: #eee;
+}
+.queue-timeline-list {
+  display: grid;
+  gap: 14px;
+  /* The vertical timeline: a rail down the left edge every group's marker
+     sits on, same idea as a changelog/activity feed. */
+  border-left: 2px solid #2c2c2c;
+  padding-left: 16px;
+}
+.queue-timeline-group {
+  background: #171717;
+  border: 1px solid #2c2c2c;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  position: relative;
+}
+.queue-timeline-group::before {
+  content: "";
+  position: absolute;
+  left: -21px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4a4a4a;
+}
+.queue-timeline-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #2c2c2c;
+}
+.queue-timeline-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.queue-timeline-row-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #d0d0d0;
+}
+.queue-timeline-row.is-throttled {
+  background: rgba(191, 144, 74, 0.1);
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin: -6px -8px;
+}
+.queue-throttle-band {
+  color: #d9a15a;
+  font-weight: 600;
+}
+
 @media (max-width: 760px) {
   .library {
     padding: 20px 16px;
@@ -643,5 +718,15 @@
   }
   .library-stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .queue-timeline-list {
+    padding-left: 12px;
+  }
+  .queue-timeline-group {
+    padding: 12px;
+  }
+  .queue-timeline-row {
+    flex-direction: column;
+    gap: 8px;
   }
 }
