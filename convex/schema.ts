@@ -311,8 +311,9 @@ export default defineSchema({
     pendingWork: v.optional(v.object({ unit: pendingWorkUnitValidator, count: v.number() })),
     updatedAt: v.number(),
     // A digest of the material fields (reportedState, captureIds,
-    // uniquePostCount, pendingWork, error) of the most recently APPLIED
-    // update, so a later update resent under the SAME generation number can
+    // uniquePostCount, uniquePostCountAsOf, pendingWork, error) of the most
+    // recently APPLIED update, so a later update resent under the SAME
+    // generation number can
     // be told apart from a true idempotent replay: matching digest means
     // the sender resent the identical content (duplicate_ignored); a
     // different digest under the same generation means two different

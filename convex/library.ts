@@ -9,7 +9,13 @@ import {
   type AccountLibraryRow,
   type NextAction,
 } from "./lib/contracts";
-import { allAccountJobs, jobsForAccount, resolveJobAccount } from "./lib/accounts";
+import {
+  accountPublicationCandidates,
+  allAccountJobs,
+  currentPublication,
+  jobsForAccount,
+  resolveJobAccount,
+} from "./lib/accounts";
 
 /**
  * The account-library query that replaces the job wall (to-do.md P0
@@ -123,18 +129,17 @@ export const rows = query({
         account.name.toLowerCase().includes(search),
     );
 
-    // `.first()`, not `.unique()`: `by_account` is not uniqueness-enforced
-    // by the schema (same reasoning convex/summary.ts's `computeAccountTotals`
-    // already applies) — a second row for one account would make `.unique()`
-    // throw, and because these lookups run inside `Promise.all`, that one
-    // throw would fail the whole `rows` query and show no rows at all
-    // (CodeRabbit #4089340887).
+    // Not `.unique()`: `by_account` is not uniqueness-enforced by the
+    // schema — a second row for one account would make `.unique()` throw,
+    // and because these lookups run inside `Promise.all`, that one throw
+    // would fail the whole `rows` query and show no rows at all (CodeRabbit
+    // #4089340887). Not a bare `.first()` either: that picks whichever row
+    // Convex's default `_creationTime` order puts first, which can be a
+    // stale duplicate rather than the row `currentPublication` actually
+    // identifies as current (CodeRabbit #4089916545).
     const publications = await Promise.all(
       candidates.map(([accountId]) =>
-        ctx.db
-          .query("accountPublications")
-          .withIndex("by_account", (q) => q.eq("accountId", accountId))
-          .first(),
+        accountPublicationCandidates(ctx.db, accountId).then(currentPublication),
       ),
     );
 

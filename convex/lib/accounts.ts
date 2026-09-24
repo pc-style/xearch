@@ -186,3 +186,47 @@ export async function jobsForAccount(
 
   return { jobs, exhausted: true };
 }
+
+// A handful of legacy/edge-case duplicates is the worst case this ever
+// walks into (accountPublications.by_account is not uniqueness-enforced —
+// see convex/library.ts and convex/summary.ts's own comments on `.first()`
+// there), never an unbounded scan.
+const MAX_DUPLICATE_PUBLICATIONS = 10;
+
+/**
+ * The one `accountPublications` row that reflects an account's CURRENT
+ * state, tolerant of duplicate rows existing for it.
+ *
+ * `.first()` on `by_account` alone picks whichever row Convex's default
+ * `_creationTime`-ascending order puts first for that index — the OLDEST
+ * row, which is not the same claim as "the current one" (CodeRabbit
+ * #4089916545): a stale duplicate can predate the row that has actually
+ * been receiving every applied update since. `committedGeneration` is this
+ * contract's own definition of "more current" (docs/publication-contract.md
+ * "Idempotency and staleness" — a strictly higher generation is a strictly
+ * later, accepted report), so the row with the highest one wins; `updatedAt`
+ * breaks a tie only in the coincidental case two rows share a generation.
+ */
+export function currentPublication(
+  rows: Doc<"accountPublications">[],
+): Doc<"accountPublications"> | null {
+  if (rows.length === 0) return null;
+
+  return rows.reduce((current, row) =>
+    row.committedGeneration > current.committedGeneration ||
+    (row.committedGeneration === current.committedGeneration && row.updatedAt > current.updatedAt)
+      ? row
+      : current,
+  );
+}
+
+/** Bounded read of every `accountPublications` row for one account. */
+export function accountPublicationCandidates(
+  db: Db,
+  accountId: Id<"accounts">,
+): Promise<Doc<"accountPublications">[]> {
+  return db
+    .query("accountPublications")
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .take(MAX_DUPLICATE_PUBLICATIONS);
+}

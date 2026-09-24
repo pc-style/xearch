@@ -113,17 +113,31 @@ async function insertPublication(
 }
 
 describe("library.rows", () => {
-  it("does not throw when an account has two accountPublications rows (by_account is not unique) — CodeRabbit #4089340887", async () => {
+  it("picks the row with the highest committedGeneration when an account has duplicate accountPublications rows — CodeRabbit #4089340887 / #4089916545", async () => {
     const { t, alice, a } = await setup();
     const accountId = await insertAccount(t, { handle: "adam", userId: "1001", name: "Adam" });
 
     await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
-    // Two publication rows for the same account — a state `.unique()` would
-    // throw on, since `by_account` has no uniqueness guarantee.
-    await insertPublication(t, { accountId, state: "indexing" });
-    await insertPublication(t, { accountId, state: "searchable", searchablePostCount: 5 });
+    // Two publication rows for the same account — a bare `.unique()` would
+    // throw (by_account has no uniqueness guarantee), and a bare `.first()`
+    // would pick whichever row Convex's default `_creationTime` order puts
+    // first — here, the OLDER "indexing" row, which is the wrong (stale)
+    // answer. The row with the higher committedGeneration (the contract's
+    // own definition of "more current") must win regardless of insertion
+    // order.
+    await insertPublication(t, { accountId, state: "indexing", committedGeneration: 1 });
+    await insertPublication(t, {
+      accountId,
+      state: "searchable",
+      committedGeneration: 2,
+      searchablePostCount: 5,
+    });
 
-    await expect(a.query(api.library.rows, {})).resolves.toBeDefined();
+    const rows = (await a.query(api.library.rows, {})).rows;
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].publicationState).toBe("searchable");
+    expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 5 });
   });
 
   it('carries the latest job\'s postsReceived/oldest/floorReached through to the row (for copy like "3,155 posts back to 2026-07-11")', async () => {

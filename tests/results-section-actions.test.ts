@@ -203,4 +203,19 @@ describe("operator authorization boundary in the results UI", () => {
 
     expect(html).not.toMatch(linkButton);
   });
+
+  it("shows the sign-in notice once per post card, not once per gated control (CodeRabbit #4089916567)", () => {
+    const withLink = { ...post(), links: ["https://example.com/article"] };
+    const html = render({ isOperator: false, visible: [withLink] });
+    // Isolate the one rendered <article className="post"> card: the header
+    // and overflow menu legitimately show their OWN copy of this notice for
+    // their own gated controls (Web context, Import from X) — this test is
+    // specifically about the post CARD not repeating it once per control on
+    // the same card (a linked-page button and "Fetch conversation from X").
+    const cardHtml = html.slice(html.indexOf("<article"), html.indexOf("</article>"));
+    const notice = "Sign in as an operator to use this action.";
+    const occurrences = cardHtml.split(notice).length - 1;
+
+    expect(occurrences).toBe(1);
+  });
 });

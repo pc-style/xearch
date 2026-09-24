@@ -190,10 +190,10 @@ export function PostCard({
           ))}
           {/* onRead sends the URL to the protected readLink action
               (Firecrawl) — gated the same as every other paid action
-              (CodeRabbit #4089730732). A disabled `title` alone is
-              unreliable for keyboard/touch users, so the reason is also
-              shown as visible text (CodeRabbit #4089730724). */}
-          {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
+              (CodeRabbit #4089730732). The sign-in reason for this AND
+              "Fetch conversation from X" is shown once, in the footer
+              below, rather than repeated on every card with links
+              (CodeRabbit #4089916567). */}
         </div>
       )}
       <footer>
@@ -229,9 +229,12 @@ export function PostCard({
             Open on X <ArrowUpRight size={14} />
           </a>
         </div>
-        {/* A disabled `title` alone is unreliable for keyboard/touch users
-            (CodeRabbit #4089730724) — the reason is also shown as visible
-            text. */}
+        {/* Single visible reason for BOTH gated controls on this card
+            ("Fetch conversation from X" above and any linked-page buttons
+            in the links section) — shown once per card, not once per
+            control (CodeRabbit #4089916567). A disabled `title` alone is
+            also unreliable for keyboard/touch users (CodeRabbit
+            #4089730724), which is why this exists as visible text at all. */}
         {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
         {threadStatus && (
           <p className="scope-note" role="status">
