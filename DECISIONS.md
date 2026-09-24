@@ -231,8 +231,9 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
   and terminal failed jobs go to Discord immediately. In-app/email insight
   alerts run hourly because PostHog's real-time insight alerts require
   Scale/Enterprise. Performance thresholds wait for a production baseline.
-- The personal API key for source-map upload belongs in the private VM file
-  `~/xearch-data/posthog-build.env` and is still pending. The frontend and
-  Convex code is prepared but is not published by this branch. Native Convex
+- The personal API key for source-map upload is in the private VM file
+  `~/xearch-data/posthog-build.env`; both build variants uploaded source maps
+  successfully. The frontend and Convex code is prepared but is not published
+  by this branch. Native Convex
   exception forwarding requires Convex Pro and has no documented redaction
   hook, so it is not enabled while the no-email-address rule applies.
