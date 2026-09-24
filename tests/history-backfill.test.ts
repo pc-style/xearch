@@ -136,7 +136,7 @@ describe("jobs.finish schedules the deep-history backfill", () => {
       attempt: 1,
       warnings: [],
       postsReceived: 1500,
-      oldest: "2021-01-01",
+      oldest: "2021-01-01T17:42:10.000Z",
       floorReached: true,
       expectedUserId: "123",
       profile: { handle: "theo", userId: "123", name: "Theo", joined: FLOOR },
