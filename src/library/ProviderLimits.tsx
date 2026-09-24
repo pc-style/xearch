@@ -7,6 +7,7 @@ const PROVIDER_DISPLAY_NAME: Record<ProviderLimit["provider"], string> = {
   receiver: "Raw-capture receiver",
   search: "Search backend",
 };
+
 const PROVIDERS = ["xmd", "receiver", "search"] as const;
 
 /**
@@ -31,6 +32,7 @@ export default function ProviderLimits({
   const throttled = limits?.filter(
     (l): l is Extract<ProviderLimit, { kind: "throttled" }> => l.kind === "throttled",
   );
+
   return (
     <div>
       <h3 className="library-subhead">Provider limits</h3>

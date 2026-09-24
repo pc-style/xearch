@@ -4,5 +4,6 @@ export function serviceToken(
   env: Record<string, string | undefined> = process.env,
 ) {
   const name = capability === "search" ? "SEARCH_SERVICE_TOKEN" : "RAW_CAPTURE_TOKEN";
+
   return env[name] ?? env.DATA_SERVICE_TOKEN;
 }

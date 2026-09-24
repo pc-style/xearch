@@ -20,6 +20,7 @@ const profile = {
   name: "Theo",
   future_field: { keep: true },
 };
+
 const raw = {
   post: {
     id: "999",
@@ -31,11 +32,13 @@ const raw = {
   },
   extra_event_metadata: 8,
 };
+
 const terminal = {
   meta: { truncated: true, oldest: "2026-01-01", floor_reached: false },
   profile,
   extra_summary: true,
 };
+
 const request: CollectionRequest = {
   runId: "run-1",
   attempt: 1,
@@ -43,6 +46,7 @@ const request: CollectionRequest = {
   input: "theo",
   format: "ndjson",
 };
+
 function client(lines: RawObject[], options: { noSummary?: boolean; userId?: string } = {}) {
   const fetcher = vi.fn<typeof fetch>(async (input) =>
     requestUrl(input).includes("/posts?")
@@ -52,20 +56,26 @@ function client(lines: RawObject[], options: { noSummary?: boolean; userId?: str
           profile: { ...profile, id: options.userId ?? profile.id },
         }),
   );
+
   return { xmd: new XmdClient("test-key", fetcher), fetcher };
 }
+
 function receiver() {
   const captures: Capture[] = [];
+
   const sink = vi.fn<(capture: Capture) => Promise<Receipt>>(async (capture) => {
     captures.push(structuredClone(capture));
+
     return {
       captureId: await captureId(JSON.stringify(capture)),
       receiptId: `receipt-${captures.length}`,
       durable: true as const,
     };
   });
+
   return { captures, sink, ack: vi.fn<() => Promise<void>>(async () => {}) };
 }
+
 describe("x.md raw acquisition handoff", () => {
   it("defaults backfills to JSON and preserves the complete newest-first envelope", async () => {
     const envelope = {
@@ -74,16 +84,20 @@ describe("x.md raw acquisition handoff", () => {
       meta: terminal.meta,
       future: { untouched: true },
     };
+
     const fetcher = vi.fn<typeof fetch>(async (input) =>
       Response.json(requestUrl(input).includes("/posts?") ? envelope : { profile }),
     );
+
     const r = receiver();
+
     const result = await collectXmd(
       new XmdClient("test-key", fetcher),
       { ...request, format: undefined, refresh: true },
       r.sink,
       r.ack,
     );
+
     const url = new URL(requestUrl(fetcher.mock.calls[1][0]));
     expect(url.searchParams.get("format")).toBe("json");
     expect(url.searchParams.get("refresh")).toBe("true");
@@ -98,6 +112,7 @@ describe("x.md raw acquisition handoff", () => {
         requestUrl(input).includes("/posts?") ? { profile, posts: [raw.post] } : { profile },
       ),
     );
+
     const r = receiver();
     await expect(
       collectXmd(
@@ -122,7 +137,9 @@ describe("x.md raw acquisition handoff", () => {
         requestUrl(input).includes("/posts?") ? continuationMissingProfile : { profile },
       ),
     );
+
     const r = receiver();
+
     const result = await collectXmd(
       new XmdClient("test-key", fetcher),
       {
@@ -134,6 +151,7 @@ describe("x.md raw acquisition handoff", () => {
       r.sink,
       r.ack,
     );
+
     expect(result.postsReceived).toBe(2);
     expect(result.nextUntil).toBe("2026-08-16T03:00:00.000Z");
     expect(r.captures.at(-1)?.terminal).toBe("complete");
@@ -141,9 +159,11 @@ describe("x.md raw acquisition handoff", () => {
   });
   it("still rejects a continuation page missing posts or meta as malformed, profile or not", async () => {
     const malformed = { ...continuationMissingProfile, meta: undefined };
+
     const fetcher = vi.fn<typeof fetch>(async (input) =>
       Response.json(requestUrl(input).includes("/posts?") ? malformed : { profile }),
     );
+
     const r = receiver();
     await expect(
       collectXmd(
@@ -170,6 +190,7 @@ describe("x.md raw acquisition handoff", () => {
         requestUrl(input).includes("/posts?") ? continuationMissingProfile : { profile },
       ),
     );
+
     const r = receiver();
     await expect(
       collectXmd(
@@ -189,6 +210,7 @@ describe("x.md raw acquisition handoff", () => {
           : { profile },
       ),
     );
+
     const r = receiver();
     await expect(
       collectXmd(
@@ -231,6 +253,7 @@ describe("x.md raw acquisition handoff", () => {
         extra: { preserved: true },
       },
     };
+
     const { xmd } = client([raw, problem]);
     const r = receiver();
     await expect(collectXmd(xmd, request, r.sink, r.ack)).rejects.toMatchObject({
@@ -285,43 +308,53 @@ describe("x.md raw acquisition handoff", () => {
       degraded: true,
       future: [1, 2],
     };
+
     const xmd = new XmdClient(
       undefined,
       vi.fn<typeof fetch>(async () => Response.json(response)),
     );
+
     const r = receiver();
+
     const result = await collectXmd(
       xmd,
       { ...request, kind: "live", input: "convex" },
       r.sink,
       r.ack,
     );
+
     expect(result.nextCursor).toBe("opaque");
     expect(result.warnings[0]).toContain("web-indexed");
     expect(r.captures[0].records[0].payload).toEqual(response);
   });
   it("decodes multibyte text across arbitrary NDJSON transport chunks", async () => {
     const bytes = new TextEncoder().encode(JSON.stringify(raw) + "\n" + JSON.stringify(terminal));
+
     const stream = new ReadableStream({
       start(c) {
         for (let i = 0; i < bytes.length; i += 3) c.enqueue(bytes.slice(i, i + 3));
         c.close();
       },
     });
+
     const xmd = new XmdClient(
       undefined,
       vi.fn<typeof fetch>(async () => new Response(stream)),
     );
+
     const events = [];
+
     for await (const event of xmd.bulk("theo", { maxPosts: 500 })) events.push(event);
     expect(events).toEqual([raw, terminal]);
   });
   it("supports both x.md origins, refresh, and bearer auth without URL credentials", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(terminal)));
     const xmd = new XmdClient("secret", fetcher, "https://x.pcstyle.dev");
+
     for await (const _ of xmd.bulk("@theo", { maxPosts: 500, refresh: true })) {
       /* drain */
     }
+
     const [url, init] = fetcher.mock.calls[0];
     expect(requestUrl(url)).toContain("https://x.pcstyle.dev/api/v1/profiles/theo/posts?");
     expect(requestUrl(url)).toContain("refresh=true");
@@ -337,6 +370,7 @@ describe("x.md raw acquisition handoff", () => {
         Response.json({ code: "rate_limited" }, { status: 429, headers: { "Retry-After": "90" } }),
       ),
     );
+
     await expect(xmd.read("profile", "theo")).rejects.toMatchObject({
       retryable: true,
       retryAfter: 90_000,
@@ -344,6 +378,7 @@ describe("x.md raw acquisition handoff", () => {
     expect(retryDelay("Thu, 01 Jan 2026 00:01:00 GMT", Date.parse("2026-01-01"))).toBe(60_000);
   });
 });
+
 describe("durable handoff receipts", () => {
   const capture: Capture = {
     version: 1,
@@ -359,6 +394,7 @@ describe("durable handoff receipts", () => {
     records: [{ receivedAt: 1, payload: raw }],
     terminal: "complete",
   };
+
   it("retries an uncertain transport with identical bytes and idempotency key", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -370,6 +406,7 @@ describe("durable handoff receipts", () => {
           receiptId: "ok",
         }),
       );
+
     await expect(
       deliverCapture("https://data.example/captures", "data-token", capture, fetcher),
     ).resolves.toMatchObject({ durable: true });
@@ -397,12 +434,14 @@ describe("durable handoff receipts", () => {
           headers: { Location: "https://other.example" },
         }),
     );
+
     await expect(
       deliverCapture("https://data.example/captures", "secret", capture, fetcher),
     ).rejects.toMatchObject({ code: "handoff_rejected" });
     expect(fetcher.mock.calls[0][1]?.redirect).toBe("error");
   });
 });
+
 it.each([
   "http://localhost",
   "https://127.0.0.1/a",

@@ -39,10 +39,13 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
   const requestCode = async (e: FormEvent) => {
     e.preventDefault();
     const trimmed = email.trim().toLowerCase();
+
     if (!EMAIL_PATTERN.test(trimmed)) {
       setError("Enter a valid email address.");
+
       return;
     }
+
     await run(async () => {
       await signIn("email", { email: trimmed });
       setEmail(trimmed);
@@ -54,10 +57,13 @@ export function EmailSignIn({ className, onSignedIn }: EmailSignInProps) {
   const verifyCode = async (e: FormEvent) => {
     e.preventDefault();
     const trimmedCode = code.trim();
+
     if (!trimmedCode) {
       setError("Enter the code from your email.");
+
       return;
     }
+
     await run(async () => {
       await signIn("email", { email, code: trimmedCode });
       setCode("");

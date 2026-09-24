@@ -21,10 +21,14 @@ export const IMPORTS_UNAVAILABLE = "Imports are not available on this site.";
 /** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {
   if (config.indexing) return undefined;
+
   if (!config.xmd) return "Indexing needs an x.md key. Configure it in Connections.";
+
   if (config.collectorMode === "outbound" && !config.handoff)
     return "The download worker is offline. Imports will be available when it reconnects.";
+
   if (!config.handoff) return "Indexing needs a raw-capture receiver. Configure it in Connections.";
+
   return "Indexing is temporarily unavailable.";
 }
 
@@ -46,8 +50,10 @@ export type ServiceHealthStatus =
 
 export function serviceHealthLabel(status: ServiceHealthStatus): string {
   if (status.kind === "unknown") return "No health report received yet";
+
   if (status.stale)
     return `Stale reading from ${new Date(status.observedAt).toLocaleString()} — treat with caution`;
+
   return status.healthy ? "Healthy" : "Unhealthy";
 }
 
@@ -87,8 +93,11 @@ export type HandoffState =
  */
 export function handoffReady(state: HandoffState | undefined, now: number): boolean | undefined {
   if (!state) return undefined;
+
   if (state.kind === "configured") return state.ok;
+
   if (state.lastSeenAt === undefined) return undefined;
+
   return state.lastSeenAt !== null && now - state.lastSeenAt < WORKER_LIVE_WINDOW_MS;
 }
 
@@ -106,6 +115,7 @@ export type Connection = {
    */
   proves?: "configured" | "live";
 };
+
 /**
  * The "stores imported posts" row in the Connections panel means two
  * different things depending on `convex/integrations.ts`'s `configured`
@@ -127,6 +137,7 @@ export function receiverConnection(
       note: "Connects to this deployment on its own and reconnects automatically — there's nothing to set here.",
       proves: "live",
     };
+
   return {
     name: "Raw capture receiver",
     ready,

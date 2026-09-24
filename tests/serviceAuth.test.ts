@@ -8,6 +8,7 @@ describe("service capability credentials", () => {
       RAW_CAPTURE_TOKEN: "ingest",
       DATA_SERVICE_TOKEN: "legacy",
     };
+
     expect(serviceToken("search", env)).toBe("read");
     expect(serviceToken("capture", env)).toBe("ingest");
   });

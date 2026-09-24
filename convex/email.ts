@@ -4,7 +4,9 @@ import { AgentMail, type OutboundId } from "@agentmail/convex";
 import { v, ConvexError } from "convex/values";
 import { user } from "./access";
 import type { Doc } from "./_generated/dataModel";
+
 const mail = new AgentMail(components.agentmail);
+
 const DIGEST_ROW_LIMIT = 10;
 
 // Single source of truth for the digest's subject/body so `preview` (safe,
@@ -12,6 +14,7 @@ const DIGEST_ROW_LIMIT = 10;
 // this is the whole "digest", there is no second mail outbox to keep in sync.
 function buildDigest(result: Doc<"sessions">) {
   const rows = result.rows.slice(0, DIGEST_ROW_LIMIT);
+
   return {
     subject: `Xearch: ${result.raw.replace(/[\r\n]/g, " ").slice(0, 100)}`,
     text:
@@ -30,10 +33,12 @@ export const preview = query({
   handler: async (ctx, args) => {
     const owner = await user(ctx);
     const result = await ctx.db.get(args.sessionId);
+
     if (!result || result.owner !== owner || result.status !== "complete" || !result.rows.length)
       throw new ConvexError("There are no completed search results to preview.");
     const account = await ctx.db.get(owner);
     const { subject, text, rowCount, totalCount } = buildDigest(result);
+
     return {
       subject,
       text,
@@ -56,39 +61,53 @@ export const send = mutation({
     // in scripts/setup-production.mjs - a config flag is not a substitute
     // for a default-secure check.
     const account = await ctx.db.get(owner);
+
     if (
       !account?.emailVerificationTime ||
       account.email?.toLowerCase() !== args.recipient.trim().toLowerCase()
     )
       throw new ConvexError("Email sending requires sign-in with a verified email address.");
+
     if (!process.env.AGENTMAIL_API_KEY || !process.env.AGENTMAIL_INBOX_ID)
       throw new ConvexError("Configure AgentMail on the backend to send results.");
+
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.recipient) || args.recipient.length > 254)
       throw new ConvexError("Enter a valid email address.");
     const result = await ctx.db.get(args.sessionId);
+
     if (!result || result.owner !== owner || result.status !== "complete" || !result.rows.length)
       throw new ConvexError("There are no completed search results to send.");
     const { subject, text } = buildDigest(result);
+
     const outboundId = await mail.sendMessage(ctx, process.env.AGENTMAIL_INBOX_ID, {
       to: args.recipient,
       subject,
       text,
     });
+
     await ctx.db.insert("deliveries", { owner, outboundId, query: result.raw });
   },
 });
+
 export const deliveries = query({
   args: {},
   handler: async (ctx) => {
     const owner = await user(ctx);
+
     const rows = await ctx.db
       .query("deliveries")
       .withIndex("by_owner", (q) => q.eq("owner", owner))
       .order("desc")
       .take(5);
+
     return Promise.all(
       rows.map(async (row) => ({
         ...row,
+        // SAFETY: `deliveries.outboundId` (convex/schema.ts) is written only in
+        // the `send` mutation below from `mail.sendMessage`'s own return value,
+        // which is typed `OutboundId`; the field is `v.string()` in the schema
+        // only because the component's branded `Id<"outboundMessages">` type
+        // cannot be expressed as a Convex validator.
         delivery: await mail.status(ctx, row.outboundId as OutboundId),
       })),
     );

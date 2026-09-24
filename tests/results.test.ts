@@ -42,6 +42,7 @@ describe("Effect search response contract", () => {
         cursorSignUs: 1,
       },
     };
+
     expect(decodeSearchResponse({ rows: [], stats })).toEqual({ rows: [], stats, warnings: [] });
     expect(() =>
       decodeSearchResponse({
@@ -66,6 +67,7 @@ describe("Effect search response contract", () => {
       avatar: "https://example.com/avatar.png",
       displayName: "Example",
     };
+
     expect(
       decodeSearchResponse({
         rows: [{ ...row, privateField: "omit" }],
@@ -113,6 +115,7 @@ describe("Effect search response contract", () => {
       nextCursor: "a".repeat(4000),
       warnings: Array(10).fill("a".repeat(500)),
     });
+
     expect(result.rows).toHaveLength(20);
     expect(result.nextCursor).toHaveLength(4000);
     expect(result.warnings).toHaveLength(10);

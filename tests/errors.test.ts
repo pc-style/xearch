@@ -13,6 +13,7 @@ describe("job action error text", () => {
     const wrapped = new Error(
       "[CONVEX M(jobs:retry)] [Request ID: abc123] Server Error\nUncaught Error: Enter a valid X handle, without a URL.\n    at handler (../convex/jobs.ts:42:11)",
     );
+
     expect(describeError(wrapped)).toBe("Enter a valid X handle, without a URL.");
   });
 

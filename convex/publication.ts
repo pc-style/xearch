@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { v } from "convex/values";
 import { anyApi } from "convex/server";
 import { httpAction, internalMutation } from "./_generated/server";
@@ -41,12 +42,17 @@ function publicationServiceToken(env: Record<string, string | undefined> = proce
 
 function bearerToken(request: Request): string | undefined {
   const header = request.headers.get("Authorization");
+
   if (!header) return undefined;
   const [scheme, ...rest] = header.split(" ");
+
   return scheme === "Bearer" && rest.length > 0 ? rest.join(" ") : undefined;
 }
 
-function json(body: unknown, status: number): Response {
+/** A JSON-serializable value — exactly what `JSON.stringify` accepts. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function json(body: JsonValue, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -54,76 +60,54 @@ function json(body: unknown, status: number): Response {
 }
 
 // --- Inbound envelope narrowing -------------------------------------------
-// `await request.json()` is `unknown`; narrow every field by hand and fail
+// `await request.json()` is `unknown`; decode it with a schema and fail
 // closed with 400 on anything that doesn't match the shape, per
 // convex/_generated/ai/guidelines.md ("Http endpoint syntax"). This checks
 // only *shape* (right types, right literals) — contract-level rules that
 // depend on more than one field (e.g. a "failed" report needing `error`)
 // belong in applyUpdate below, where they can be logged as a proper
 // `rejected_invalid` outcome instead of a bare 400.
+//
+// `.strict()` at every level rejects an unlisted key, exactly like the
+// hand-rolled key-set checks this replaced. applyUpdate's `args` (below) is
+// `publicationUpdateEnvelope.fields`, a strict Convex object validator that
+// throws an uncaught error on any key it wasn't told about — including
+// inside the nested `pendingWork`/`error` objects. Forwarding a
+// well-formed-but-additive body (an extra debug field, a future envelope
+// field a sender added before this receiver knows about it) straight
+// through would crash the httpAction instead of failing closed with the
+// documented 400.
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-// No unlisted key survives shape-checking, at any level of the envelope.
-// applyUpdate's `args` (below) is `publicationUpdateEnvelope.fields`, a
-// strict Convex object validator that throws an uncaught error on any key
-// it wasn't told about — including inside the nested `pendingWork`/`error`
-// objects. Forwarding a well-formed-but-additive body (an extra debug
-// field, a future envelope field a sender added before this receiver knows
-// about it) straight through would crash the httpAction instead of failing
-// closed with the documented 400. Whitelisting every level here, from the
-// same field list `applyUpdate` uses, is what keeps "unknown shape -> 400"
-// true instead of "unknown shape -> uncaught exception".
-const ENVELOPE_KEYS = new Set(Object.keys(publicationUpdateEnvelope.fields));
-const PENDING_WORK_KEYS = new Set(["unit", "count"]);
-const ERROR_KEYS = new Set(["message", "code"]);
-function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
-  return Object.keys(value).every((key) => allowed.has(key));
-}
-const REPORTED_STATES = new Set(["indexing", "searchable", "failed"]);
-const PENDING_WORK_UNITS = new Set(["jobs", "captures", "posts"]);
-
-export // A count of things is a non-negative integer. Applies to uniquePostCount and
+// A count of things is a non-negative integer. Applies to uniquePostCount and
 // pendingWork.count only; generation and timestamps stay finite-number checks.
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
+const countSchema = z.number().int().min(0);
 
-function parseEnvelope(body: unknown): PublicationUpdateEnvelope | null {
-  if (!isRecord(body)) return null;
-  if (!hasOnlyKeys(body, ENVELOPE_KEYS)) return null;
-  if (body.version !== 1) return null;
-  if (typeof body.handle !== "string" || body.handle.length === 0) return null;
-  if (!isStringArray(body.captureIds)) return null;
-  if (typeof body.generation !== "number" || !Number.isFinite(body.generation)) return null;
-  if (typeof body.reportedState !== "string" || !REPORTED_STATES.has(body.reportedState))
-    return null;
-  if (typeof body.observedAt !== "number" || !Number.isFinite(body.observedAt)) return null;
-  if (body.providerAccountId !== undefined && typeof body.providerAccountId !== "string")
-    return null;
-  if (body.runId !== undefined && typeof body.runId !== "string") return null;
-  if (body.uniquePostCount !== undefined && !isCount(body.uniquePostCount)) return null;
-  if (body.uniquePostCountAsOf !== undefined && typeof body.uniquePostCountAsOf !== "number")
-    return null;
-  if (body.pendingWork !== undefined) {
-    if (!isRecord(body.pendingWork)) return null;
-    if (!hasOnlyKeys(body.pendingWork, PENDING_WORK_KEYS)) return null;
-    if (typeof body.pendingWork.unit !== "string" || !PENDING_WORK_UNITS.has(body.pendingWork.unit))
-      return null;
-    if (!isCount(body.pendingWork.count)) return null;
-  }
-  if (body.error !== undefined) {
-    if (!isRecord(body.error)) return null;
-    if (!hasOnlyKeys(body.error, ERROR_KEYS)) return null;
-    if (typeof body.error.message !== "string") return null;
-    if (body.error.code !== undefined && typeof body.error.code !== "string") return null;
-  }
-  return body as PublicationUpdateEnvelope;
-}
+const publicationUpdateEnvelopeSchema = z
+  .object({
+    version: z.literal(1),
+    providerAccountId: z.string().optional(),
+    handle: z.string().min(1),
+    runId: z.string().optional(),
+    captureIds: z.array(z.string()),
+    generation: z.number().finite(),
+    reportedState: z.enum(["indexing", "searchable", "failed"]),
+    uniquePostCount: countSchema.optional(),
+    uniquePostCountAsOf: z.number().optional(),
+    pendingWork: z
+      .strictObject({
+        unit: z.enum(["jobs", "captures", "posts"]),
+        count: countSchema,
+      })
+      .optional(),
+    error: z
+      .strictObject({
+        message: z.string(),
+        code: z.string().optional(),
+      })
+      .optional(),
+    observedAt: z.number().finite(),
+  })
+  .strict();
 
 // --- HTTP entry point -----------------------------------------------------
 
@@ -133,20 +117,25 @@ export const receiveUpdate = httpAction(async (ctx, request) => {
   // staleness". A missing token configuration fails closed too: an
   // unconfigured receiver is never treated as an open one.
   const expected = publicationServiceToken();
+
   if (!expected || bearerToken(request) !== expected) {
     return json({ outcome: "rejected_unauthorized" }, 401);
   }
 
   let body: unknown;
+
   try {
     body = await request.json();
   } catch {
     return json({ error: "Request body must be JSON." }, 400);
   }
 
-  const envelope = parseEnvelope(body);
-  if (!envelope)
+  const parsed = publicationUpdateEnvelopeSchema.safeParse(body);
+
+  if (!parsed.success)
     return json({ error: "Request body does not match publicationUpdateEnvelope." }, 400);
+
+  const envelope: PublicationUpdateEnvelope = parsed.data;
 
   const result: {
     outcome: "applied" | "stale_ignored" | "duplicate_ignored" | "rejected_invalid";
@@ -199,6 +188,18 @@ async function logUpdate(
   });
 }
 
+type AccountPublicationDoc = {
+  accountId: Id<"accounts">;
+  state: "indexing" | "searchable" | "failed";
+  committedGeneration: number;
+  updatedAt: number;
+  searchablePostCount?: number;
+  searchablePostCountAsOf?: number;
+  lastPublishedAt?: number;
+  lastError?: { message: string; observedAt: number; generation: number };
+  pendingWork?: { unit: "jobs" | "captures" | "posts"; count: number };
+};
+
 export const applyUpdate = internalMutation({
   args: publicationUpdateEnvelope.fields,
   returns: v.object({
@@ -222,14 +223,17 @@ export const applyUpdate = internalMutation({
         "rejected_invalid",
         'A "failed" update must include an error.',
       );
+
       return {
         outcome: "rejected_invalid" as const,
         rejectionReason: 'A "failed" update must include an error.',
       };
     }
+
     if (args.uniquePostCount !== undefined && args.uniquePostCountAsOf === undefined) {
       const reason = "uniquePostCountAsOf is required whenever uniquePostCount is present.";
       await logUpdate(ctx, args, receivedAt, undefined, "rejected_invalid", reason);
+
       return { outcome: "rejected_invalid" as const, rejectionReason: reason };
     }
 
@@ -238,9 +242,11 @@ export const applyUpdate = internalMutation({
     // An update that cannot resolve to an existing account is rejected, not
     // used to invent one. docs/publication-contract.md "Account identity".
     const accountId = (await resolveAccount(ctx.db, args))?._id;
+
     if (!accountId) {
       const reason = "No known account matches this update's providerAccountId/handle.";
       await logUpdate(ctx, args, receivedAt, undefined, "rejected_invalid", reason);
+
       return { outcome: "rejected_invalid" as const, rejectionReason: reason };
     }
 
@@ -248,6 +254,7 @@ export const applyUpdate = internalMutation({
       .query("accountPublications")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .unique();
+
     const stored = existing?.committedGeneration;
 
     // Generation-based idempotency and staleness, entirely per account.
@@ -255,6 +262,7 @@ export const applyUpdate = internalMutation({
     // means no update has ever been accepted for this account, so this one
     // always applies regardless of its numeric value.
     let outcome: "applied" | "stale_ignored" | "duplicate_ignored";
+
     if (stored === undefined) outcome = "applied";
     else if (args.generation < stored) outcome = "stale_ignored";
     else if (args.generation === stored) outcome = "duplicate_ignored";
@@ -265,6 +273,7 @@ export const applyUpdate = internalMutation({
       // resent generation number must reflect the exact same content, and
       // an "idempotent replay" must be a true no-op, not a reinterpretation.
       await logUpdate(ctx, args, receivedAt, accountId, outcome);
+
       return { outcome, committedGeneration: stored };
     }
 
@@ -288,27 +297,19 @@ export const applyUpdate = internalMutation({
     // cleared) when a later applied update omits the field, exactly like
     // `lastError` is never cleared by a later success that doesn't restate
     // failure.
-    const doc: {
-      accountId: Id<"accounts">;
-      state: "indexing" | "searchable" | "failed";
-      committedGeneration: number;
-      updatedAt: number;
-      searchablePostCount?: number;
-      searchablePostCountAsOf?: number;
-      lastPublishedAt?: number;
-      lastError?: { message: string; observedAt: number; generation: number };
-      pendingWork?: { unit: "jobs" | "captures" | "posts"; count: number };
-    } = {
+    const doc: AccountPublicationDoc = {
       accountId,
       state: args.reportedState,
       committedGeneration: args.generation,
       updatedAt: receivedAt,
     };
+
     if (args.reportedState === "searchable" && args.uniquePostCount !== undefined) {
       doc.searchablePostCount = args.uniquePostCount;
       doc.searchablePostCountAsOf = args.uniquePostCountAsOf;
       doc.lastPublishedAt = receivedAt;
     }
+
     if (args.reportedState === "failed" && args.error) {
       doc.lastError = {
         message: args.error.message,
@@ -316,13 +317,16 @@ export const applyUpdate = internalMutation({
         generation: args.generation,
       };
     }
+
     if (args.pendingWork !== undefined) {
       doc.pendingWork = args.pendingWork;
     }
+
     if (existing) await ctx.db.patch(existing._id, doc);
     else await ctx.db.insert("accountPublications", doc);
 
     await logUpdate(ctx, args, receivedAt, accountId, "applied");
+
     return { outcome: "applied" as const, committedGeneration: args.generation };
   },
 });

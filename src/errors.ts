@@ -6,11 +6,11 @@ import { ConvexError } from "convex/values";
  * plain thrown Error, whose `.message` Convex wraps as
  * "[CONVEX M(fn)] [Request ID: ...] Server Error ... Uncaught Error: <text>"
  * to avoid leaking internals. Strip that wrapper down to the original text. */
-export const describeError = (e: unknown) =>
-  e instanceof ConvexError
-    ? String(e.data)
-    : e instanceof Error
-      ? e.message.replace(/\[CONVEX[^]*?Uncaught (?:Error|ConvexError):\s*/, "").split("\n")[0]
+export const describeError = (cause: unknown) =>
+  cause instanceof ConvexError
+    ? String(cause.data)
+    : cause instanceof Error
+      ? cause.message.replace(/\[CONVEX[^]*?Uncaught (?:Error|ConvexError):\s*/, "").split("\n")[0]
       : "Something went wrong. Try again.";
 
 /** Where one task reports: a busy flag and the single line of text the
@@ -40,15 +40,17 @@ export type TaskOptions = {
  * cannot lower a `try`/`finally` written inside a component or hook. Keeping
  * the control flow here, and the state in the components, lets both be true.
  */
-export async function runTask(
-  fn: () => Promise<unknown>,
+export async function runTask<T>(
+  fn: () => Promise<T>,
   report: TaskReport,
   options: TaskOptions = {},
 ) {
   report.setMessage("");
   report.setBusy(true);
+
   try {
     await fn();
+
     if (options.success) report.setMessage(options.success);
   } catch (e) {
     report.setMessage(describeError(e));
@@ -64,13 +66,10 @@ export type Task = {
   message: string;
   setMessage: (message: string) => void;
   /** A bare string is shorthand for `{ success }`. */
-  run: (fn: () => Promise<unknown>, options?: string | TaskOptions) => Promise<void>;
+  run: <T>(fn: () => Promise<T>, options?: string | TaskOptions) => Promise<void>;
 };
 
-export type TaskRunner = (
-  fn: () => Promise<unknown>,
-  options?: string | TaskOptions,
-) => Promise<void>;
+export type TaskRunner = <T>(fn: () => Promise<T>, options?: string | TaskOptions) => Promise<void>;
 
 /**
  * The bookkeeping `useTask` needs when runs overlap, as a plain function so
@@ -96,8 +95,9 @@ export function createTaskRunner(
 ): TaskRunner {
   let inFlight = 0;
   let latest = 0;
-  return (fn, options = {}) => {
-    const settings: TaskOptions = typeof options === "string" ? { success: options } : options;
+
+  return <T>(fn: () => Promise<T>, options: string | TaskOptions = {}) => {
+    const settings: TaskOptions = options instanceof Object ? options : { success: options };
     const listening = settings.alive;
     latest += 1;
     const token = latest;
@@ -105,17 +105,21 @@ export function createTaskRunner(
     // cleaned up); `token` is this runner's. Both must hold to say anything.
     const publishes = () => token === latest && (!listening || listening());
     inFlight += 1;
+
     return runTask(
       fn,
       {
         setBusy: (value) => {
           if (value) {
             if (!listening || listening()) setBusy(true);
+
             return;
           }
+
           // Counted down even when this run has gone stale, or the count
           // would leak and the spinner would never clear.
           inFlight = Math.max(0, inFlight - 1);
+
           if (inFlight === 0) setBusy(false);
         },
         setMessage: (value) => {
@@ -142,5 +146,6 @@ export function useTask(): Task {
   // bookkeeping survives re-renders — which is the whole point of it living
   // outside the render body.
   const [run] = useState(() => createTaskRunner(setBusy, setMessage));
+
   return { busy, message, setMessage, run };
 }

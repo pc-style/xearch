@@ -30,10 +30,12 @@ export default function AccountLibrary({
 }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<PublicationState | "">("");
+
   const library = useQuery(
     api.library.rows,
     isAuthenticated ? { search: search.trim() || undefined, status: status || undefined } : "skip",
   );
+
   const rows = library?.rows;
   const filtersActive = search.trim().length > 0 || status !== "";
 
@@ -59,7 +61,14 @@ export default function AccountLibrary({
         <select
           aria-label="Filter by publication status"
           value={status}
-          onChange={(e) => setStatus(e.target.value as PublicationState | "")}
+          onChange={(e) =>
+            setStatus(
+              // SAFETY: every <option> below comes from `STATUS_OPTIONS`, whose
+              // `value`s are typed `PublicationState | ""`, so the <select>'s
+              // string value is always one of them.
+              e.target.value as PublicationState | "",
+            )
+          }
           disabled={!isAuthenticated}
         >
           {STATUS_OPTIONS.map((o) => (

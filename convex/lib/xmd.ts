@@ -1,13 +1,33 @@
+import { Match } from "effect";
 import { z } from "zod";
 
+/** A JSON-serializable value — exactly what `JSON.parse`/`response.json()` produce. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+// Deliberately lenient on each value (not `jsonValue`/`z.json()`): this
+// schema's only job is confirming "a plain string-keyed record", the same
+// thing the pre-existing `Record<string, unknown>` contract checked. Callers
+// across this app and convex/integrations.ts pass provider HTTP bodies and
+// SDK response objects alike; none of them are re-validated field-by-field
+// here, and this schema throwing on a shape a caller has always relied on
+// working would be a regression this rule was never meant to cause.
 const object = z.record(z.string(), z.unknown());
-export type RawObject = Record<string, unknown>;
+
+export type RawObject = Record<string, JsonValue>;
+
 /**
  * Services this app calls that can throttle it. Mirrors
  * `throttleProviderValidator` in convex/schema.ts, restated as a plain literal
  * union so this provider-client layer never imports Convex.
  */
 export type ThrottleProvider = "xmd" | "receiver" | "search";
+
 /**
  * What a provider told us about its own limits, as facts. Every optional field
  * is present ONLY when the response genuinely carried it: an absent value stays
@@ -29,6 +49,7 @@ export type ProviderThrottle = {
   /** From `Retry-After`, else the problem body's `retry_after` seconds. */
   retryAfterMs?: number;
 };
+
 export class ProviderError extends Error {
   constructor(
     public code: string,
@@ -42,21 +63,38 @@ export class ProviderError extends Error {
     super(message);
   }
 }
-export function record(value: unknown): RawObject {
-  return object.parse(value);
+
+export function record<T extends JsonValue | Record<string, unknown>>(value: T): RawObject {
+  // SAFETY: `object`'s schema only checks "is a plain string-keyed record",
+  // exactly what the pre-existing `Record<string, unknown>` contract
+  // guaranteed; every caller already narrows individual fields with
+  // `string`/`record`/`finiteNumber` before trusting them, so treating an
+  // unvalidated value as `JsonValue` here is no less safe than the `unknown`
+  // it replaces.
+  return object.parse(value) as RawObject;
 }
-export function string(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+
+const stringSchema = z.string();
+
+export function string(value: JsonValue | undefined): string | undefined {
+  const result = stringSchema.safeParse(value);
+
+  return result.success ? result.data : undefined;
 }
+
 export function handle(value: string): string {
   const result = value.trim().replace(/^@/, "");
+
   if (!/^[A-Za-z0-9_]{1,15}$/.test(result))
     throw new Error("Enter a valid X handle, without a URL.");
+
   return result.toLowerCase();
 }
+
 export function publicUrl(value: string): string {
   const url = new URL(value);
   const host = url.hostname.toLowerCase();
+
   // Provider-side fetching still enforces its own DNS/private-network protection.
   if (
     url.protocol !== "https:" ||
@@ -72,35 +110,59 @@ export function publicUrl(value: string): string {
   )
     throw new Error("Use a public HTTPS website URL.");
   url.hash = "";
+
   return url.toString();
 }
+
 export function statusUrl(value: string): string {
   const url = new URL(publicUrl(value));
+
   if (
     !["x.com", "www.x.com", "twitter.com", "www.twitter.com"].includes(url.hostname) ||
     !/^\/[A-Za-z0-9_]{1,15}\/status\/\d+$/.test(url.pathname)
   )
     throw new Error("Paste an X post link, including /status/ and its ID.");
+
   return `https://x.com${url.pathname}`;
 }
+
 export function retryDelay(value: string | null, now = Date.now()): number {
   if (!value) return 30_000;
   const seconds = Number(value);
+
   return Math.min(
     86_400_000,
     Math.max(1000, Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now || 30_000),
   );
 }
+
 function compact<T extends object>(value: T): T {
+  // SAFETY: dropping only `undefined`-valued entries from `T`'s own entries
+  // cannot introduce a key `T` doesn't already declare, and every remaining
+  // value keeps its original (non-`undefined`) type, so the result still
+  // satisfies `T`.
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
-function finiteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
-  if (typeof value !== "string" || value.trim() === "") return undefined;
-  const parsed = Number(value);
+
+const finiteNumberSchema = z.number().finite();
+
+const nonEmptyTrimmedString = z.string().trim().min(1);
+
+function finiteNumber(value: JsonValue | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const direct = finiteNumberSchema.safeParse(value);
+
+  if (direct.success) return direct.data;
+  const text = nonEmptyTrimmedString.safeParse(value);
+
+  if (!text.success) return undefined;
+  const parsed = Number(text.data);
+
   return Number.isFinite(parsed) ? parsed : undefined;
 }
+
 const unquote = (value: string) => value.replace(/^"([\s\S]*)"$/, "$1");
+
 /**
  * Epoch ms for a `RateLimit-Reset`-style value. The IETF field means
  * delta-seconds, but plenty of services send an absolute epoch instead, so
@@ -113,49 +175,67 @@ export function resetAtFrom(
 ): number | undefined {
   if (value === undefined || value === null || value.trim() === "") return undefined;
   const seconds = finiteNumber(value);
+
   if (seconds === undefined) {
     const parsed = Date.parse(value);
+
     return Number.isFinite(parsed) ? parsed : undefined;
   }
+
   if (seconds < 0) return undefined;
+
   if (seconds < 1e9) return Math.round(now + seconds * 1000);
+
   if (seconds < 1e12) return Math.round(seconds * 1000);
+
   return Math.round(seconds);
 }
+
 type StructuredItem = { name?: string; params: Record<string, string> };
+
 /** `"api-ip";q=600;w=60, "import-key";q=20;w=900` -> one item per policy. */
 function structuredList(value: string | null): StructuredItem[] {
   if (!value) return [];
   const items: StructuredItem[] = [];
+
   for (const entry of value.split(",")) {
     const segments = entry
       .split(";")
       .map((segment) => segment.trim())
       .filter((segment) => segment !== "");
+
     if (!segments.length) continue;
     const item: StructuredItem = { params: {} };
+
     for (const segment of segments) {
       const equals = segment.indexOf("=");
+
       if (equals === -1) {
         if (item.name === undefined) item.name = unquote(segment);
         continue;
       }
+
       item.params[segment.slice(0, equals).trim().toLowerCase()] = unquote(
         segment.slice(equals + 1).trim(),
       );
     }
+
     items.push(item);
   }
+
   return items;
 }
+
 // x.md emits the unprefixed IETF spellings (verified against live response
 // headers); `X-RateLimit-*` is the widespread older convention and is read only
 // as a fallback.
 function headerValue(headers: Headers, name: string): string | null {
   return headers.get(name) ?? headers.get(`X-${name}`);
 }
+
 /** One reported allowance: what is left, and when it comes back. */
 type Allowance = { remaining?: number; resetAt?: number };
+
 /**
  * Every allowance the response reported, as candidates. x.md applies several
  * policies at once (an `api-ip` one and an `import-key` one in the same
@@ -170,43 +250,62 @@ function allowances(headers: Headers, now: number): Allowance[] {
     remaining: finiteNumber(item.params.r ?? item.params.remaining),
     resetAt: resetAtFrom(item.params.t ?? item.params.reset, now),
   }));
+
   candidates.push({
     remaining: finiteNumber(headerValue(headers, "RateLimit-Remaining")),
     resetAt: resetAtFrom(headerValue(headers, "RateLimit-Reset"), now),
   });
+
   return candidates;
 }
+
 /** RFC 9457-style problem body, whether it is the body or nested under `error`. */
-function problemBody(body: unknown): RawObject | undefined {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
-  const top = body as RawObject;
-  const nested = top.error;
-  return nested && typeof nested === "object" && !Array.isArray(nested)
-    ? (nested as RawObject)
-    : top;
+function problemBody(body: JsonValue | undefined): RawObject | undefined {
+  const parsedTop = object.safeParse(body);
+
+  if (!parsedTop.success) return undefined;
+  // SAFETY: same rationale as `record` above — `object`'s schema only checks
+  // "is a plain string-keyed record"; every caller narrows individual fields
+  // with `string`/`record`/`finiteNumber` before trusting them.
+  const top = parsedTop.data as RawObject;
+  const parsedNested = object.safeParse(top.error);
+
+  // SAFETY: same rationale as `record` above — `object`'s schema only checks
+  // "is a plain string-keyed record"; every caller narrows individual fields
+  // with `string`/`record`/`finiteNumber` before trusting them.
+  return parsedNested.success ? (parsedNested.data as RawObject) : top;
 }
+
 function problemReason(problem: RawObject | undefined): string | undefined {
   if (!problem) return undefined;
+
   for (const key of ["detail", "message", "title", "error"]) {
     const value = string(problem[key]);
+
     if (value && value.trim() !== "") return value;
   }
+
   return undefined;
 }
+
 function retryAfterFromHeader(value: string | null, now: number): number | undefined {
   if (value === null || value.trim() === "") return undefined;
+
   // Only accept what `retryDelay` can genuinely read; its 30s fallback for
   // unparseable input is a default, not something the provider told us.
   return Number.isFinite(Number(value)) || Number.isFinite(Date.parse(value))
     ? retryDelay(value, now)
     : undefined;
 }
+
 function retryAfterFromBody(problem: RawObject | undefined, now: number): number | undefined {
   const seconds = finiteNumber(problem?.retry_after ?? problem?.retryAfter);
+
   // Delegate the clamp to `retryDelay`, exactly as the header path does, so the
   // same number of seconds can never mean two different delays.
   return seconds === undefined || seconds < 0 ? undefined : retryDelay(String(seconds), now);
 }
+
 /** `rate_limited`, `upstream_rate_limited`, `.../reliability#rate-limited`. */
 const namesRateLimit = (problem: RawObject | undefined) =>
   ["code", "type"].some((key) =>
@@ -214,6 +313,7 @@ const namesRateLimit = (problem: RawObject | undefined) =>
       (string(problem?.[key]) ?? "").toLowerCase().replace(/[^a-z]/g, ""),
     ),
   );
+
 /**
  * Read provider-reported limit facts off a refused response (and its
  * already-decoded body, when there is one). Returns undefined unless the
@@ -239,24 +339,28 @@ export function readThrottle(
   operation: string,
   status: number,
   headers: Headers,
-  body?: unknown,
+  body?: JsonValue,
   now = Date.now(),
 ): ProviderThrottle | undefined {
   const problem = problemBody(body);
   const deferredMs = retryAfterFromHeader(headers.get("Retry-After"), now);
+
   // A fulfilled response is not a refusal at all.
   if (status < 400) return undefined;
+
   if (status !== 429 && deferredMs === undefined && !namesRateLimit(problem)) return undefined;
   // Several allowances can apply to one call (x.md: per-IP and per-API-key).
   // The most constraining one is what actually gates the next request.
   const candidates = allowances(headers, now);
   let tightest: Allowance | undefined;
+
   for (const candidate of candidates)
     if (
       candidate.remaining !== undefined &&
       (tightest?.remaining === undefined || candidate.remaining < tightest.remaining)
     )
       tightest = candidate;
+
   return compact({
     provider,
     operation,
@@ -267,6 +371,7 @@ export function readThrottle(
     retryAfterMs: deferredMs ?? retryAfterFromBody(problem, now),
   });
 }
+
 /**
  * x.md's documented per-request ceiling for `max_posts`
  * (https://mdfromx.com/docs/bulk-import): "Maximum 5000; meta.truncated=true
@@ -279,6 +384,7 @@ export function readThrottle(
  * budget of ours; nothing here paces or caps our own requests.
  */
 export const MAX_POSTS_PER_PAGE = 5000;
+
 /**
  * Parallel upstream chains per request. The provider documents a default of 16
  * and a maximum of 32, but a real `max_posts=5000` run at 8 already reported
@@ -289,6 +395,7 @@ export const MAX_POSTS_PER_PAGE = 5000;
  * exchange for more upstream retries. Left at the value in production use.
  */
 const CHAIN_CONCURRENCY = "8";
+
 /**
  * The provider's documented maximum. Used only as a second try after x.md
  * itself gave up on a page (its gateway answers 504 at about two minutes):
@@ -296,8 +403,10 @@ const CHAIN_CONCURRENCY = "8";
  * more parallel chains is the one lever left that shortens x.md's own work.
  */
 export const MAX_CHAIN_CONCURRENCY = 32;
+
 /** How long an ordinary x.md request may take before it is reported as `provider_timeout`. */
 export const REQUEST_TIMEOUT_MS = 120_000;
+
 /**
  * History pages get far longer. x.md's cost for a continuation page is in
  * walking the timeline back to `until`, not in the page size: in production
@@ -308,10 +417,12 @@ export const REQUEST_TIMEOUT_MS = 120_000;
  * `expire`).
  */
 export const HISTORY_TIMEOUT_MS = 900_000;
+
 /** The request timeout for one x.md call, by the operation it is reported under. */
 export function timeoutFor(operation: string): number {
   return operation === "history" || operation === "bulk" ? HISTORY_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 }
+
 export class XmdClient {
   readonly origin: string;
   constructor(
@@ -320,6 +431,7 @@ export class XmdClient {
     origin = "https://mdfromx.com",
   ) {
     const url = new URL(origin);
+
     if (
       !["https://mdfromx.com", "https://x.pcstyle.dev"].includes(url.origin) ||
       url.username ||
@@ -337,14 +449,19 @@ export class XmdClient {
     signal?: AbortSignal,
   ) {
     const url = new URL(path, this.origin);
+
     for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
     let response: Response;
+
+    const headers = new Headers({
+      Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
+    });
+
+    if (this.key) headers.set("Authorization", `Bearer ${this.key}`);
+
     try {
       response = await this.fetcher(url, {
-        headers: {
-          Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
-          ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}),
-        },
+        headers,
         signal: signal ?? AbortSignal.timeout(timeoutFor(operation)),
         redirect: "error",
       });
@@ -365,21 +482,27 @@ export class XmdClient {
         );
       throw error;
     }
+
     if (!response.ok) {
       let code = `http_${response.status}`;
       let problem: RawObject | undefined;
+
       try {
         problem = record(await response.json());
         code = string(problem.code) ?? code;
       } catch {
         /* status is still actionable */
       }
-      const message =
-        response.status === 401
-          ? "x.md rejected the API key. Check X_MD_API_KEY on the backend."
-          : response.status === 429
-            ? "x.md rate limit reached. The job will retry after the provider's delay."
-            : `x.md could not finish this request (${response.status}, ${code}).`;
+
+      const message = Match.value(response.status).pipe(
+        Match.when(401, () => "x.md rejected the API key. Check X_MD_API_KEY on the backend."),
+        Match.when(
+          429,
+          () => "x.md rate limit reached. The job will retry after the provider's delay.",
+        ),
+        Match.orElse(() => `x.md could not finish this request (${response.status}, ${code}).`),
+      );
+
       throw new ProviderError(
         code,
         message,
@@ -389,6 +512,7 @@ export class XmdClient {
         readThrottle("xmd", operation, response.status, response.headers, problem),
       );
     }
+
     return response;
   }
   async read(
@@ -396,21 +520,34 @@ export class XmdClient {
     input: string,
     cursor?: string,
   ) {
-    const query: Record<string, string> = { format: "json", limit: "50" };
-    if (cursor) query.cursor = cursor;
+    const queryEntries: [string, string][] = [
+      ["format", "json"],
+      ["limit", "50"],
+    ];
+
+    if (cursor) queryEntries.push(["cursor", cursor]);
     let path: string;
+
     if (kind === "search") {
       path = "/api/v1/search";
-      query.q = input;
-      query.feed = "latest";
+      queryEntries.push(["q", input], ["feed", "latest"]);
     } else if (kind === "post") {
       path = "/api/v1/posts";
-      query.url = statusUrl(input);
-      query.thread = "auto";
+      queryEntries.push(["url", statusUrl(input)], ["thread", "auto"]);
     } else {
-      path = `/api/v1/profiles/${handle(input)}${kind === "profile" ? "" : kind === "archive" ? "/posts" : `/${kind}`}`;
-      if (kind === "archive") query.index = "true";
+      const suffix = Match.value(kind).pipe(
+        Match.when("profile", () => ""),
+        Match.when("archive", () => "/posts"),
+        Match.orElse(() => `/${kind}`),
+      );
+
+      path = `/api/v1/profiles/${handle(input)}${suffix}`;
+
+      if (kind === "archive") queryEntries.push(["index", "true"]);
     }
+
+    const query = Object.fromEntries(queryEntries);
+
     return record(await (await this.request(path, query, kind)).json());
   }
   async history(
@@ -424,19 +561,27 @@ export class XmdClient {
       concurrency?: number;
     },
   ): Promise<RawObject> {
-    const query: Record<string, string> = {
-      format: "json",
-      max_posts: String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts))),
-      with_replies: "true",
-      with_reposts: "true",
-      concurrency:
+    const queryEntries: [string, string][] = [
+      ["format", "json"],
+      ["max_posts", String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts)))],
+      ["with_replies", "true"],
+      ["with_reposts", "true"],
+      [
+        "concurrency",
         options.concurrency === undefined
           ? CHAIN_CONCURRENCY
           : String(Math.min(MAX_CHAIN_CONCURRENCY, Math.max(1, Math.floor(options.concurrency)))),
-    };
-    if (options.since) query.since = options.since;
-    if (options.until) query.until = options.until;
-    if (options.refresh) query.refresh = "true";
+      ],
+    ];
+
+    if (options.since) queryEntries.push(["since", options.since]);
+
+    if (options.until) queryEntries.push(["until", options.until]);
+
+    if (options.refresh) queryEntries.push(["refresh", "true"]);
+
+    const query = Object.fromEntries(queryEntries);
+
     return record(
       await (
         await this.request(`/api/v1/profiles/${handle(input)}/posts`, query, "history")
@@ -452,25 +597,33 @@ export class XmdClient {
       refresh?: boolean;
     },
   ): AsyncGenerator<RawObject & ({ post: RawObject } | { meta: RawObject; profile?: RawObject })> {
-    const query: Record<string, string> = {
-      format: "ndjson",
-      max_posts: String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts))),
-      with_replies: "true",
-      with_reposts: "true",
-      concurrency: CHAIN_CONCURRENCY,
-    };
-    if (options.since) query.since = options.since;
-    if (options.until) query.until = options.until;
-    if (options.refresh) query.refresh = "true";
+    const queryEntries: [string, string][] = [
+      ["format", "ndjson"],
+      ["max_posts", String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts)))],
+      ["with_replies", "true"],
+      ["with_reposts", "true"],
+      ["concurrency", CHAIN_CONCURRENCY],
+    ];
+
+    if (options.since) queryEntries.push(["since", options.since]);
+
+    if (options.until) queryEntries.push(["until", options.until]);
+
+    if (options.refresh) queryEntries.push(["refresh", "true"]);
+    const query = Object.fromEntries(queryEntries);
     const response = await this.request(`/api/v1/profiles/${handle(input)}/posts`, query, "bulk");
+
     if (!response.body) throw new ProviderError("empty_stream", "x.md returned no import stream.");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+
     let pending = "",
       terminal = false,
       count = 0;
+
     const parse = (line: string) => {
       const item = record(JSON.parse(line));
+
       if (item.error)
         throw new ProviderError(
           "partial_import",
@@ -479,19 +632,25 @@ export class XmdClient {
           false,
           item,
         );
+
       if (item.post) return { ...item, post: record(item.post) };
-      if (item.meta)
-        return {
-          ...item,
-          meta: record(item.meta),
-          ...(item.profile ? { profile: record(item.profile) } : {}),
-        };
+
+      if (item.meta) {
+        const withMeta = { ...item, meta: record(item.meta) };
+
+        if (item.profile) return { ...withMeta, profile: record(item.profile) };
+
+        return withMeta;
+      }
+
       throw new ProviderError("invalid_stream", "x.md returned an unrecognized import record.");
     };
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         pending += decoder.decode(value, { stream: !done });
+
         if (pending.length > 2_000_000)
           throw new ProviderError(
             "oversized_record",
@@ -499,18 +658,22 @@ export class XmdClient {
           );
         const lines = pending.split("\n");
         pending = lines.pop()!;
+
         if (done && pending.trim()) {
           lines.push(pending);
           pending = "";
         }
+
         for (const line of lines) {
           if (!line.trim()) continue;
+
           if (terminal)
             throw new ProviderError(
               "invalid_stream",
               "x.md sent records after the import summary.",
             );
           const item = parse(line);
+
           if ("meta" in item) terminal = true;
           else if (++count > options.maxPosts)
             throw new ProviderError(
@@ -519,8 +682,10 @@ export class XmdClient {
             );
           yield item;
         }
+
         if (done) break;
       }
+
       if (!terminal)
         throw new ProviderError(
           "incomplete_stream",

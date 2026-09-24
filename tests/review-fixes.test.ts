@@ -9,13 +9,20 @@ import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contract
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
-const summaryQuery = anyApi.summary.summary as unknown as FunctionReference<
+// SAFETY: `anyApi.*` references are typed as `FunctionReference<any, any, any, any>`
+// (convex/server's untyped API-builder), so every field is `any` and a
+// single assertion to the concrete signature below is a narrowing
+// TypeScript already allows structurally; convex-test rejects the reference
+// outright at call time if the module/function name does not actually exist.
+const summaryQuery = anyApi.summary.summary as FunctionReference<
   "query",
   "public",
   { now: number },
   DashboardSummary
 >;
-const applyUpdate = anyApi.publication.applyUpdate as unknown as FunctionReference<
+
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const applyUpdate = anyApi.publication.applyUpdate as FunctionReference<
   "mutation",
   "internal",
   {
@@ -31,13 +38,17 @@ const applyUpdate = anyApi.publication.applyUpdate as unknown as FunctionReferen
   },
   { outcome: string; rejectionReason?: string }
 >;
-const libraryHistory = anyApi.library.history as unknown as FunctionReference<
+
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const libraryHistory = anyApi.library.history as FunctionReference<
   "query",
   "public",
   { accountId: Id<"accounts"> },
   { jobId: Id<"jobs">; dismissedAt?: number }[]
 >;
-const libraryRows = anyApi.library.rows as unknown as FunctionReference<
+
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const libraryRows = anyApi.library.rows as FunctionReference<
   "query",
   "public",
   Record<string, never>,
@@ -47,6 +58,7 @@ const libraryRows = anyApi.library.rows as unknown as FunctionReference<
 async function setup() {
   const t = convexTest(schema, modules);
   const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return { t, alice, a: t.withIdentity({ subject: `${alice}|session` }) };
 }
 
@@ -81,9 +93,11 @@ function job(
 describe("the job feed filters before it limits", () => {
   it("still returns a full page of live runs when more than a page of newer account imports exist", async () => {
     const { t, alice, a } = await setup();
+
     // 25 account imports, all newer than the live runs below. Filtering the
     // kind client-side after a 20-row page would have returned nothing.
     for (let i = 0; i < 25; i++) await job(t, alice, { input: `acct${i}`, kind: "bulk" });
+
     for (let i = 0; i < 20; i++) await job(t, alice, { input: `@live${i}`, kind: "live" });
 
     const other = await a.query(api.jobs.list, { scope: "other" });
@@ -93,8 +107,10 @@ describe("the job feed filters before it limits", () => {
 
   it("still returns a full page when more than a page of newer runs were cleared", async () => {
     const { t, alice, a } = await setup();
+
     for (let i = 0; i < 25; i++)
       await job(t, alice, { input: `@old${i}`, kind: "live", dismissedAt: undefined });
+
     for (let i = 0; i < 30; i++)
       await job(t, alice, { input: `@cleared${i}`, kind: "live", dismissedAt: Date.now() });
 
@@ -107,6 +123,7 @@ describe("the job feed filters before it limits", () => {
 describe("duplicate rows for one provider id", () => {
   it("resolve to the same single account on the write path and both read paths", async () => {
     const { t, alice, a } = await setup();
+
     // Two legacy rows carrying the SAME provider id — duplicates of one
     // account, not two identities. Before the fix the write path patched one
     // while both read paths called it ambiguous, so the account vanished
@@ -115,6 +132,7 @@ describe("duplicate rows for one provider id", () => {
       await ctx.db.insert("accounts", { handle: "dup", userId: "42", name: "First Row" }),
       await ctx.db.insert("accounts", { handle: "dup", userId: "42", name: "Second Row" }),
     ]);
+
     await job(t, alice, { input: "dup", kind: "bulk", expectedUserId: "42" });
     await t.run((ctx) =>
       ctx.db.insert("accountPublications", {
@@ -153,10 +171,12 @@ describe("duplicate rows for one provider id", () => {
 describe("the publication receiver and the library agree on identity", () => {
   it("applies an update for an account that has a duplicate row, instead of rejecting it forever", async () => {
     const { t, alice, a } = await setup();
+
     const [canonical] = await t.run(async (ctx) => [
       await ctx.db.insert("accounts", { handle: "dup", userId: "42", name: "First Row" }),
       await ctx.db.insert("accounts", { handle: "dup", userId: "42", name: "Second Row" }),
     ]);
+
     await job(t, alice, { input: "dup", kind: "bulk", expectedUserId: "42" });
 
     // The receiver used to call two rows for one provider id ambiguous and
@@ -174,6 +194,7 @@ describe("the publication receiver and the library agree on identity", () => {
       uniquePostCountAsOf: Date.now(),
       observedAt: Date.now(),
     });
+
     expect(applied).toMatchObject({ outcome: "applied" });
 
     // It landed on the canonical row, which is the one the library shows.
@@ -188,6 +209,7 @@ describe("the publication receiver and the library agree on identity", () => {
 describe("bounded reads never pass as complete data", () => {
   it("reports unknown queue counts once the owner has more jobs than one read covers", async () => {
     const { t, alice, a } = await setup();
+
     // One past the 1,000-job bound `allJobs` reads. Every queue figure is
     // derived from that page, so a "known" count here would be a partial
     // presented as a total.
@@ -221,9 +243,11 @@ describe("bounded reads never pass as complete data", () => {
 describe("a caller is never refused an account that genuinely exists", () => {
   it("serves history for an account older than the bounded library page", async () => {
     const { t, alice, a } = await setup();
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "oldest", userId: "9001", name: "Oldest" }),
     );
+
     // The account's own run goes in FIRST, so 600 newer imports push it well
     // outside the 500-job page the library lists.
     const ownRun = await job(t, alice, {
@@ -232,6 +256,7 @@ describe("a caller is never refused an account that genuinely exists", () => {
       expectedUserId: "9001",
       status: "failed",
     });
+
     for (let i = 0; i < 600; i++)
       await job(t, alice, { input: `later${i}`, kind: "bulk", expectedUserId: `${i}` });
 
@@ -248,9 +273,11 @@ describe("a caller is never refused an account that genuinely exists", () => {
 
   it("refuses to serve a history it could not search through completely", async () => {
     const { t, alice, a } = await setup();
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "buried", userId: "8888", name: "Buried" }),
     );
+
     // A run for this account exists, but far enough down that the scan
     // cannot reach it. The lookup therefore returns some jobs with
     // exhausted:false for OTHER accounts — and the account's own run may be
@@ -262,6 +289,7 @@ describe("a caller is never refused an account that genuinely exists", () => {
       expectedUserId: "8888",
       status: "complete",
     });
+
     for (let i = 0; i < 1100; i++)
       await job(t, alice, { input: "buried", kind: "bulk", expectedUserId: "8888" });
 
@@ -272,9 +300,11 @@ describe("a caller is never refused an account that genuinely exists", () => {
     const { t, alice } = await setup();
     const bob = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
     const b = t.withIdentity({ subject: `${bob}|session` });
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "alices", userId: "4242", name: "Alice's" }),
     );
+
     const run = await job(t, alice, { input: "alices", kind: "bulk", expectedUserId: "4242" });
     const runs = await b.query(libraryHistory, { accountId });
     expect(runs.map((r) => String(r.jobId))).toEqual([String(run)]);
@@ -284,15 +314,18 @@ describe("a caller is never refused an account that genuinely exists", () => {
 describe("a capture the indexer could not index", () => {
   it("stays counted as awaiting indexing instead of being marked confirmed", async () => {
     const { t, alice, a } = await setup();
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "flaky", userId: "321", name: "Flaky" }),
     );
+
     const bulk = await job(t, alice, {
       input: "flaky",
       kind: "bulk",
       expectedUserId: "321",
       status: "complete",
     });
+
     await t.run(async (ctx) => {
       await ctx.db.insert("receipts", {
         jobId: bulk,
@@ -327,6 +360,7 @@ describe("a capture the indexer could not index", () => {
 describe("a capped account scope", () => {
   it("reports unknown rather than presenting the part it could read as the whole", async () => {
     const { t, alice, a } = await setup();
+
     // One past the 500 cap allAccountJobs reads.
     for (let i = 0; i < 501; i++)
       await job(t, alice, { input: `acct${i}`, kind: "bulk", expectedUserId: `${i}` });

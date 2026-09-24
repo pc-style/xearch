@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Match } from "effect";
 import { useConvexAuth, useConvexConnectionState, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
@@ -12,6 +13,7 @@ import { useDashboardClock } from "./library/clock";
 function Job({ job }: { job: Doc<"jobs"> }) {
   const [expanded, setExpanded] = useState(false),
     [error, setError] = useState("");
+
   // convex/_generated/ai/guidelines.md "Do not read the wall clock inside a
   // query" applies just as much to a render body: a bare `Date.now()` here
   // would freeze at whatever instant last re-rendered this row instead of
@@ -21,20 +23,25 @@ function Job({ job }: { job: Doc<"jobs"> }) {
   // already uses for its own queries.
   const now = useDashboardClock();
   const receipts = useQuery(api.jobs.receipts, expanded ? { jobId: job._id } : "skip");
+
   const cancel = useMutation(api.jobs.cancel),
     retry = useMutation(api.jobs.retry),
     dismiss = useMutation(api.jobs.dismiss),
     restore = useMutation(api.jobs.restore);
-  const act = async (fn: () => Promise<unknown>) => {
+
+  const act = async <T,>(fn: () => Promise<T>) => {
     setError("");
+
     try {
       await fn();
     } catch (e) {
       setError(describeError(e));
     }
   };
+
   const active = job.status === "queued" || job.status === "running";
   const dismissed = job.dismissedAt !== undefined;
+
   return (
     <article className={dismissed ? "control-job is-dismissed" : "control-job"}>
       <div className="control-job-heading">
@@ -126,7 +133,7 @@ export default function Dashboard({
   ensureSession,
   close,
 }: {
-  ensureSession: () => Promise<unknown>;
+  ensureSession: () => Promise<void>;
   close: () => void;
 }) {
   const { isAuthenticated } = useConvexAuth();
@@ -137,6 +144,7 @@ export default function Dashboard({
   // first load, not an edge case.
   const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
   const [showDismissed, setShowDismissed] = useState(false);
+
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
   // out here, after the server had already limited the page, could hide
   // older non-account runs behind 20 newer account imports.
@@ -151,11 +159,14 @@ export default function Dashboard({
   // following, archive). The split is applied server-side via `scope`.
 
   const start = useMutation(api.jobs.start);
+
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
     [input, setInput] = useState(""),
     [since, setSince] = useState(""),
     [refresh, setRefresh] = useState(false);
+
   const { busy, message, setMessage, run } = useTask();
+
   return (
     <main className="control-room">
       <header className="control-header">
@@ -188,7 +199,17 @@ export default function Dashboard({
             <h2>Start an import</h2>
             <label>
               What to download
-              <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+              <select
+                value={kind}
+                onChange={(e) =>
+                  setKind(
+                    // SAFETY: every <option> below is one of `Doc<"jobs">["kind"]`'s
+                    // literal values, so the <select>'s string value is always one
+                    // of them too.
+                    e.target.value as typeof kind,
+                  )
+                }
+              >
                 <option value="bulk">Account history</option>
                 <option value="profile">Profile</option>
                 <option value="post">Post / conversation</option>
@@ -199,19 +220,21 @@ export default function Dashboard({
               </select>
             </label>
             <label>
-              {kind === "post" ? "X post URL" : kind === "live" ? "Search query" : "X handle"}
+              {Match.value(kind).pipe(
+                Match.when("post", () => "X post URL"),
+                Match.when("live", () => "Search query"),
+                Match.orElse(() => "X handle"),
+              )}
               <input
                 id="import-input"
                 required
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={
-                  kind === "post"
-                    ? "https://x.com/…/status/…"
-                    : kind === "live"
-                      ? "convex"
-                      : "@handle"
-                }
+                placeholder={Match.value(kind).pipe(
+                  Match.when("post", () => "https://x.com/…/status/…"),
+                  Match.when("live", () => "convex"),
+                  Match.orElse(() => "@handle"),
+                )}
               />
             </label>
             {kind === "bulk" && (

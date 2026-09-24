@@ -23,6 +23,7 @@ afterEach(() => {
 async function setup() {
   const t = convexTest(schema, modules);
   const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return { t, alice, a: t.withIdentity({ subject: `${alice}|session` }) };
 }
 
@@ -95,6 +96,7 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(DOC_SEARCH_RESPONSE));
     vi.stubGlobal("fetch", fetcher);
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -107,8 +109,12 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
         warnings: [],
       }),
     );
+
     await t.action(internal.search.execute, { sessionId });
     expect(fetcher).toHaveBeenCalledOnce();
+    // SAFETY: convex/search.ts's `execute` only ever calls `fetch` with a
+    // JSON.stringify'd string body (the only fetch call this action makes),
+    // so `body` is a string here.
     const body = JSON.parse(fetcher.mock.calls[0][1]?.body as string);
     expect(body).toEqual(DOC_SEARCH_REQUEST);
     expect((await t.run((ctx) => ctx.db.get(sessionId)))?.stats).toEqual(DOC_SEARCH_RESPONSE.stats);
@@ -133,6 +139,7 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
         throw new Error("network down");
       }),
     );
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -143,6 +150,7 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
         warnings: [],
       }),
     );
+
     await t.action(internal.search.execute, { sessionId });
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
@@ -161,6 +169,7 @@ describe("stale search cursor — restart search, not a generic failure", () => 
       "fetch",
       vi.fn<typeof fetch>(async () => new Response(null, { status: 409 })),
     );
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -172,6 +181,7 @@ describe("stale search cursor — restart search, not a generic failure", () => 
         warnings: [],
       }),
     );
+
     await t.action(internal.search.execute, { sessionId });
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
@@ -186,6 +196,7 @@ describe("stale search cursor — restart search, not a generic failure", () => 
       "fetch",
       vi.fn<typeof fetch>(async () => new Response(null, { status: 409 })),
     );
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -196,6 +207,7 @@ describe("stale search cursor — restart search, not a generic failure", () => 
         warnings: [],
       }),
     );
+
     await t.action(internal.search.execute, { sessionId });
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
@@ -208,10 +220,13 @@ describe("stale search cursor — restart search, not a generic failure", () => 
     const { t, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
     const opaque = "not-json===opaque-blob";
+
     const fetcher = vi.fn<typeof fetch>(async () =>
       Response.json({ rows: [], nextCursor: "next", warnings: [] }),
     );
+
     vi.stubGlobal("fetch", fetcher);
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -223,7 +238,10 @@ describe("stale search cursor — restart search, not a generic failure", () => 
         warnings: [],
       }),
     );
+
     await t.action(internal.search.execute, { sessionId });
+    // SAFETY: same as above — convex/search.ts's `execute` only ever calls
+    // `fetch` with a JSON.stringify'd string body.
     const body = JSON.parse(fetcher.mock.calls[0][1]?.body as string);
     expect(body.cursor).toBe(opaque);
   });
@@ -233,9 +251,11 @@ describe("authorized collection scope (fails closed)", () => {
   it("rejects a client-requested account scope — not implemented, so it must fail closed rather than silently honor or downgrade it", async () => {
     const { t, a } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "theo", userId: "999", name: "Theo" }),
     );
+
     await expect(
       a.mutation(api.search.start, {
         raw: "local first",
@@ -268,11 +288,13 @@ describe("authorized collection scope (fails closed)", () => {
   it("never persists scope onto the session document — nothing narrower than global exists to remember yet", async () => {
     const { t, a } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+
     const sessionId = await a.mutation(api.search.start, {
       raw: "local first",
       sort: "relevance",
       scope: { kind: "global" },
     });
+
     expect(await t.run((ctx) => ctx.db.get(sessionId))).not.toHaveProperty("scope");
   });
 });

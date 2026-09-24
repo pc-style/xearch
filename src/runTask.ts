@@ -4,21 +4,22 @@
  * callers never need `try`/`finally` inside components (the React Compiler
  * build in use cannot compile `finally` clauses).
  */
-export function runTask(
-  work: () => Promise<unknown>,
+export function runTask<T>(
+  work: () => Promise<T>,
   handlers: {
     readonly onSuccess?: () => void;
-    readonly onError?: (error: unknown) => void;
+    readonly onError?: (cause: unknown) => void;
     readonly onSettled?: () => void;
   },
 ): void {
-  const reportError = (error: unknown) => {
+  const reportError = (cause: unknown) => {
     try {
-      handlers.onError?.(error);
+      handlers.onError?.(cause);
     } catch {
       // The chain is detached. A throw here must not become an unhandled rejection.
     }
   };
+
   const finish = () => {
     try {
       handlers.onSettled?.();
@@ -26,6 +27,7 @@ export function runTask(
       // Same as reportError: cleanup runs, and its failure stays on this chain.
     }
   };
+
   // `Promise.resolve().then(work)` puts a synchronous throw from `work`
   // on the same chain as a rejected promise, so onError and onSettled still run.
   void Promise.resolve()
@@ -37,10 +39,11 @@ export function runTask(
         } catch (error) {
           reportError(error);
         }
+
         finish();
       },
-      (error: unknown) => {
-        reportError(error);
+      (cause: unknown) => {
+        reportError(cause);
         finish();
       },
     )

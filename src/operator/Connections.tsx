@@ -29,8 +29,10 @@ export function ConnectionsPanel() {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 5_000);
+
     return () => clearInterval(id);
   }, []);
+
   const connections: Connection[] = [
     {
       name: "Search service",
@@ -64,6 +66,7 @@ export function ConnectionsPanel() {
       purpose: "Emails search results",
     },
   ];
+
   return (
     <>
       <p className="muted-copy">

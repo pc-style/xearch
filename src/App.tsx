@@ -63,6 +63,7 @@ type SearchRequest = FlowSearchRequest & {
 };
 
 type ProfilerPhase = "mount" | "update" | "nested-update";
+
 type ResultsProfiler = (
   id: string,
   phase: ProfilerPhase,
@@ -90,6 +91,7 @@ const sorts: { value: Sort; label: string }[] = [
   { value: "newest", label: "Newest" },
   { value: "oldest", label: "Oldest" },
 ];
+
 function Modal({
   title,
   children,
@@ -102,9 +104,11 @@ function Modal({
   notice?: string;
 }) {
   const titleId = useId();
+
   function open(node: HTMLDialogElement | null) {
     if (node && !node.open) node.showModal();
   }
+
   return (
     <dialog
       ref={open}
@@ -141,11 +145,14 @@ export default function App() {
   const connectionSnapshot = connectionObservation(connection);
   const [attemptCounter, setAttemptCounter] = useState(initialRoute.version);
   const [appliedRouteVersion, setAppliedRouteVersion] = useState(route.version);
+
   function allocateAttempt(): number {
     const next = Math.max(attemptCounter, route.version) + 1;
     setAttemptCounter(next);
+
     return next;
   }
+
   const [draft, setDraft] = useState(initialRoute.raw),
     [raw, setRaw] = useState(initialRoute.raw),
     [sort, setSort] = useState<Sort>(initialRoute.sort),
@@ -161,44 +168,55 @@ export default function App() {
           }
         : null,
     );
+
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(null);
+
   const [view, setView] = useState<ViewMode>(ViewMode.Search),
     [modal, setModal] = useState<ModalKind | null>(null);
+
   const [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [accountInput, setAccountInput] = useState(""),
     [since, setSince] = useState("");
+
   const [page, setPage] = useState<{
     title: string;
     text: string;
     url: string;
     collectedAt: number;
   } | null>(null);
+
   const [contextPages, setContextPages] = useState<
     { title: string; text: string; url: string; collectedAt: number }[] | null
   >(null);
+
   const [reading, setReading] = useState(false),
     [proposal, setProposal] = useState<{
       query: string;
       explanation: string;
     } | null>(null);
+
   // `signIn` is memoized by ConvexAuthProvider for the provider's lifetime, so
   // capturing it once is safe. See src/sessionGate.ts for why the gate waits
   // for `isLoading` before it ever creates an anonymous session.
   const [sessionGate] = useState(() => createSessionGate(() => signIn("anonymous")));
+
   // Commit-phase ref callback: runs after every render with the auth values
   // of that render, so the gate always sees the latest state without an effect.
   function authProbe(node: HTMLSpanElement | null) {
     if (!node) return;
     sessionGate.update({ isLoading: authLoading, isAuthenticated });
   }
+
   const ensureSession = sessionGate.ensure;
 
   if (route.version !== appliedRouteVersion) {
     setAppliedRouteVersion(route.version);
     setAttemptCounter((count) => Math.max(count, route.version));
+
     const queryChanged =
       route.raw !== raw || route.sort !== sort || route.includeStats !== statsForNerds;
+
     if (queryChanged) {
       setRaw(route.raw);
       setDraft(route.raw);
@@ -220,6 +238,7 @@ export default function App() {
       setProposal(null);
     }
   }
+
   const dashboard = route.dashboard;
   const accountResults = useQuery(api.search.accounts);
   const accounts = accountResults ?? [];
@@ -233,23 +252,30 @@ export default function App() {
   const me = useQuery(api.auth.me);
   const verifiedEmail = me?.emailVerified ? (me.email ?? null) : null;
   let queryError = "";
+
   try {
     parseQuery(raw);
   } catch (e) {
+    // SAFETY: `parseQuery` (convex/lib/search.ts) only ever throws `new
+    // Error(...)`, never a non-Error value.
     queryError = (e as Error).message;
   }
+
   const snapshot = useQuery(
     api.search.results,
     sessionId && isAuthenticated ? { sessionId } : "skip",
   );
+
   const result =
     snapshot?._id === sessionId && snapshot.raw === raw && snapshot.sort === sort
       ? snapshot
       : undefined;
+
   const jobs = useQuery(api.jobs.list, isAuthenticated ? {} : "skip") ?? [];
   const saved = useQuery(api.search.saved, isAuthenticated ? {} : "skip") ?? [];
   const bookmarks = useQuery(api.search.bookmarks, isAuthenticated ? {} : "skip") ?? [];
   const deliveries = useQuery(api.email.deliveries, isAuthenticated ? {} : "skip") ?? [];
+
   // Read-only digest preview (convex/email.ts `preview`) — lets the modal
   // show exactly what `send` would deliver before the user commits. Only
   // queried while the email modal is actually open and there is a completed
@@ -258,37 +284,46 @@ export default function App() {
     api.email.preview,
     modal === ModalKind.Email && sessionId && isAuthenticated ? { sessionId } : "skip",
   );
+
   const startSearch = useMutation(api.search.start);
+
   const start = useMutation(api.jobs.start),
     retry = useMutation(api.jobs.retry),
     bookmark = useMutation(api.search.bookmark),
     save = useMutation(api.search.save),
     removeSaved = useMutation(api.search.removeSaved),
     send = useMutation(api.email.send);
+
   const webContext = useAction(api.integrations.webContext);
+
   const readLink = useAction(api.integrations.readLink),
     interpret = useAction(api.integrations.interpret);
+
   const telemetrySnapshot = useSyncExternalStore(
     telemetry.subscribe,
     telemetry.getSnapshot,
     telemetry.getServerSnapshot,
   );
+
   const activeFrontendStats =
     telemetrySnapshot && telemetrySnapshot.attemptId === searchRequest?.attemptId
       ? telemetrySnapshot
       : null;
+
   const deferredFrontendStats = useDeferredValue(activeFrontendStats);
   const [isSearchPending, startSearchTransition] = useTransition();
   // Written only from event handlers and commit-phase ref callbacks, read only
   // from async continuations — never touched during render.
   const latestAttempt = useRef<number | null>(null);
   const kickedAttempt = useRef<number | null>(null);
+
   function runSearch(request: SearchRequest): boolean {
     telemetry.startAttempt({
       attemptId: request.attemptId,
       trigger: request.trigger,
       connection: connectionSnapshot,
     });
+
     if (!configured?.search || queryError) return false;
     latestAttempt.current = request.attemptId;
     setBusy(true);
@@ -309,32 +344,41 @@ export default function App() {
         setSessionId(id);
         setBusy(false);
       },
-      (error: unknown) => {
+      (cause: unknown) => {
         if (latestAttempt.current !== request.attemptId) return;
-        setNotice(describeError(error));
+        setNotice(describeError(cause));
         setBusy(false);
       },
     );
+
     return true;
   }
+
   // Effect-free search kick: this ref callback re-runs on every commit (plain
   // function identity), so it picks up the initial request and later route
   // changes without any useEffect. Popstate itself is covered by
   // locationStore's useSyncExternalStore subscription.
   function kickPendingRef(node: HTMLElement | null) {
     if (node === null || searchRequest === null) return;
+
     if (kickedAttempt.current === searchRequest.attemptId) return;
+
     if (runSearch(searchRequest)) kickedAttempt.current = searchRequest.attemptId;
   }
+
   // Commit-phase telemetry: Profiler onRender (no useEffect) records render cost,
   // and the results ref below records first/terminal commits when Convex data lands.
   const onResultsRender: ResultsProfiler = (_id, _phase, actualDuration, baseDuration) => {
     const attempt = searchRequest?.attemptId;
+
     if (attempt !== undefined) telemetry.recordProfiler(attempt, actualDuration, baseDuration);
   };
+
   function resultsCommitRef(node: HTMLElement | null) {
     const req = searchRequest;
+
     if (!node || !req || !result || result._id !== sessionId) return;
+
     if (result.status === "complete" || result.status === "failed") {
       telemetry.markTerminal({
         attemptId: req.attemptId,
@@ -373,6 +417,7 @@ export default function App() {
       },
     });
   }
+
   // Event-handler bodies, kept out of the JSX so the async state updates they
   // perform are plain functions instead of inline-updater closures.
   const submitImport = async () => {
@@ -380,71 +425,90 @@ export default function App() {
     await start({ kind: "bulk", input: accountInput, since: since || undefined });
     setAccountInput("");
   };
+
   const runLoadLive = async () => {
     await ensureSession();
     await start({ kind: "live", input: raw.replace(/(^|\s)@([\w]+)/g, "$1from:$2") });
     setModal(ModalKind.Imports);
   };
+
   const runRead = async (url: string) => {
     await ensureSession();
     setPage(await readLink({ url }));
   };
+
   const proposeSearch = async () => {
     await ensureSession();
     setProposal(await interpret({ raw: draft }));
   };
+
   const runWebContext = async () => {
     await ensureSession();
     setContextPages(await webContext({ query: raw }));
   };
+
   const runThread = async (url: string) => {
     await ensureSession();
     await start({ kind: "post", input: url });
     setModal(ModalKind.Imports);
   };
+
   const runLoadMore = async () => {
     const next = result?.nextCursor;
+
     if (!next) return;
+
     const id = await startSearch({
       raw,
       sort,
       cursor: next,
       includeStats: result.includeStats === true,
     });
+
     setSessionId(id);
     window.scrollTo({ top: 0 });
   };
+
   const runSave = async () => {
     await ensureSession();
     await save({ raw, sort });
   };
+
   const runBookmark = async (post: ResultPost) => {
     await ensureSession();
     await bookmark({ tweetId: post.tweetId, sessionId: sessionId ?? undefined });
   };
+
   const runRemoveSaved = async (id: Id<"saved">) => {
     await removeSaved({ id });
   };
+
   const importAccount = (e: FormEvent) => {
     e.preventDefault();
     void task(submitImport(), "Indexing started. Raw captures are handed to your data service.");
   };
+
   const loadLive = () => void task(runLoadLive(), "Looking for more posts on X.");
+
   const read = (url: string) => {
     setReading(true);
     task(runRead(url), undefined, () => setReading(false));
   };
+
   const deferredRaw = useDeferredValue(raw);
   const visible = view === ViewMode.Bookmarks ? bookmarks : (result?.rows ?? []);
   const home = !deferredRaw && view === ViewMode.Search;
+
   const openDashboard = () => {
     if (!OPERATOR_BUILD) return;
     setModal(null);
     pushLocation({ dashboard: true });
   };
+
   const search = (query: string, nextSort: Sort = sort) => {
     const trimmed = query.trim();
     const attemptId = allocateAttempt();
+
     const request: SearchRequest = {
       raw: trimmed,
       sort: nextSort,
@@ -452,6 +516,7 @@ export default function App() {
       attemptId,
       trigger: SearchTrigger.Submit,
     };
+
     setRaw(trimmed);
     setDraft(trimmed);
     setSort(nextSort);
@@ -464,8 +529,10 @@ export default function App() {
       if (runSearch(request)) kickedAttempt.current = request.attemptId;
     });
   };
+
   const retrySearch = () => {
     const attemptId = allocateAttempt();
+
     const request: SearchRequest = {
       raw,
       sort,
@@ -473,6 +540,7 @@ export default function App() {
       attemptId,
       trigger: SearchTrigger.Retry,
     };
+
     setSessionId(null);
     setSearchRequest(request);
     startSearchTransition(() => {
@@ -492,6 +560,7 @@ export default function App() {
         />
       </Suspense>
     );
+
   return (
     <div className={`app ${home ? "is-home" : "has-results"}`}>
       <span ref={authProbe} hidden />
@@ -559,6 +628,7 @@ export default function App() {
               <div className="orbit" role="group" aria-label="Imported accounts">
                 {accounts.slice(0, 32).map((a, i, all) => {
                   const angle = (i / all.length) * Math.PI * 2 - Math.PI / 2;
+
                   return (
                     <button
                       type="button"
@@ -566,6 +636,9 @@ export default function App() {
                       aria-label={`Search @${a.handle}`}
                       key={a._id}
                       style={
+                        // SAFETY: CSSProperties has no index signature for
+                        // custom properties, but `--left`/`--top` are consumed
+                        // only by this component's own stylesheet.
                         {
                           "--left": `${50 + 44 * Math.cos(angle)}%`,
                           "--top": `${50 + 45 * Math.sin(angle)}%`,
@@ -617,7 +690,15 @@ export default function App() {
               <select
                 aria-label="Sort results"
                 value={sort}
-                onChange={(e) => search(draft, e.target.value as Sort)}
+                onChange={(e) =>
+                  search(
+                    draft,
+                    // SAFETY: every <option> below comes from `sorts`, whose
+                    // `value`s are typed `Sort`, so the <select>'s string
+                    // value is always one of them.
+                    e.target.value as Sort,
+                  )
+                }
               >
                 {sorts.map((s) => (
                   <option value={s.value} key={s.value}>

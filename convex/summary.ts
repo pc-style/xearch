@@ -50,12 +50,15 @@ import {
 // `@convex-dev/aggregate` (convex guidelines "Query guidelines"), not a
 // larger constant.
 const MAX_OWNED_JOBS = 1_000;
+
 const MAX_RECEIPTS_PER_JOB = 200;
+
 const MAX_PUBLICATION_UPDATES_PER_ACCOUNT = 500;
 
 function knownCount(unit: Count["unit"], value: number): Count {
   return { kind: "known", unit, value };
 }
+
 function unknownCount(unit: Count["unit"]): Count {
   return { kind: "unknown", unit };
 }
@@ -86,6 +89,7 @@ function unknownCount(unit: Count["unit"]): Count {
 //      it is computed in the one pass over the accounts below, off the
 //      publication rows already being read, so it adds no extra read.
 type PendingWorkUnit = NonNullable<Doc<"accountPublications">["pendingWork"]>["unit"];
+
 type PendingWorkTally = { reported: boolean; sum: number };
 
 function emptyPendingWorkTallies(): Record<PendingWorkUnit, PendingWorkTally> {
@@ -123,6 +127,7 @@ async function computeAccountTotals(
   let unknown = false;
   let searchableAccounts = 0;
   const pendingWork = emptyPendingWorkTallies();
+
   for (const accountId of accountIds) {
     // `.first()` rather than `.unique()`: by_account is not
     // uniqueness-enforced by the schema, and a second row for one account
@@ -132,8 +137,11 @@ async function computeAccountTotals(
       .query("accountPublications")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .first();
+
     if (!publication) continue;
+
     if (publication.state === "searchable") searchableAccounts += 1;
+
     if (publication.pendingWork !== undefined) {
       // Tallied under the unit it was reported in, never coerced into
       // another one. See "Provider-reported queued work" above.
@@ -141,6 +149,7 @@ async function computeAccountTotals(
       tally.reported = true;
       tally.sum += publication.pendingWork.count;
     }
+
     if (publication.searchablePostCount !== undefined) {
       // Sticky "last known good" snapshot: included regardless of the
       // account's CURRENT state, per the non-regression guarantee — a
@@ -162,6 +171,7 @@ async function computeAccountTotals(
     // never had a post published for it yet: a true, known zero
     // contribution, not "unknown".
   }
+
   return {
     indexedPosts: unknown ? unknownCount("posts") : knownCount("posts", sum),
     // unit "accounts" — distinct accounts whose CURRENT state is
@@ -186,10 +196,16 @@ async function allJobs(ctx: QueryCtx): Promise<{ jobs: Doc<"jobs">[]; truncated:
   // would describe a queue this deployment no longer has. No index needed
   // for a whole-table scan ordered by `_creationTime` (Convex's default
   // table order) — the same pattern convex/jobs.ts `list` already uses.
-  const scanned = await ctx.db.query("jobs").order("desc").take(MAX_OWNED_JOBS + 1);
+  const scanned = await ctx.db
+    .query("jobs")
+    .order("desc")
+    .take(MAX_OWNED_JOBS + 1);
+
   const truncated = scanned.length > MAX_OWNED_JOBS;
+
   return { jobs: truncated ? scanned.slice(0, MAX_OWNED_JOBS) : scanned, truncated };
 }
+
 // Every capture id an account has an ACCEPTED ("applied") publication update
 // for. "accepted" deliberately excludes stale_ignored/duplicate_ignored/
 // rejected_* — those never changed accountPublications, so they cannot be
@@ -201,12 +217,16 @@ async function confirmedCaptureIds(
   cache: Map<Id<"accounts">, Set<string>>,
 ): Promise<Set<string>> {
   const cached = cache.get(accountId);
+
   if (cached) return cached;
+
   const updates = await ctx.db
     .query("publicationUpdates")
     .withIndex("by_account", (q) => q.eq("accountId", accountId))
     .take(MAX_PUBLICATION_UPDATES_PER_ACCOUNT);
+
   const set = new Set<string>();
+
   for (const update of updates) {
     // An applied update whose reportedState is "failed" tells us the indexer
     // could NOT index those captures. Counting them as confirmed made them
@@ -214,9 +234,12 @@ async function confirmedCaptureIds(
     // is supposed to show work still outstanding — so a capture that failed
     // to index looked identical to one that succeeded.
     if (update.outcome !== "applied" || update.reportedState === "failed") continue;
+
     for (const captureId of update.captureIds) set.add(captureId);
   }
+
   cache.set(accountId, set);
+
   return set;
 }
 
@@ -244,29 +267,37 @@ async function computeSavedCapturesAwaitingIndexing(
   // getting their own — the same content-addressed id can just as easily
   // repeat there too.
   const capturesByAccount = new Map<Id<"accounts"> | null, Set<string>>();
+
   for (const job of bulkJobs) {
     const receipts = await ctx.db
       .query("receipts")
       .withIndex("by_capture", (q) => q.eq("jobId", job._id))
       .take(MAX_RECEIPTS_PER_JOB);
+
     if (receipts.length === 0) continue;
     const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
     let bucket = capturesByAccount.get(accountId);
+
     if (!bucket) {
       bucket = new Set<string>();
       capturesByAccount.set(accountId, bucket);
     }
+
     for (const receipt of receipts) bucket.add(receipt.captureId);
   }
+
   let count = 0;
+
   for (const [accountId, captureIds] of capturesByAccount) {
     const confirmed = accountId
       ? await confirmedCaptureIds(ctx, accountId, confirmedCache)
       : new Set<string>();
+
     for (const captureId of captureIds) {
       if (!confirmed.has(captureId)) count += 1;
     }
   }
+
   return knownCount("captures", count);
 }
 
@@ -280,6 +311,7 @@ async function computeQueue(
   let active = 0;
   let failedRetryable = 0;
   const bulkJobs: Doc<"jobs">[] = [];
+
   for (const job of jobs) {
     // A dismissed run is one someone explicitly cleared (convex/jobs.ts
     // `dismiss`), so it must stop counting toward the work-to-do numbers —
@@ -292,7 +324,9 @@ async function computeQueue(
     // about which rows someone wants to look at, and hiding a row must never
     // silently retire the evidence under it.
     if (job.kind === ACCOUNT_JOB_KIND) bulkJobs.push(job);
+
     if (job.dismissedAt !== undefined) continue;
+
     if (job.status === "queued") waiting += 1;
     else if (job.status === "running") active += 1;
     // Exactly "failed" | "partial" (a person can retry these — see
@@ -301,6 +335,7 @@ async function computeQueue(
     // convex/lib/contracts.ts queueBreakdownValidator comment.
     else if (job.status === "failed" || job.status === "partial") failedRetryable += 1;
   }
+
   if (truncated)
     // More jobs than one bounded read covers, so every one of these counts
     // would be a partial presented as a total. A queue figure that is quietly
@@ -311,6 +346,7 @@ async function computeQueue(
       savedCapturesAwaitingIndexing: unknownCount("captures"),
       failedRetryable: unknownCount("jobs"),
     };
+
   return {
     waitingDownloads: knownCount("jobs", waiting),
     activeDownloads: knownCount("jobs", active),
@@ -359,13 +395,16 @@ export const summary = query({
     const accountIds: Id<"accounts">[] = [];
     const seen = new Set<Id<"accounts">>();
     const accountJobs = await allAccountJobs(ctx.db);
+
     for (const job of accountJobs.jobs) {
       const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
+
       if (accountId && !seen.has(accountId)) {
         seen.add(accountId);
         accountIds.push(accountId);
       }
     }
+
     // Truncation is a fact about the read, not part of summing: past the
     // bound none of these can honestly describe "every account in the
     // corpus", which is what the scope below claims — including the
@@ -382,6 +421,7 @@ export const summary = query({
           },
         }
       : await computeAccountTotals(ctx, accountIds);
+
     return {
       indexedPosts,
       indexedAccounts,
@@ -434,6 +474,7 @@ const serviceStatusValidator = v.union(
     observedAt: v.number(),
   }),
 );
+
 export type ServiceStatus = Infer<typeof serviceStatusValidator>;
 
 export const health = query({
@@ -453,6 +494,7 @@ export const health = query({
     await user(ctx);
     const now = args.now;
     const out: ServiceStatus[] = [];
+
     for (const service of SERVICES) {
       const row = await ctx.db
         .query("serviceHealth")
@@ -464,10 +506,12 @@ export const health = query({
         // `.first()`, not `.unique()`: by_service has no uniqueness
         // guarantee, and a duplicate row must not take the query down.
         .first();
+
       if (!row) {
         out.push({ service, kind: "unknown" });
         continue;
       }
+
       const freshestAt = Math.max(row.lastHeartbeatAt ?? 0, row.observedAt);
       out.push({
         service,
@@ -480,6 +524,7 @@ export const health = query({
         observedAt: row.observedAt,
       });
     }
+
     return out;
   },
 });

@@ -1,11 +1,13 @@
 import type { Doc } from "../convex/_generated/dataModel";
 import type { JobStatus } from "../convex/lib/contracts";
+
 export function jobLabel(job: Doc<"jobs">) {
   // A "complete" job never has more to fetch: convex/jobs.ts `finish`
   // requeues the SAME job (status stays "queued") whenever the provider
   // reports a `nextUntil`/`nextCursor` to continue from, so nobody has to
   // ask for the next page — "complete" only means genuinely done.
   if (job.status === "complete") return job.error ? "Paused" : "Downloaded";
+
   return {
     queued: "Waiting",
     running: "Downloading",
@@ -14,6 +16,7 @@ export function jobLabel(job: Doc<"jobs">) {
     failed: "Failed",
   }[job.status];
 }
+
 /**
  * A stopped (failed/partial/cancelled) run's own summary line — shared by
  * both branches of `jobSummary` below so a stopped bulk job and a stopped
@@ -31,25 +34,34 @@ export function jobLabel(job: Doc<"jobs">) {
  */
 function stoppedRunSummary(job: Doc<"jobs">): string {
   if (job.status === "cancelled") return job.phase ?? "Stopped by request.";
+
   return job.count > 0
     ? `${job.count.toLocaleString()} record${job.count === 1 ? "" : "s"} retained before this run stopped.`
     : "Nothing was retained before this run stopped.";
 }
+
 export function jobSummary(job: Doc<"jobs">) {
   if (job.kind === "bulk") {
     if (job.postsReceived !== undefined)
       return `${job.postsReceived.toLocaleString()} posts received${job.pages ? ` across ${job.pages} ${job.pages === 1 ? "batch" : "batches"}` : ""}`;
+
     if (job.status === "complete")
       return "This older import saved a batch of posts. Its post count wasn't tracked.";
+
     if (job.status === "failed" || job.status === "partial" || job.status === "cancelled")
       return stoppedRunSummary(job);
+
     return "Waiting for the next batch of posts";
   }
+
   if (job.status === "complete") return "Response saved";
+
   if (job.status === "failed" || job.status === "partial" || job.status === "cancelled")
     return stoppedRunSummary(job);
+
   return job.phase ?? "Waiting to start";
 }
+
 export function jobWarnings(job: Doc<"jobs">) {
   return job.warnings.filter(
     (w) =>
@@ -106,10 +118,14 @@ export function describeRunOutcome(run: {
       : run.count > 0
         ? `${run.count.toLocaleString()} record${run.count === 1 ? "" : "s"} retained`
         : "Nothing was retained from this attempt";
+
   if (run.status === "failed" || run.status === "partial")
     return `${run.error ?? "This run failed for an unreported reason."} ${retained}.`;
+
   if (run.status === "cancelled") return `Stopped by request. ${retained}.`;
+
   if (run.status === "running" || run.status === "queued")
     return run.phase ?? "Waiting for the next batch.";
+
   return `${retained}.`;
 }

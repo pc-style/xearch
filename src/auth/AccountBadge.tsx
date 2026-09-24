@@ -19,7 +19,9 @@ export type AccountBadgeProps = {
 export function AccountBadge({ className }: AccountBadgeProps) {
   const me = useQuery(api.auth.me);
   const { signOut } = useAuthActions();
+
   if (me === undefined || me === null) return null;
+
   if (!me.emailVerified || !me.email) {
     return (
       <p className={className}>
@@ -28,6 +30,7 @@ export function AccountBadge({ className }: AccountBadgeProps) {
       </p>
     );
   }
+
   return (
     <p className={className}>
       Signed in as {me.email}{" "}

@@ -30,14 +30,20 @@ import type { ServiceStatus } from "../../convex/summary";
 // as `Record<string, never>` / `{ now?: number }`, which let src/library/
 // Library.tsx call both with `{}` and pass tsc while Convex would reject the
 // missing required arg at runtime; fixed together with that call site.
-export const summaryQuery = anyApi.summary.summary as unknown as FunctionReference<
+// SAFETY: `anyApi.summary.summary` is typed as `FunctionReference<any, any>`
+// because `convex/_generated/api.d.ts` has not picked up `convex/summary.ts`
+// yet (see the module comment above); the `any` type parameters make this a
+// single, non-widening assertion to the reference's real, frozen contract.
+export const summaryQuery = anyApi.summary.summary as FunctionReference<
   "query",
   "public",
   { now: number },
   DashboardSummary
 >;
 
-export const healthQuery = anyApi.summary.health as unknown as FunctionReference<
+// SAFETY: same as `summaryQuery` above — `anyApi.summary.health` is
+// `FunctionReference<any, any>` until codegen picks up `convex/summary.ts`.
+export const healthQuery = anyApi.summary.health as FunctionReference<
   "query",
   "public",
   { now: number },

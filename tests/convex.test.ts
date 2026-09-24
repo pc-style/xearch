@@ -4,17 +4,22 @@ import firecrawlTest from "@firecrawl/firecrawl-convex/test";
 import schema from "../convex/schema";
 import { EXPIRE_GRACE_MS } from "../convex/jobs";
 import { api, internal } from "../convex/_generated/api";
+
 const modules = import.meta.glob("../convex/**/*.ts");
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
+
 async function setup() {
   const t = convexTest(schema, modules);
+
   const [alice, bob] = await t.run(async (ctx) => [
     await ctx.db.insert("users", { isAnonymous: true }),
     await ctx.db.insert("users", { isAnonymous: true }),
   ]);
+
   return {
     t,
     alice,
@@ -23,11 +28,13 @@ async function setup() {
     b: t.withIdentity({ subject: `${bob}|session` }),
   };
 }
+
 describe("Convex application boundaries", () => {
   it("publishes Effect-decoded search results through the existing service contract", async () => {
     const { t, a, b, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
     vi.stubEnv("SEARCH_SERVICE_TOKEN", "test-search-token");
+
     const post = {
       tweetId: "123",
       author: "example",
@@ -35,13 +42,16 @@ describe("Convex application boundaries", () => {
       url: "https://x.com/example/status/123",
       links: [],
     };
+
     const fetcher = vi.fn<typeof fetch>(async () =>
       Response.json({
         rows: [{ ...post, internalOnly: true }],
         nextCursor: "next",
       }),
     );
+
     vi.stubGlobal("fetch", fetcher);
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -52,9 +62,13 @@ describe("Convex application boundaries", () => {
         warnings: [],
       }),
     );
+
     await t.action(internal.search.execute, { sessionId });
     expect(fetcher).toHaveBeenCalledOnce();
     const init = fetcher.mock.calls[0][1];
+    // SAFETY: convex/search.ts's `execute` only ever calls `fetch` with a
+    // JSON.stringify'd string body (never a Blob/stream/etc — this is the
+    // only fetch call this action makes), so `init.body` is a string here.
     expect(JSON.parse(init?.body as string)).toEqual({
       version: 1,
       query: "convex",
@@ -88,6 +102,7 @@ describe("Convex application boundaries", () => {
         }),
       ),
     );
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -98,6 +113,7 @@ describe("Convex application boundaries", () => {
         warnings: [],
       }),
     );
+
     await t.action(internal.search.execute, { sessionId });
     expect(await a.query(api.search.results, { sessionId })).toMatchObject({
       status: "failed",
@@ -118,6 +134,7 @@ describe("Convex application boundaries", () => {
     const { t, alice } = await setup();
     vi.stubEnv("COLLECTOR_MODE", "outbound");
     vi.stubEnv("COLLECTOR_TOKEN", "test-worker-secret");
+
     const ids = await t.run(async (ctx) => {
       const base = {
         owner: alice,
@@ -129,6 +146,7 @@ describe("Convex application boundaries", () => {
         warnings: [],
         updatedAt: Date.now(),
       };
+
       return [
         await ctx.db.insert("jobs", {
           ...base,
@@ -138,9 +156,11 @@ describe("Convex application boundaries", () => {
         await ctx.db.insert("jobs", { ...base, input: "now" }),
       ];
     });
+
     const first = await t.action(api.worker.poll, {
       token: "test-worker-secret",
     });
+
     expect(first?._id).toBe(ids[1]);
     expect(await t.action(api.worker.poll, { token: "test-worker-secret" })).toBeNull();
     expect((await t.run((ctx) => ctx.db.get(ids[0])))?.status).toBe("queued");
@@ -170,6 +190,7 @@ describe("Convex application boundaries", () => {
   it("blocks public email sending from unverified guest identities", async () => {
     const { t, a, alice } = await setup();
     vi.stubEnv("REQUIRE_VERIFIED_EMAIL", "true");
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -180,6 +201,7 @@ describe("Convex application boundaries", () => {
         warnings: [],
       }),
     );
+
     await expect(
       a.mutation(api.email.send, {
         sessionId,
@@ -189,6 +211,7 @@ describe("Convex application boundaries", () => {
   });
   it("continues older pages in the same import and keeps real post counts", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -206,6 +229,7 @@ describe("Convex application boundaries", () => {
         postsReceived: 0,
       }),
     );
+
     const finish = {
       jobId,
       attempt: 1,
@@ -214,6 +238,7 @@ describe("Convex application boundaries", () => {
       oldest: "2026-06-01",
       nextUntil: "2026-06-01",
     };
+
     await t.mutation(internal.jobs.finish, finish);
     await t.mutation(internal.jobs.finish, finish);
     expect(await t.run((ctx) => ctx.db.get(jobId))).toMatchObject({
@@ -243,6 +268,7 @@ describe("Convex application boundaries", () => {
   });
   it("stops instead of looping when the history boundary does not move", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -258,6 +284,7 @@ describe("Convex application boundaries", () => {
         until: "2026-06-01",
       }),
     );
+
     await t.mutation(internal.jobs.finish, {
       jobId,
       attempt: 1,
@@ -272,6 +299,7 @@ describe("Convex application boundaries", () => {
   });
   it("requeues a bulk import with a further nextUntil on its own — nobody calls jobs.start to get the next page", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -290,6 +318,7 @@ describe("Convex application boundaries", () => {
         postsReceived: 0,
       }),
     );
+
     await t.mutation(internal.jobs.finish, {
       jobId,
       attempt: 1,
@@ -315,6 +344,7 @@ describe("Convex application boundaries", () => {
   });
   it("requeues a non-bulk kind with a nextCursor on its own, and the next attempt reads that cursor", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -329,6 +359,7 @@ describe("Convex application boundaries", () => {
         updatedAt: Date.now(),
       }),
     );
+
     await t.mutation(internal.jobs.finish, {
       jobId,
       attempt: 1,
@@ -349,6 +380,7 @@ describe("Convex application boundaries", () => {
   });
   it("backs off a retryable failure with growing delay, and stops as a failed job after 10 attempts", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -363,7 +395,9 @@ describe("Convex application boundaries", () => {
         readyAt: 0,
       }),
     );
+
     const now = Date.parse("2026-01-01T00:00:00.000Z");
+
     for (let pageAttempt = 1; pageAttempt <= 10; pageAttempt++) {
       vi.setSystemTime(now);
       await t.mutation(internal.jobs.claim, { jobId });
@@ -375,6 +409,7 @@ describe("Convex application boundaries", () => {
         retryAfter: 1_000,
       });
       const job = await t.run((ctx) => ctx.db.get(jobId));
+
       if (pageAttempt < 10) {
         // Backoff grows with each attempt (30s * 2^pageAttempt), capped at
         // 15 minutes — by pageAttempt 5 the formula (960s) has already
@@ -391,10 +426,12 @@ describe("Convex application boundaries", () => {
         expect(job?.readyAt).toBeUndefined();
       }
     }
+
     vi.useRealTimers();
   });
   it("lets any signed-in caller cancel a job someone else started, and still rejects progress from a stopped worker", async () => {
     const { t, a, b, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -408,6 +445,7 @@ describe("Convex application boundaries", () => {
         updatedAt: Date.now(),
       }),
     );
+
     // Imports are shared infrastructure, not personal data: bob (a
     // different signed-in caller) can see the job's receipts and cancel it,
     // even though alice started it.
@@ -425,6 +463,7 @@ describe("Convex application boundaries", () => {
   });
   it("still refuses an unauthenticated caller entirely", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -438,6 +477,7 @@ describe("Convex application boundaries", () => {
         updatedAt: Date.now(),
       }),
     );
+
     await expect(t.mutation(api.jobs.cancel, { jobId })).rejects.toThrow();
     await expect(t.query(api.jobs.receipts, { jobId })).rejects.toThrow();
   });
@@ -456,6 +496,7 @@ describe("Convex application boundaries", () => {
   });
   it("will not expose search results or bookmark another user's session", async () => {
     const { t, alice, b } = await setup();
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: alice,
@@ -474,6 +515,7 @@ describe("Convex application boundaries", () => {
         warnings: [],
       }),
     );
+
     await expect(b.query(api.search.results, { sessionId })).rejects.toThrow(
       "Search session not found",
     );
@@ -483,6 +525,7 @@ describe("Convex application boundaries", () => {
   });
   it("advances indexing progress once per receipt and refuses stale workers", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -496,6 +539,7 @@ describe("Convex application boundaries", () => {
         updatedAt: 0,
       }),
     );
+
     const ack = {
       jobId,
       attempt: 1,
@@ -503,6 +547,7 @@ describe("Convex application boundaries", () => {
       receiptId: "r1",
       count: 25,
     };
+
     await t.mutation(internal.jobs.ack, ack);
     await t.mutation(internal.jobs.ack, ack);
     expect(await t.run(async (ctx) => (await ctx.db.get(jobId))!.count)).toBe(25);
@@ -532,6 +577,7 @@ describe("Convex application boundaries", () => {
     firecrawlTest.register(t);
     vi.stubEnv("FIRECRAWL_API_KEY", "fc-test");
     vi.stubEnv("RAW_CAPTURE_URL", "");
+
     const fetcher = vi.fn<typeof fetch>(async () =>
       Response.json({
         success: true,
@@ -541,6 +587,7 @@ describe("Convex application boundaries", () => {
         },
       }),
     );
+
     vi.stubGlobal("fetch", fetcher);
     expect(
       await a.action(api.integrations.readLink, {
@@ -571,6 +618,7 @@ describe("Convex application boundaries", () => {
     firecrawlTest.register(t);
     vi.stubEnv("FIRECRAWL_API_KEY", "fc-test");
     vi.stubEnv("RAW_CAPTURE_URL", "");
+
     const fetcher = vi.fn<typeof fetch>(async () =>
       Response.json({
         success: true,
@@ -580,13 +628,17 @@ describe("Convex application boundaries", () => {
         },
       }),
     );
+
     vi.stubGlobal("fetch", fetcher);
+
     const first = await a.action(api.integrations.readLink, {
       url: "https://example.com/long",
     });
+
     const cached = await a.action(api.integrations.readLink, {
       url: "https://example.com/long",
     });
+
     expect(first.text).toContain("Preview shortened");
     expect(first.text.length).toBeLessThan(4200);
     expect(cached).toEqual(first);

@@ -4,6 +4,7 @@ import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { Component, StrictMode, type ReactNode } from "react";
 import App from "./App";
 import "./style.css";
+
 class Boundary extends Component<{ children: ReactNode }, { error: boolean }> {
   override state = { error: false };
   static getDerivedStateFromError() {
@@ -21,7 +22,9 @@ class Boundary extends Component<{ children: ReactNode }, { error: boolean }> {
     );
   }
 }
+
 const url = import.meta.env.VITE_CONVEX_URL;
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     {url ? (

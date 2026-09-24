@@ -18,6 +18,7 @@ const modules = import.meta.glob("../convex/**/*.ts");
 async function setup() {
   const t = convexTest(schema, modules);
   const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return { t, alice, a: t.withIdentity({ subject: `${alice}|session` }) };
 }
 
@@ -88,6 +89,7 @@ describe("provider throttling reaches the dashboard from the real acquisition pa
     const after = await a.query(api.limits.all, {});
     const xmd = after.find((limit) => limit.provider === "xmd");
     expect(xmd?.kind).toBe("throttled");
+
     if (xmd?.kind !== "throttled") throw new Error("expected a throttled reading");
 
     // The provider's own words, not ours.
@@ -126,6 +128,7 @@ describe("provider throttling reaches the dashboard from the real acquisition pa
     await t.action(internal.importer.run, { jobId: await queuedJob(t, alice) });
 
     const xmd = (await a.query(api.limits.all, {})).find((limit) => limit.provider === "xmd");
+
     if (xmd?.kind !== "throttled") throw new Error("expected a throttled reading");
     expect(xmd.remaining).toEqual({ kind: "unknown" });
     expect(xmd.resetAt).toBeUndefined();

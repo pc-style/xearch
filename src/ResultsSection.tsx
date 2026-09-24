@@ -24,6 +24,7 @@ type SessionResult = Doc<"sessions">;
 
 export function Avatar({ name, url }: { name: string; url?: string }) {
   const [failedUrl, setFailedUrl] = useState<string>();
+
   return (
     <span className="avatar">
       {url && url !== failedUrl ? (
@@ -46,19 +47,24 @@ export function Highlight({ text, query }: { text: string; query: string }) {
     .split(/\s+/)
     .filter((w) => w.length > 2 && !w.startsWith("@"))
     .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
   if (!words.length) return <>{text}</>;
   const pattern = new RegExp(`(${words.join("|")})`, "gi");
   const parts: { key: string; text: string; mark: boolean }[] = [];
   let cursor = 0;
+
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
+
     if (start > cursor)
       parts.push({ key: `text-${cursor}`, text: text.slice(cursor, start), mark: false });
     parts.push({ key: `mark-${start}`, text: match[0], mark: true });
     cursor = start + match[0].length;
   }
+
   if (cursor < text.length)
     parts.push({ key: `text-${cursor}`, text: text.slice(cursor), mark: false });
+
   return (
     <>
       {parts.map((part) =>
@@ -92,6 +98,7 @@ export function PostCard({
   const [expanded, setExpanded] = useState(false);
   const createdAt = post.createdAt === undefined ? null : new Date(post.createdAt);
   const hasValidDate = createdAt !== null && !Number.isNaN(createdAt.getTime());
+
   return (
     <article className="post">
       <header>
@@ -176,12 +183,15 @@ const compactNumber = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
+
 const postDateTime = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
   year: "numeric",
 });
+
 const compact = (n: number) => compactNumber.format(n);
+
 const safeHostname = (url: string) => {
   try {
     return new URL(url).hostname;
@@ -239,6 +249,7 @@ export function ResultsSection({
     node.scrollIntoView({ block: "start" });
     node.focus({ preventScroll: true });
   }
+
   const deferredVisible = useDeferredValue(visible);
 
   return (

@@ -35,6 +35,7 @@ export const publicationUpdateEnvelope = v.object({
   version: v.literal(1),
   ...publicationUpdateFields,
 });
+
 export type PublicationUpdateEnvelope = Infer<typeof publicationUpdateEnvelope>;
 
 // --- Counts, labelled and honestly unknown ----------------------------------
@@ -48,6 +49,7 @@ export const countValidator = v.union(
   v.object({ kind: v.literal("known"), unit: countUnitValidator, value: v.number() }),
   v.object({ kind: v.literal("unknown"), unit: countUnitValidator }),
 );
+
 export type Count = Infer<typeof countValidator>;
 
 // --- Dashboard summary -------------------------------------------------------
@@ -70,6 +72,7 @@ export const summaryScopeValidator = v.union(
   v.object({ kind: v.literal("global") }),
   v.object({ kind: v.literal("account"), accountId: v.id("accounts") }),
 );
+
 export type SummaryScope = Infer<typeof summaryScopeValidator>;
 
 export const queueBreakdownValidator = v.object({
@@ -87,6 +90,7 @@ export const queueBreakdownValidator = v.object({
   // underlying job is "complete" (the download succeeded, indexing did not).
   failedRetryable: countValidator,
 });
+
 export type QueueBreakdown = Infer<typeof queueBreakdownValidator>;
 
 // --- Provider-reported queued work -------------------------------------------
@@ -122,6 +126,7 @@ export const providerQueuedWorkValidator = v.object({
   captures: countValidator,
   jobs: countValidator,
 });
+
 export type ProviderQueuedWork = Infer<typeof providerQueuedWorkValidator>;
 
 export const dashboardSummaryValidator = v.object({
@@ -149,6 +154,7 @@ export const dashboardSummaryValidator = v.object({
   // it). A summary is a point-in-time read, not a live guarantee.
   observedAt: v.number(),
 });
+
 export type DashboardSummary = Infer<typeof dashboardSummaryValidator>;
 
 // --- Account library row -----------------------------------------------------
@@ -169,6 +175,7 @@ export const nextActionValidator = v.union(
   v.object({ kind: v.literal("wait"), jobId: v.id("jobs"), readyAt: v.number() }),
   v.object({ kind: v.literal("none") }),
 );
+
 export type NextAction = Infer<typeof nextActionValidator>;
 
 export const accountLibraryRowValidator = v.object({
@@ -197,11 +204,14 @@ export const accountLibraryRowValidator = v.object({
   ),
   nextAction: nextActionValidator,
 });
+
 export type AccountLibraryRow = Infer<typeof accountLibraryRowValidator>;
 
 // --- Convenience type aliases -------------------------------------------------
 // Re-exported so other modules can import one plain TS type instead of
 // reaching into convex/schema.ts and calling Infer themselves.
 export type PublicationState = Infer<typeof publicationStateValidator>;
+
 export type ReportedPublicationState = Infer<typeof reportedPublicationStateValidator>;
+
 export type JobStatus = Infer<typeof jobStatusValidator>;

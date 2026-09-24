@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
-import { api, internal } from "../convex/_generated/api";
+import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 
 const modules = import.meta.glob("../convex/**/*.ts");
@@ -22,6 +22,7 @@ async function setup() {
   vi.stubEnv("COLLECTOR_MODE", "outbound");
   vi.stubEnv("COLLECTOR_TOKEN", "worker-secret");
   vi.stubEnv("X_MD_API_KEY", "test");
+
   return { t, owner };
 }
 

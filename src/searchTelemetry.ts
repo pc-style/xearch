@@ -1,8 +1,11 @@
 import type { Id } from "../convex/_generated/dataModel";
 
 export type SearchAttemptId = number;
+
 export type SearchSessionId = Id<"sessions">;
+
 export type MonotonicClock = () => number;
+
 export type FrameScheduler = (callback: () => void) => void;
 
 /** The UI entry point that created a client-side search attempt. */
@@ -31,6 +34,7 @@ export type SearchResultStatus =
   | SearchStatus.Running
   | SearchStatus.Complete
   | SearchStatus.Failed;
+
 export type SearchTerminalStatus = SearchStatus.Complete | SearchStatus.Failed;
 
 /** The part of Convex's connection state useful at a search boundary. */
@@ -129,6 +133,11 @@ export interface SearchTimingMetrics {
   readonly baseDurationMs: number | null;
 }
 
+export interface CommitResult {
+  readonly changed: boolean;
+  readonly firstResult: boolean;
+}
+
 export interface ConnectionDelta {
   readonly elapsedMs: number;
   readonly connectionCountDelta: number;
@@ -139,6 +148,7 @@ export interface ConnectionDelta {
 }
 
 const EMPTY_SERVER_SNAPSHOT: SearchAttemptSnapshot | null = null;
+
 const STATUS_RANK: Record<SearchStatus, number> = {
   [SearchStatus.Submitted]: 0,
   [SearchStatus.MutationStarted]: 1,
@@ -153,7 +163,8 @@ const defaultClock: MonotonicClock = () =>
   typeof performance === "undefined" ? Date.now() : performance.now();
 
 const defaultScheduleFrame: FrameScheduler = (callback) => {
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => callback());
+  if (typeof requestAnimationFrame === "undefined") return;
+  requestAnimationFrame(() => callback());
 };
 
 function isTerminalStatus(status: SearchResultStatus): status is SearchTerminalStatus {
@@ -169,25 +180,19 @@ function observeConnection(
   observedAt: number,
 ): ConnectionObservation | null {
   if (!state) return null;
-  const optional = {
-    ...(state.connectionRetries === undefined
-      ? {}
-      : { connectionRetries: state.connectionRetries }),
-    ...(state.hasInflightRequests === undefined
-      ? {}
-      : { hasInflightRequests: state.hasInflightRequests }),
-    ...(state.inflightMutations === undefined
-      ? {}
-      : { inflightMutations: state.inflightMutations }),
-    ...(state.inflightActions === undefined ? {} : { inflightActions: state.inflightActions }),
-  };
-  return Object.freeze({
+
+  const observation: ConnectionObservation = {
     observedAt,
     isWebSocketConnected: state.isWebSocketConnected,
     hasEverConnected: state.hasEverConnected,
     connectionCount: state.connectionCount,
-    ...optional,
-  });
+    connectionRetries: state.connectionRetries,
+    hasInflightRequests: state.hasInflightRequests,
+    inflightMutations: state.inflightMutations,
+    inflightActions: state.inflightActions,
+  };
+
+  return Object.freeze(observation);
 }
 
 function freezeAttempt(attempt: SearchAttemptSnapshot): SearchAttemptSnapshot {
@@ -212,7 +217,13 @@ export function createSearchTelemetryStore(
   let nextAttemptId = 0;
 
   const notify = () => {
-    for (const listener of [...listeners]) listener();
+    // Iterate a snapshot: a listener that unsubscribes and re-subscribes
+    // while being notified would otherwise be visited again by the live Set
+    // iterator, and a component doing that on every notification would keep
+    // this loop running. The copy is deliberate, not a useless spread.
+    const snapshot = [...listeners];
+
+    for (const listener of snapshot) listener();
   };
 
   const update = (
@@ -221,9 +232,11 @@ export function createSearchTelemetryStore(
   ): boolean => {
     if (!current || current.attemptId !== attemptId) return false;
     const next = change(current);
+
     if (next === current) return false;
     current = freezeAttempt(next);
     notify();
+
     return true;
   };
 
@@ -231,26 +244,27 @@ export function createSearchTelemetryStore(
     scheduleFrame(() => {
       update(attemptId, (attempt) => {
         if (attempt.nextFramePaintAt !== null) return attempt;
+
         return { ...attempt, nextFramePaintAt: clock() };
       });
     });
   };
 
-  const commitResult = (
-    input: ResultCommitInput,
-    committedAt: number,
-  ): { changed: boolean; firstResult: boolean } => {
+  const commitResult = (input: ResultCommitInput, committedAt: number): CommitResult => {
     if (!current || current.attemptId !== input.attemptId) {
       return { changed: false, firstResult: false };
     }
+
     if (input.sessionId && current.sessionId && input.sessionId !== current.sessionId) {
       return { changed: false, firstResult: false };
     }
+
     if (current.terminalCommitAt !== null) return { changed: false, firstResult: false };
 
     const firstResult = current.firstResultCommitAt === null;
     const terminal = isTerminalStatus(input.status);
     const nextStatus = advanceStatus(current.status, input.status);
+
     const nextTerminal = terminal
       ? {
           terminalCommitAt: committedAt,
@@ -259,18 +273,22 @@ export function createSearchTelemetryStore(
           connectionAtTerminal: observeConnection(input.connection, committedAt),
         }
       : {};
+
     const changed = update(input.attemptId, (attempt) => ({
       ...attempt,
       firstResultCommitAt: attempt.firstResultCommitAt ?? committedAt,
       status: nextStatus,
       ...nextTerminal,
     }));
+
     if (changed && firstResult) schedulePaint(input.attemptId);
+
     return { changed, firstResult };
   };
 
   const subscribe = (listener: () => void): (() => void) => {
     listeners.add(listener);
+
     return () => {
       listeners.delete(listener);
     };
@@ -281,7 +299,9 @@ export function createSearchTelemetryStore(
 
   const startAttempt = (input: StartAttemptInput): SearchAttemptId => {
     const attemptId = input.attemptId ?? nextAttemptId + 1;
+
     if (attemptId > nextAttemptId) nextAttemptId = attemptId;
+
     if (
       current &&
       (attemptId < current.attemptId ||
@@ -310,6 +330,7 @@ export function createSearchTelemetryStore(
       connectionAtTerminal: null,
     });
     notify();
+
     return attemptId;
   };
 
@@ -317,6 +338,7 @@ export function createSearchTelemetryStore(
     if (!current || current.attemptId !== attemptId || current.mutationStartedAt !== null)
       return false;
     const mutationStartedAt = clock();
+
     return update(attemptId, (attempt) => ({
       ...attempt,
       mutationStartedAt,
@@ -330,16 +352,20 @@ export function createSearchTelemetryStore(
     connection?: ConvexConnectionState,
   ): boolean => {
     if (!current || current.attemptId !== attemptId) return false;
+
     if (current.sessionId && current.sessionId !== sessionId) return false;
     const sessionAt = current.sessionAt ?? clock();
+
     const sessionConnection =
       current.connectionAtSession ?? observeConnection(connection, sessionAt);
+
     if (
       current.sessionAt !== null &&
       current.connectionAtSession === sessionConnection &&
       current.status === advanceStatus(current.status, SearchStatus.SessionReady)
     )
       return false;
+
     return update(attemptId, (attempt) => ({
       ...attempt,
       sessionAt: attempt.sessionAt ?? sessionAt,
@@ -351,8 +377,10 @@ export function createSearchTelemetryStore(
 
   const markResultCommit = (input: ResultCommitInput): boolean => {
     if (!current || current.attemptId !== input.attemptId) return false;
+
     if (current.terminalCommitAt !== null) return false;
     const committedAt = clock();
+
     return commitResult(input, committedAt).changed;
   };
 
@@ -378,6 +406,7 @@ export function createSearchTelemetryStore(
       (current.actualDurationMs === actualDurationMs && current.baseDurationMs === baseDurationMs)
     )
       return false;
+
     return update(attemptId, () => ({
       ...current!,
       actualDurationMs,
@@ -405,9 +434,7 @@ export function createSearchTelemetryStore(
   });
 }
 
-export function deriveSearchMetrics(
-  attempt: SearchAttemptSnapshot | null,
-): SearchTimingMetrics {
+export function deriveSearchMetrics(attempt: SearchAttemptSnapshot | null): SearchTimingMetrics {
   if (!attempt)
     return {
       submitToMutationStartMs: null,
@@ -421,6 +448,7 @@ export function deriveSearchMetrics(
       actualDurationMs: null,
       baseDurationMs: null,
     };
+
   return {
     submitToMutationStartMs: difference(attempt.mutationStartedAt, attempt.submittedAt),
     mutationMs: difference(attempt.sessionAt, attempt.mutationStartedAt),
@@ -442,8 +470,10 @@ export function connectionDelta(
   after: ConnectionObservation | null,
 ): ConnectionDelta | null {
   if (!before || !after) return null;
+
   const retriesAvailable =
     before.connectionRetries !== undefined && after.connectionRetries !== undefined;
+
   return {
     elapsedMs: after.observedAt - before.observedAt,
     connectionCountDelta: after.connectionCount - before.connectionCount,
@@ -471,30 +501,30 @@ export function deriveConnectionDeltas(
       submitToSession: null,
       sessionToTerminal: null,
     };
+
   return {
-    submitToSession: connectionDelta(
-      attempt.connectionAtSubmit,
-      attempt.connectionAtSession,
-    ),
-    sessionToTerminal: connectionDelta(
-      attempt.connectionAtSession,
-      attempt.connectionAtTerminal,
-    ),
+    submitToSession: connectionDelta(attempt.connectionAtSubmit, attempt.connectionAtSession),
+    sessionToTerminal: connectionDelta(attempt.connectionAtSession, attempt.connectionAtTerminal),
   };
 }
 
 /** Formats client timings in browser milliseconds; it never treats them as provider microseconds. */
 export function formatDurationMs(durationMs: number | null): string {
   if (durationMs === null || !Number.isFinite(durationMs)) return "—";
-  if (Math.abs(durationMs) >= 1_000)
-    return `${(durationMs / 1_000).toFixed(2)} s`;
+
+  if (Math.abs(durationMs) >= 1_000) return `${(durationMs / 1_000).toFixed(2)} s`;
+
   return `${durationMs.toFixed(2)} ms`;
 }
 
 export const formatFrontendDuration = formatDurationMs;
 
 export const searchTelemetryStore = createSearchTelemetryStore();
+
 export const searchTelemetry = searchTelemetryStore;
+
 export const subscribe = searchTelemetryStore.subscribe;
+
 export const getSnapshot = searchTelemetryStore.getSnapshot;
+
 export const getServerSnapshot = searchTelemetryStore.getServerSnapshot;

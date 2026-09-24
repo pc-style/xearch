@@ -3,8 +3,11 @@ import { useSyncExternalStore } from "react";
 export const DASHBOARD_CLOCK_INTERVAL_MS = 30_000;
 
 const initialNow = Date.now();
+
 const listeners = new Set<() => void>();
+
 let now: number | undefined = typeof window === "undefined" ? initialNow : undefined;
+
 let interval: ReturnType<typeof setInterval> | null = null;
 
 function notify(): void {
@@ -13,6 +16,7 @@ function notify(): void {
 
 function refresh(): void {
   const nextNow = Date.now();
+
   if (nextNow === now) return;
   now = nextNow;
   notify();
@@ -31,15 +35,19 @@ function stop(): void {
 
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
+
   if (listeners.size === 1) start();
+
   return () => {
     listeners.delete(listener);
+
     if (listeners.size === 0) stop();
   };
 }
 
 export function getSnapshot(): number {
   if (now === undefined) now = Date.now();
+
   return now;
 }
 

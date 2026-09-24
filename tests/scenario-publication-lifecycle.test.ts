@@ -1,22 +1,60 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
+import type {
+  ArgsAndOptions,
+  FunctionArgs,
+  FunctionReference,
+  FunctionReference_future,
+  FunctionReturnType,
+} from "convex/server";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
+import type { MutationOptions, Watch, WatchQueryOptions } from "convex/react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import schema from "../convex/schema";
 import { PUBLICATION_STATE_META } from "../src/library/format";
-import type { AccountLibraryRow } from "../convex/lib/contracts";
+import type { AccountLibraryRow, PublicationUpdateEnvelope } from "../convex/lib/contracts";
+import AccountRow from "../src/library/AccountRow";
 
-// AccountRow calls useQuery/useMutation (convex/react) directly, with no
-// ConvexProvider in this render — mock the same way tests/library-ui.test.ts
-// and the earlier proof.test.ts scratchpad do, so this stays a pure
-// "what text does this component produce for this row" check, not a live
-// Convex client test (that's covered by the query/mutation calls above it).
-vi.mock("convex/react", () => ({
-  useQuery: () => undefined,
-  useMutation: () => vi.fn().mockResolvedValue(undefined),
-}));
-const AccountRow = (await import("../src/library/AccountRow")).default;
+/**
+ * AccountRow calls useQuery/useMutation (convex/react) directly, so it needs
+ * a real ConvexProvider above it in the tree. This test never expands the
+ * row or fires its buttons, so the queries/mutations it wires up are never
+ * actually resolved or invoked — this fake client only has to give
+ * useQuery/useMutation a real ConvexReactClient to read from (watchQuery,
+ * for the "no data yet" case every hook here hits) and to build a mutation
+ * function around (mutation, never called). Anything beyond that stays the
+ * unimplemented `ConvexReactClient` behavior, which is fine because nothing
+ * here reaches it.
+ */
+class FakeConvexReactClient extends ConvexReactClient {
+  constructor() {
+    super("https://fake.convex.cloud");
+  }
+
+  override watchQuery<Query extends FunctionReference<"query"> | FunctionReference_future<"query">>(
+    query: Query,
+    ..._argsAndOptions: ArgsAndOptions<Query, WatchQueryOptions>
+  ): Watch<FunctionReturnType<Query>> {
+    return {
+      onUpdate: () => () => {},
+      localQueryResult: () => undefined,
+      journal: () => undefined,
+    };
+  }
+
+  override mutation<
+    Mutation extends FunctionReference<"mutation"> | FunctionReference_future<"mutation">,
+  >(
+    _mutation: Mutation,
+    ..._argsAndOptions: ArgsAndOptions<Mutation, MutationOptions<FunctionArgs<Mutation>>>
+  ): Promise<FunctionReturnType<Mutation>> {
+    return Promise.resolve(undefined);
+  }
+}
+
+const fakeConvexClient = new FakeConvexReactClient();
 
 /**
  * Workflow-run scenario evidence for to-do.md's acceptance check:
@@ -35,19 +73,21 @@ const AccountRow = (await import("../src/library/AccountRow")).default;
  */
 
 const modules = import.meta.glob("../convex/**/*.ts");
+
 const applyUpdate = anyApi.publication.applyUpdate;
+
 const libraryRows = anyApi.library.rows;
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function envelope(overrides: Record<string, unknown> = {}) {
+function envelope(overrides: Partial<PublicationUpdateEnvelope> = {}): PublicationUpdateEnvelope {
   return {
     version: 1 as const,
     handle: "alice",
     providerAccountId: "111",
-    captureIds: [] as string[],
+    captureIds: [],
     generation: 1,
     reportedState: "indexing" as const,
     observedAt: Date.now(),
@@ -56,7 +96,10 @@ function envelope(overrides: Record<string, unknown> = {}) {
 }
 
 function renderedLabel(row: AccountLibraryRow): string {
-  const html = renderToStaticMarkup(createElement(AccountRow, { row } as any));
+  const html = renderToStaticMarkup(
+    createElement(ConvexProvider, { client: fakeConvexClient }, createElement(AccountRow, { row })),
+  );
+
   return html;
 }
 
@@ -67,9 +110,11 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     // --- Seed: an account this user owns, with one completed acquisition
     // job (a "downloaded capture") and NO publication update yet. ---
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "alice", userId: "111", name: "Alice" }),
     );
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner,
@@ -84,6 +129,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         updatedAt: Date.now(),
       }),
     );
+
     await t.run((ctx) =>
       ctx.db.insert("receipts", { jobId, captureId: "cap1", receiptId: "r1", records: 500 }),
     );
@@ -105,6 +151,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
 
     // --- Step 2: confirmed publication update -> searchable, no reacquisition ---
     const jobsBeforeUpdate = await t.run((ctx) => ctx.db.query("jobs").collect());
+
     const applied = await t.mutation(
       applyUpdate,
       envelope({
@@ -114,6 +161,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         uniquePostCountAsOf: Date.now(),
       }),
     );
+
     console.log("STEP2 applyUpdate result:", JSON.stringify(applied));
     expect(applied).toEqual({ outcome: "applied", committedGeneration: 1 });
 
@@ -141,14 +189,17 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         uniquePostCountAsOf: Date.now(),
       }),
     );
+
     console.log("STEP3 duplicate result:", JSON.stringify(duplicate));
     expect(duplicate).toEqual({ outcome: "duplicate_ignored", committedGeneration: 1 });
+
     const rowAfterDup = await t.run((ctx) =>
       ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique(),
     );
+
     console.log("STEP3 stored row after duplicate:", JSON.stringify(rowAfterDup));
     expect(rowAfterDup?.searchablePostCount).toBe(480); // not doubled, not re-summed
     const updateLog = await t.run((ctx) => ctx.db.query("publicationUpdates").collect());
@@ -164,14 +215,17 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         error: { message: "an old retry, arriving late" },
       }),
     );
+
     console.log("STEP4 stale result:", JSON.stringify(stale));
     expect(stale).toEqual({ outcome: "stale_ignored", committedGeneration: 1 });
+
     const rowAfterStale = await t.run((ctx) =>
       ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique(),
     );
+
     console.log("STEP4 stored row after stale update:", JSON.stringify(rowAfterStale));
     expect(rowAfterStale?.state).toBe("searchable"); // did not regress to "failed"
     const rowsAfterStale = (await session.query(libraryRows, {})).rows;
@@ -179,6 +233,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
 
     // --- Step 5: unauthorized request over HTTP -> fails closed ---
     vi.stubEnv("PUBLICATION_SERVICE_TOKEN", "correct-secret");
+
     const unauth = await t.fetch("/publication/update", {
       method: "POST",
       headers: { Authorization: "Bearer wrong-secret", "Content-Type": "application/json" },
@@ -191,6 +246,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         }),
       ),
     });
+
     console.log(
       "STEP5 unauthorized HTTP status:",
       unauth.status,
@@ -202,12 +258,14 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
       ),
     );
     expect(unauth.status).toBe(401);
+
     const rowAfterUnauth = await t.run((ctx) =>
       ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique(),
     );
+
     console.log(
       "STEP5 stored row after unauthorized attempt (unchanged):",
       JSON.stringify(rowAfterUnauth),

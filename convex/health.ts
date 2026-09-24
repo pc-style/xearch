@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { v } from "convex/values";
 import { anyApi } from "convex/server";
 import { httpAction, internalAction, internalMutation } from "./_generated/server";
@@ -62,12 +63,17 @@ function healthServiceToken(env: Record<string, string | undefined> = process.en
 // Same shape on purpose — one convention, two copies, not two conventions.
 function bearerToken(request: Request): string | undefined {
   const header = request.headers.get("Authorization");
+
   if (!header) return undefined;
   const [scheme, ...rest] = header.split(" ");
+
   return scheme === "Bearer" && rest.length > 0 ? rest.join(" ") : undefined;
 }
 
-function json(body: unknown, status: number): Response {
+/** A JSON-serializable value — exactly what `JSON.stringify` accepts. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function json(body: JsonValue, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -75,32 +81,12 @@ function json(body: unknown, status: number): Response {
 }
 
 // --- Inbound report narrowing --------------------------------------------
-// `await request.json()` is `unknown`; narrow every field by hand and fail
+// `await request.json()` is `unknown`; decode it with a schema and fail
 // closed with 400 on anything that doesn't match, per
-// convex/_generated/ai/guidelines.md ("Http endpoint syntax"). An unlisted
-// key is rejected too: `record` below takes a strict Convex object
+// convex/_generated/ai/guidelines.md ("Http endpoint syntax"). `.strict()`
+// rejects an unlisted key too: `record` below takes a strict Convex object
 // validator that throws on a key it wasn't told about, and an uncaught
 // throw is a 500, not the documented 400.
-
-type HealthReport = {
-  version: 1;
-  service: "indexer" | "receiver" | "search";
-  healthy: boolean;
-  observedAt: number;
-  error?: { message: string };
-};
-
-const REPORT_KEYS = new Set(["version", "service", "healthy", "observedAt", "error"]);
-const ERROR_KEYS = new Set(["message"]);
-const SERVICES = new Set(["indexer", "receiver", "search"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
-  return Object.keys(value).every((key) => allowed.has(key));
-}
 
 // Long enough for a real provider/transport message, short enough that a
 // runaway stack trace cannot turn one row into a document-size problem.
@@ -113,31 +99,26 @@ function clamp(message: string): string {
     : `${message.slice(0, MAX_ERROR_MESSAGE)}… (truncated)`;
 }
 
-function parseReport(body: unknown): HealthReport | null {
-  if (!isRecord(body)) return null;
-  if (!hasOnlyKeys(body, REPORT_KEYS)) return null;
-  if (body.version !== 1) return null;
-  if (typeof body.service !== "string" || !SERVICES.has(body.service)) return null;
-  if (typeof body.healthy !== "boolean") return null;
-  if (typeof body.observedAt !== "number" || !Number.isFinite(body.observedAt)) return null;
-  if (body.error !== undefined) {
-    if (!isRecord(body.error)) return null;
-    if (!hasOnlyKeys(body.error, ERROR_KEYS)) return null;
-    if (typeof body.error.message !== "string" || body.error.message.length === 0) return null;
+const healthReportSchema = z
+  .object({
+    version: z.literal(1),
+    service: z.enum(["indexer", "receiver", "search"]),
+    healthy: z.boolean(),
+    observedAt: z.number().finite(),
     // Deliberately NOT rejected for being long. The reporter sends whatever
     // the failure actually said, verbatim; refusing a verbose message with a
     // 400 would throw away the observation and leave the previous health
     // reading standing, which is the opposite of what a failure report is
     // for. `record` clamps it on the way into the document instead, so the
     // row stays bounded and the service still gets marked unhealthy.
-  }
+    error: z.strictObject({ message: z.string().min(1) }).optional(),
+  })
+  .strict()
   // An unhealthy report with nothing to say about why is not a usable
   // observation: `lastError` is supposed to carry the real failure text, so
   // a report that withholds it is rejected instead of silently storing a
   // bare `healthy: false` the dashboard cannot explain.
-  if (!body.healthy && body.error === undefined) return null;
-  return body as HealthReport;
-}
+  .refine((report) => report.healthy || report.error !== undefined);
 
 // --- HTTP entry point -----------------------------------------------------
 
@@ -146,19 +127,22 @@ export const receiveReport = httpAction(async (ctx, request) => {
   // convex/publication.ts's receiver. A missing token configuration fails
   // CLOSED: an unconfigured receiver is never an open one.
   const expected = healthServiceToken();
+
   if (!expected || bearerToken(request) !== expected) {
     return json({ outcome: "rejected_unauthorized" }, 401);
   }
 
   let body: unknown;
+
   try {
     body = await request.json();
   } catch {
     return json({ error: "Request body must be JSON." }, 400);
   }
 
-  const report = parseReport(body);
-  if (!report) {
+  const parsed = healthReportSchema.safeParse(body);
+
+  if (!parsed.success) {
     return json(
       {
         error:
@@ -168,6 +152,8 @@ export const receiveReport = httpAction(async (ctx, request) => {
       400,
     );
   }
+
+  const report = parsed.data;
 
   await ctx.runMutation(anyApi.health.record, {
     service: report.service,
@@ -180,8 +166,18 @@ export const receiveReport = httpAction(async (ctx, request) => {
       ? { message: report.error.message, observedAt: report.observedAt }
       : undefined,
   });
+
   return json({ recorded: true }, 200);
 });
+
+type ServiceHealthDoc = {
+  service: "indexer" | "receiver" | "search";
+  healthy: boolean;
+  observedAt: number;
+  lastHeartbeatAt: number;
+  lastSuccessAt?: number;
+  lastError?: { message: string; observedAt: number };
+};
 
 // --- The upsert -----------------------------------------------------------
 
@@ -199,6 +195,7 @@ export const record = internalMutation({
     // is reporting. It is the time we recorded an observation that had just
     // been made, which is what the dashboard means by "last seen".
     const observedAt = Date.now();
+
     const existing = await ctx.db
       .query("serviceHealth")
       .withIndex("by_service_and_observed", (q) => q.eq("service", args.service))
@@ -214,14 +211,7 @@ export const record = internalMutation({
     // One row per service, forever: patch when it exists, insert only the
     // first time. A history of readings is not what this table is for — the
     // dashboard asks "is it alive now, and when did it last work".
-    const doc: {
-      service: "indexer" | "receiver" | "search";
-      healthy: boolean;
-      observedAt: number;
-      lastHeartbeatAt: number;
-      lastSuccessAt?: number;
-      lastError?: { message: string; observedAt: number };
-    } = {
+    const doc: ServiceHealthDoc = {
       service: args.service,
       healthy: args.healthy,
       observedAt,
@@ -244,11 +234,13 @@ export const record = internalMutation({
     //     and `healthy` (plus the row's own `observedAt`) is what says
     //     whether that error is the current state or history.
     if (args.healthy) doc.lastSuccessAt = observedAt;
+
     if (args.error)
       doc.lastError = { message: clamp(args.error.message), observedAt: args.error.observedAt };
 
     if (existing) await ctx.db.patch(existing._id, doc);
     else await ctx.db.insert("serviceHealth", doc);
+
     return null;
   },
 });
@@ -260,7 +252,9 @@ export const record = internalMutation({
 // the status keeps a proxy's own 200 from being mistaken for the service
 // being up.
 const SEARCH_HEALTH_BODY = "ok";
+
 const SEARCH_PROBE_TIMEOUT_MS = 10_000;
+
 // A body snippet long enough to identify what answered instead (an error
 // page's first line, a proxy banner) without storing a whole document.
 const BODY_SNIPPET = 200;
@@ -284,29 +278,35 @@ export const probeSearch = internalAction({
   returns: v.null(),
   handler: async (ctx): Promise<null> => {
     const configured = process.env.SEARCH_API_URL;
+
     // Not configured means we have nowhere to look, which is not the same
     // as the service being down. Record nothing: the dashboard keeps saying
     // "no health report received yet", which is exactly true.
     if (!configured) return null;
     const url = searchHealthUrl(configured);
+
     if (!url) {
       // Same reasoning: a URL we cannot even parse is a fact about our
       // configuration, not an observation of the service. Logged, not
       // recorded as `healthy: false` — that would blame the service for our
       // own misconfiguration.
       console.error("health probe: SEARCH_API_URL is not a valid URL; no health recorded.");
+
       return null;
     }
 
     let failure: string | undefined;
+
     try {
       const response = await fetch(url, {
         method: "GET",
         redirect: "error",
         signal: AbortSignal.timeout(SEARCH_PROBE_TIMEOUT_MS),
       });
+
       if (response.ok) {
         const body = (await response.text()).trim();
+
         if (body !== SEARCH_HEALTH_BODY)
           failure = `Search health check answered ${response.status} with an unexpected body: ${body.slice(0, BODY_SNIPPET)}`;
       } else {
@@ -325,6 +325,7 @@ export const probeSearch = internalAction({
       healthy: failure === undefined,
       error: failure === undefined ? undefined : { message: failure, observedAt: Date.now() },
     });
+
     return null;
   },
 });

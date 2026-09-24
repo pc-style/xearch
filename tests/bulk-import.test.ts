@@ -14,26 +14,30 @@ import {
   type RawObject,
 } from "../convex/lib/xmd";
 import { collectXmd, splitHistoryPage, type CollectionRequest } from "../convex/lib/collect";
-import { CAPTURE_MAX_BYTES, deliverCapture, type Capture } from "../convex/lib/handoff";
+import { CAPTURE_MAX_BYTES, deliverCapture, utf8Bytes, type Capture } from "../convex/lib/handoff";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
   return input instanceof Request ? input.url : input.toString();
 }
+
 /** Serialized size, measured independently of the code under test. */
-function bytes(value: unknown) {
-  return new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value))
-    .byteLength;
+function bytes(value: RawObject) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
+
 const profile = { id: "123", screen_name: "theo", name: "Theo" };
+
 const request: CollectionRequest = {
   runId: "run-1",
   attempt: 1,
   kind: "bulk",
   input: "theo",
 };
+
 // Fixed clock: `receivedAt` is part of the capture bytes, so a stable clock is
 // what makes a replay byte-identical and therefore id-identical.
 const NOW = 1_789_900_000_000;
+
 // Sized from the real measurement of a live `max_posts=5000` page: 3,418,004
 // bytes for 1,535 posts (~2,227 bytes/post). Retained captures on this machine
 // range from ~2.1 KB to ~6.2 KB per post, so this sits inside the real range.
@@ -46,6 +50,7 @@ function post(index: number): RawObject {
     unknown_future_field: ["keep", "all"],
   };
 }
+
 function page(count: number): RawObject {
   return {
     profile,
@@ -54,10 +59,12 @@ function page(count: number): RawObject {
     future: { untouched: true },
   };
 }
+
 /** A receiver that behaves like the contract: content-addressed, durable acks. */
 function receiver() {
   const bodies: string[] = [];
   const ids: string[] = [];
+
   const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
     const body = String(init?.body);
     const id = new Headers(init?.headers).get("Idempotency-Key") ?? "";
@@ -65,21 +72,27 @@ function receiver() {
     ids.push(id);
     // Prove the key really is the hash of these exact bytes.
     expect(id).toBe(createHash("sha256").update(body).digest("hex"));
+
     return Response.json({ captureId: id, durable: true, receiptId: `receipt-${ids.length}` });
   });
+
   return { bodies, ids, fetcher };
 }
+
 async function collectPage(envelope: RawObject) {
   const upstream = vi.fn<typeof fetch>(async (input) =>
     Response.json(requestUrl(input).includes("/posts?") ? envelope : { profile }),
   );
+
   const store = receiver();
   const captures: Capture[] = [];
+
   const result = await collectXmd(
     new XmdClient("test-key", upstream),
     request,
     async (capture) => {
       captures.push(structuredClone(capture));
+
       return deliverCapture(
         "https://data.example/captures",
         "capture-token",
@@ -90,6 +103,7 @@ async function collectPage(envelope: RawObject) {
     async () => {},
     () => NOW,
   );
+
   return { result, captures, upstream, ...store };
 }
 
@@ -106,16 +120,21 @@ describe("x.md per-request capacity", () => {
   });
   it("clamps a caller to the documented ceiling and floor on both transports", async () => {
     const seen: string[] = [];
+
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       seen.push(new URL(requestUrl(input)).searchParams.get("max_posts") ?? "");
+
       return Response.json({ meta: {} });
     });
+
     const xmd = new XmdClient("test-key", fetcher);
     await xmd.history("theo", { maxPosts: 99_999 });
     await xmd.history("theo", { maxPosts: 0 });
+
     for await (const _ of xmd.bulk("theo", { maxPosts: 99_999 })) {
       /* drain */
     }
+
     expect(seen).toEqual(["5000", "1", "5000"]);
   });
   it("splits a page too large for one capture into parts that each deliver", async () => {
@@ -125,8 +144,9 @@ describe("x.md per-request capacity", () => {
     // The profile preflight is its own capture; the history page follows.
     const history = captures.filter((capture) => capture.request.resource === "bulk");
     expect(history.length).toBeGreaterThan(1);
+
     // Every delivered body is under deliverCapture's hard ceiling.
-    for (const body of bodies) expect(bytes(body)).toBeLessThan(CAPTURE_MAX_BYTES);
+    for (const body of bodies) expect(utf8Bytes(body)).toBeLessThan(CAPTURE_MAX_BYTES);
     expect(new Set(ids).size).toBe(ids.length);
     // Sequence numbering stays contiguous across the split.
     expect(captures.map((capture) => capture.sequence)).toEqual(captures.map((_, i) => i));
@@ -140,12 +160,17 @@ describe("x.md per-request capacity", () => {
     );
     // The provider's page survives the split exactly: same posts, same order,
     // same envelope around every part.
+    // SAFETY: every record here came from splitting `envelope`, built above by
+    // this file's own `page()`/`post()` fixtures, which always populate
+    // `posts` as an array of post objects.
     expect(parts.flatMap((record) => record.payload.posts as RawObject[])).toEqual(envelope.posts);
+
     for (const record of parts) {
       expect(record.payload.profile).toEqual(profile);
       expect(record.payload.meta).toEqual(envelope.meta);
       expect(record.payload.future).toEqual({ untouched: true });
     }
+
     expect(result.postsReceived).toBe(2500);
     expect(result.floorReached).toBe(true);
   });
@@ -169,6 +194,7 @@ describe("x.md per-request capacity", () => {
     const envelope = page(400);
     const parts = splitHistoryPage(envelope, 200_000);
     expect(parts.length).toBeGreaterThan(4);
+
     for (const part of parts) {
       const serialized = bytes(part.payload);
       expect(serialized).toBeLessThanOrEqual(200_000);
@@ -178,6 +204,10 @@ describe("x.md per-request capacity", () => {
       expect(part.bytes).toBeGreaterThanOrEqual(serialized);
       expect(part.bytes).toBeLessThanOrEqual(200_000);
     }
+
+    // SAFETY: every part here came from splitting `envelope`, built above by
+    // this file's own `page()`/`post()` fixtures, which always populate
+    // `posts` as an array of post objects.
     expect(parts.flatMap((part) => part.payload.posts as RawObject[])).toEqual(envelope.posts);
     // Nothing to split: a single record, and a non-array `posts` is untouched.
     expect(splitHistoryPage({ posts: "not-an-array" }, 1)).toEqual([
@@ -191,12 +221,18 @@ describe("x.md per-request capacity", () => {
       id: String(index),
       text: "x".repeat(200 + ((index * 1373) % 4000)),
     }));
+
     const parts = splitHistoryPage({ profile, posts, meta: { count: 60 } }, 12_000);
     expect(parts.length).toBeGreaterThan(1);
+    // SAFETY: every part here came from splitting the object literal built two
+    // lines above, whose `posts` field is the `posts` array constructed
+    // immediately before it.
     const counts = parts.map((part) => (part.payload.posts as RawObject[]).length);
     // Byte-driven slicing gives parts different post counts.
     expect(new Set(counts).size).toBeGreaterThan(1);
+
     for (const part of parts) expect(bytes(part.payload)).toBeLessThanOrEqual(12_000);
+    // SAFETY: same fixture as `counts` above — `posts` is always an array.
     expect(parts.flatMap((part) => part.payload.posts as RawObject[])).toEqual(posts);
   });
   it("sizes a whole page exactly, without serializing it a second time", () => {
@@ -226,16 +262,25 @@ const rateLimitedBody = {
   error: "Too many bulk imports for this API key: 20 per 15 minutes.",
   retry_after: 423,
 };
-async function throttleOf(response: () => Response, call?: (xmd: XmdClient) => Promise<unknown>) {
+
+async function throttleOf<Result>(
+  response: () => Response,
+  call?: (xmd: XmdClient) => Promise<Result>,
+) {
   const xmd = new XmdClient(
     "test-key",
     vi.fn<typeof fetch>(async () => response()),
   );
+
   const error = await (call ? call(xmd) : xmd.read("profile", "theo")).then(
     () => undefined,
-    (reason: unknown) => reason,
+    (cause: unknown) => cause,
   );
+
   expect(error).toBeInstanceOf(ProviderError);
+
+  // SAFETY: the assertion immediately above proves `error` is a
+  // `ProviderError`; every code path this helper exercises rejects with one.
   return (error as ProviderError).throttle;
 }
 
@@ -247,6 +292,7 @@ describe("provider throttle facts", () => {
         { status: 429, headers: { "Retry-After": "90" } },
       ),
     );
+
     expect(throttle).toMatchObject({
       provider: "xmd",
       operation: "profile",
@@ -259,6 +305,7 @@ describe("provider throttle facts", () => {
       () => Response.json(rateLimitedBody, { status: 429 }),
       (xmd) => xmd.history("mistralai", { maxPosts: MAX_POSTS_PER_PAGE }),
     );
+
     expect(throttle).toMatchObject({
       provider: "xmd",
       operation: "history",
@@ -266,7 +313,11 @@ describe("provider throttle facts", () => {
       reason: "Too many bulk imports for this API key: 20 per 15 minutes.",
       retryAfterMs: 423_000,
     });
+    // SAFETY: the `toMatchObject` assertion above proves the request throttled,
+    // so `throttleOf` (which only returns from a rejection) resolved with a
+    // real throttle fact rather than `undefined`.
     expect("remaining" in (throttle as ProviderThrottle)).toBe(false);
+    // SAFETY: same throttled response as the assertion immediately above.
     expect("resetAt" in (throttle as ProviderThrottle)).toBe(false);
   });
   it("reports the most constraining reported allowance", () => {
@@ -286,6 +337,7 @@ describe("provider throttle facts", () => {
       undefined,
       NOW,
     );
+
     // The tightest of the reported allowances, and nothing about the policies
     // themselves: their quota and window were never stored or shown anywhere.
     expect(throttle).toEqual({
@@ -300,8 +352,12 @@ describe("provider throttle facts", () => {
     const throttle = await throttleOf(() =>
       Response.json({ detail: "boom" }, { status: 503, headers: { "Retry-After": "5" } }),
     );
+
     expect(throttle?.retryAfterMs).toBe(5000);
+    // SAFETY: the assertion immediately above proves `retryAfterMs` was read
+    // off a real throttle fact, so `throttle` is not `undefined` here.
     expect("remaining" in (throttle as ProviderThrottle)).toBe(false);
+    // SAFETY: same throttled response as the assertion immediately above.
     expect("resetAt" in (throttle as ProviderThrottle)).toBe(false);
     // A 429 that carried no allowance at all is still a refusal, and still
     // reports nothing it was not told.
@@ -321,6 +377,7 @@ describe("provider throttle facts", () => {
         undefined,
         NOW,
       );
+
     // Small value: delta-seconds from now.
     expect(scalar("27")).toMatchObject({ remaining: 4, resetAt: NOW + 27_000 });
     // Large value: an absolute epoch, in seconds or already in milliseconds.
@@ -380,6 +437,7 @@ describe("provider throttle facts", () => {
       records: [{ receivedAt: NOW, payload: { post: { id: "1" } } }],
       terminal: "complete",
     };
+
     const error = await deliverCapture(
       "https://data.example/captures",
       "capture-token",
@@ -395,9 +453,12 @@ describe("provider throttle facts", () => {
       ),
     ).then(
       () => undefined,
-      (reason: unknown) => reason,
+      (cause: unknown) => cause,
     );
+
     expect(error).toBeInstanceOf(ProviderError);
+    // SAFETY: the assertion immediately above proves `error` is a
+    // `ProviderError`; this deliverCapture rejects with one on every 429.
     const throttle = (error as ProviderError).throttle;
     expect(throttle).toMatchObject({
       provider: "receiver",
@@ -473,6 +534,7 @@ describe("only a refusal caused by a limit counts as throttling", () => {
     const throttle = await throttleOf(() =>
       Response.json({ detail: "Slow down." }, { status: 429, headers: ALLOWANCE_HEADERS }),
     );
+
     // Qualified by the status; the allowance headers only enrich it.
     expect(throttle).toMatchObject({ provider: "xmd", reason: "Slow down.", remaining: 19 });
   });
@@ -484,6 +546,7 @@ describe("only a refusal caused by a limit counts as throttling", () => {
         { status: 503, headers: { ...ALLOWANCE_HEADERS, "Retry-After": "30" } },
       ),
     );
+
     expect(throttle).toMatchObject({
       reason: "Upstream is rate limiting us.",
       retryAfterMs: 30_000,
@@ -494,6 +557,7 @@ describe("only a refusal caused by a limit counts as throttling", () => {
     const throttle = await throttleOf(() =>
       Response.json({ ...rateLimitedBody, status: 500 }, { status: 500 }),
     );
+
     expect(throttle).toMatchObject({
       reason: "Too many bulk imports for this API key: 20 per 15 minutes.",
       retryAfterMs: 423_000,
@@ -513,9 +577,11 @@ describe("only a refusal caused by a limit counts as throttling", () => {
     const header = await throttleOf(() =>
       Response.json({ code: "rate_limited" }, { status: 429, headers: { "Retry-After": "423" } }),
     );
+
     const body = await throttleOf(() =>
       Response.json({ code: "rate_limited", retry_after: 423 }, { status: 429 }),
     );
+
     expect(header?.retryAfterMs).toBe(body?.retryAfterMs);
   });
 });
@@ -527,15 +593,23 @@ describe("only a refusal caused by a limit counts as throttling", () => {
 describe("a history page the provider is slow to deliver", () => {
   const timeout = () =>
     new DOMException("The operation was aborted due to timeout", "TimeoutError");
+
   it("is reported as a retryable provider timeout, not a generic interruption", async () => {
     const xmd = new XmdClient("test-key", async () => {
       throw timeout();
     });
-    const failure = await xmd.history("theo", { maxPosts: 5000 }).catch((error: unknown) => error);
+
+    const failure = await xmd.history("theo", { maxPosts: 5000 }).catch((cause: unknown) => cause);
+
     expect(failure).toBeInstanceOf(ProviderError);
-    expect((failure as ProviderError).code).toBe("provider_timeout");
-    expect((failure as ProviderError).retryable).toBe(true);
-    expect((failure as ProviderError).message).toContain("900 seconds");
+
+    // SAFETY: the assertion immediately above proves `failure` is a
+    // `ProviderError`; every code path this test exercises rejects with one.
+    const providerFailure = failure as ProviderError;
+
+    expect(providerFailure.code).toBe("provider_timeout");
+    expect(providerFailure.retryable).toBe(true);
+    expect(providerFailure.message).toContain("900 seconds");
   });
   it("gives history and bulk requests the long timeout and everything else the short one", () => {
     expect(timeoutFor("history")).toBe(HISTORY_TIMEOUT_MS);
@@ -545,15 +619,21 @@ describe("a history page the provider is slow to deliver", () => {
   });
   it("asks x.md once more with its maximum chain concurrency when x.md ran out of time", async () => {
     const asked: string[] = [];
+
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(requestUrl(input));
+
       if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
       asked.push(url.searchParams.get("concurrency") ?? "");
+
       if (asked.length === 1) return new Response("gateway timeout", { status: 504 });
+
       return Response.json(page(3));
     });
+
     const store = receiver();
     const phases: string[] = [];
+
     const result = await collectXmd(
       new XmdClient("test-key", fetcher),
       request,
@@ -566,6 +646,7 @@ describe("a history page the provider is slow to deliver", () => {
         phases.push(phase);
       },
     );
+
     expect(asked).toEqual(["8", String(MAX_CHAIN_CONCURRENCY)]);
     expect(result.postsReceived).toBe(3);
     expect(phases).toContain(
@@ -574,13 +655,18 @@ describe("a history page the provider is slow to deliver", () => {
   });
   it("does not keep asking after the second try also ran out of time", async () => {
     const asked: string[] = [];
+
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(requestUrl(input));
+
       if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
       asked.push(url.searchParams.get("concurrency") ?? "");
+
       return new Response("gateway timeout", { status: 504 });
     });
+
     const store = receiver();
+
     const failure = await collectXmd(
       new XmdClient("test-key", fetcher),
       request,
@@ -588,20 +674,31 @@ describe("a history page the provider is slow to deliver", () => {
         deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
       async () => {},
       () => NOW,
-    ).catch((error: unknown) => error);
-    expect((failure as ProviderError).code).toBe("http_504");
-    expect((failure as ProviderError).retryable).toBe(true);
+    ).catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(ProviderError);
+
+    // SAFETY: the assertion immediately above proves `failure` is a
+    // `ProviderError`; every code path this test exercises rejects with one.
+    const providerFailure = failure as ProviderError;
+
+    expect(providerFailure.code).toBe("http_504");
+    expect(providerFailure.retryable).toBe(true);
     expect(asked).toEqual(["8", String(MAX_CHAIN_CONCURRENCY)]);
   });
   it("asks for the same full page again on the next attempt rather than a smaller one", async () => {
     const asked: string[] = [];
+
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(requestUrl(input));
+
       if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
       asked.push(url.searchParams.get("max_posts") ?? "");
       throw timeout();
     });
+
     const store = receiver();
+
     const failure = await collectXmd(
       new XmdClient("test-key", fetcher),
       request,
@@ -609,7 +706,12 @@ describe("a history page the provider is slow to deliver", () => {
         deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
       async () => {},
       () => NOW,
-    ).catch((error: unknown) => error);
+    ).catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(ProviderError);
+
+    // SAFETY: the assertion immediately above proves `failure` is a
+    // `ProviderError`; every code path this test exercises rejects with one.
     expect((failure as ProviderError).code).toBe("provider_timeout");
     // The second ask (more chains) still wants the full page.
     expect(asked).toEqual(["5000", "5000"]);

@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
+
 export const sortValidator = v.union(
   v.literal("relevance"),
   v.literal("engagement"),
@@ -8,6 +9,7 @@ export const sortValidator = v.union(
   v.literal("newest"),
   v.literal("oldest"),
 );
+
 export const postFields = {
   tweetId: v.string(),
   author: v.string(),
@@ -36,6 +38,7 @@ export const backendStatsFields = {
   indexDocs: v.number(),
   segments: v.number(),
 };
+
 export const apiStatsFields = {
   totalUs: v.number(),
   authUs: v.number(),
@@ -48,10 +51,12 @@ export const apiStatsFields = {
   postprocessUs: v.number(),
   cursorSignUs: v.number(),
 };
+
 export const searchStatsFields = {
   backend: v.object(backendStatsFields),
   api: v.optional(v.object(apiStatsFields)),
 };
+
 export const kindValidator = v.union(
   v.literal("bulk"),
   v.literal("live"),
@@ -61,6 +66,7 @@ export const kindValidator = v.union(
   v.literal("followers"),
   v.literal("archive"),
 );
+
 // Acquisition-job lifecycle. Unrelated to accountPublications.state below:
 // a job reaching "complete" means raw handoff finished, not that anything is
 // searchable yet. See docs/publication-contract.md.
@@ -93,6 +99,7 @@ export const publicationStateValidator = v.union(
   v.literal("searchable"),
   v.literal("failed"),
 );
+
 // The states a publication UPDATE may report. The indexer never tells us
 // "downloaded" or "waiting_for_indexing" — those describe our own acquisition
 // side before the indexer has said anything at all.
@@ -101,6 +108,7 @@ export const reportedPublicationStateValidator = v.union(
   v.literal("searchable"),
   v.literal("failed"),
 );
+
 // Units a "pending work" or dashboard count can be labelled with. A count
 // with no matching unit here should not exist; see contracts.ts's
 // countValidator, which pairs one of these with a value or an explicit
@@ -111,17 +119,20 @@ export const countUnitValidator = v.union(
   v.literal("posts"),
   v.literal("accounts"),
 );
+
 export const pendingWorkUnitValidator = v.union(
   v.literal("jobs"),
   v.literal("captures"),
   v.literal("posts"),
 );
+
 // Calls this app makes that can be throttled by the far side.
 export const throttleProviderValidator = v.union(
   v.literal("xmd"),
   v.literal("receiver"),
   v.literal("search"),
 );
+
 // External services whose liveness/last-success we track as observed facts.
 // x.md is a per-call third-party dependency (see throttleProviderValidator),
 // not a standing service we hold a health row for.
@@ -130,6 +141,7 @@ export const serviceValidator = v.union(
   v.literal("receiver"),
   v.literal("search"),
 );
+
 export const publicationUpdateOutcomeValidator = v.union(
   v.literal("applied"),
   v.literal("stale_ignored"),
@@ -137,6 +149,7 @@ export const publicationUpdateOutcomeValidator = v.union(
   v.literal("rejected_unauthorized"),
   v.literal("rejected_invalid"),
 );
+
 // Fields a publication update carries, verbatim. Shared between the inbound
 // wire envelope (convex/lib/contracts.ts publicationUpdateEnvelope) and the
 // durable log below (publicationUpdates), so the two can never drift. Full
@@ -174,6 +187,7 @@ export const publicationUpdateFields = {
   // receivedAt, which is assigned server-side on acceptance.
   observedAt: v.number(),
 };
+
 export default defineSchema({
   ...authTables,
   collector: defineTable({

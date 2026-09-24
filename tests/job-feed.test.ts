@@ -9,19 +9,28 @@ import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contract
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
-const summaryQuery = anyApi.summary.summary as unknown as FunctionReference<
+// SAFETY: `anyApi.*` references are typed as `FunctionReference<any, any, any, any>`
+// (convex/server's untyped API-builder), so every field is `any` and a
+// single assertion to the concrete signature below is a narrowing
+// TypeScript already allows structurally; convex-test rejects the reference
+// outright at call time if the module/function name does not actually exist.
+const summaryQuery = anyApi.summary.summary as FunctionReference<
   "query",
   "public",
   { now: number },
   DashboardSummary
 >;
-const libraryRows = anyApi.library.rows as unknown as FunctionReference<
+
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const libraryRows = anyApi.library.rows as FunctionReference<
   "query",
   "public",
   Record<string, never>,
   { rows: AccountLibraryRow[]; truncated: boolean }
 >;
-const libraryHistory = anyApi.library.history as unknown as FunctionReference<
+
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const libraryHistory = anyApi.library.history as FunctionReference<
   "query",
   "public",
   { accountId: Id<"accounts"> },
@@ -32,6 +41,7 @@ async function setup() {
   const t = convexTest(schema, modules);
   const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
   const bob = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return {
     t,
     alice,
@@ -126,11 +136,13 @@ describe("clearing finished runs", () => {
 
   it("keeps a dismissed run's captures counted as awaiting indexing, because hiding a row does not un-store its data", async () => {
     const { t, alice, a } = await setup();
+
     const bulk = await insertJob(t, alice, {
       input: "someone",
       kind: "bulk",
       status: "partial",
     });
+
     await t.run((ctx) =>
       ctx.db.insert("receipts", { jobId: bulk, captureId: "cap-9", receiptId: "r-9", records: 3 }),
     );
@@ -156,9 +168,11 @@ describe("clearing finished runs", () => {
 describe("an account whose every run was cleared", () => {
   it("keeps its library row and its published counts, and simply reports no latest run", async () => {
     const { t, alice, a } = await setup();
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "someone", userId: "77", name: "Someone" }),
     );
+
     await t.run((ctx) =>
       ctx.db.insert("accountPublications", {
         accountId,
@@ -168,6 +182,7 @@ describe("an account whose every run was cleared", () => {
         updatedAt: Date.now(),
       }),
     );
+
     const job = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -223,6 +238,7 @@ describe("one live search, one name", () => {
     for (const spelling of ["@Theo", "@theo", "from:@theo"]) {
       expect(await a.mutation(api.jobs.start, { kind: "live", input: spelling })).toBe(first);
     }
+
     expect(await t.run(async (ctx) => (await ctx.db.query("jobs").collect()).length)).toBe(1);
   });
 
@@ -231,10 +247,12 @@ describe("one live search, one name", () => {
     vi.stubEnv("COLLECTOR_MODE", "outbound");
     vi.stubEnv("X_MD_API_KEY", "test");
     await t.mutation(internal.worker.heartbeat, { online: true });
+
     const job = await a.mutation(api.jobs.start, {
       kind: "live",
       input: "from:Theo Convex Components",
     });
+
     expect((await t.run((ctx) => ctx.db.get(job)))?.input).toBe("@theo Convex Components");
   });
 });
@@ -242,9 +260,11 @@ describe("one live search, one name", () => {
 describe("the imported corpus is shared across owners", () => {
   it("lets a different signed-in user see and continue a bulk import someone else started", async () => {
     const { t, alice, b } = await setup();
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "theo", userId: "1", name: "Theo" }),
     );
+
     const job = await insertJob(t, alice, { input: "theo", kind: "bulk", status: "complete" });
     await t.run((ctx) =>
       ctx.db.patch(job, {
@@ -268,11 +288,13 @@ describe("the imported corpus is shared across owners", () => {
     vi.stubEnv("X_MD_API_KEY", "test");
     vi.stubEnv("RAW_CAPTURE_URL", "http://127.0.0.1:4319/captures");
     vi.stubEnv("COLLECTOR_MODE", "receiver");
+
     const next = await b.mutation(api.jobs.start, {
       kind: "bulk",
       input: "theo",
       previous: job,
     });
+
     expect(next).not.toBe(job);
   });
 });

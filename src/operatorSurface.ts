@@ -27,9 +27,10 @@ import { lazy, type ComponentType } from "react";
 export const OPERATOR_BUILD: boolean = true;
 
 export type DashboardProps = {
-  ensureSession: () => Promise<unknown>;
+  ensureSession: () => Promise<void>;
   close: () => void;
 };
 
 export const Dashboard: ComponentType<DashboardProps> | null = lazy(() => import("./Dashboard"));
+
 export const ConnectionsPanel: ComponentType | null = lazy(() => import("./operator/Connections"));
