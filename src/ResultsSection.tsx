@@ -18,6 +18,7 @@ import { keyLinkifySegments, linkifyText, truncateSegments } from "./linkify";
 import type { ResultPost } from "../convex/lib/results";
 import type { Sort } from "../convex/lib/search";
 import { NerdStatsPanel } from "./library/NerdStatsPanel";
+import { OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { OPERATOR_BUILD } from "./operatorSurface";
 import type { SearchAttemptSnapshot } from "./searchTelemetry";
 import { ModalKind, ViewMode } from "./uiState";
@@ -89,6 +90,7 @@ export function PostCard({
   onRead,
   onAuthor,
   threadStatus,
+  isOperator,
 }: {
   post: ResultPost;
   query: string;
@@ -98,6 +100,10 @@ export function PostCard({
   onRead: (url: string) => void;
   onAuthor: () => void;
   threadStatus?: string | null;
+  // Conversation starts a paid x.md import (see App.tsx `runThread`), so it
+  // is gated the same as every other provider-spending action — see
+  // OPERATOR_SIGN_IN_NOTICE (src/integrationStatus.ts).
+  isOperator: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const createdAt = post.createdAt === undefined ? null : new Date(post.createdAt);
@@ -206,7 +212,12 @@ export function PostCard({
               doesn't open a preview — the label says so, and the status
               line below tracks the job it starts instead of only surfacing
               it in the Recent imports modal. */}
-          <button type="button" onClick={onThread}>
+          <button
+            type="button"
+            disabled={!isOperator}
+            title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
+            onClick={onThread}
+          >
             Fetch conversation from X
           </button>
           <a href={post.url} target="_blank" rel="noreferrer">
@@ -271,6 +282,7 @@ export function ResultsSection({
   alreadySaved,
   statsForNerds,
   onToggleStats,
+  isOperator,
 }: {
   view: ViewMode;
   raw: string;
@@ -300,6 +312,10 @@ export function ResultsSection({
   alreadySaved?: boolean;
   statsForNerds?: boolean;
   onToggleStats?: () => void;
+  // Gates Web context (Firecrawl), Find on X (x.md live import), the
+  // overflow "More actions" menu's paid entries, and each post's "Fetch
+  // conversation from X" button — see OPERATOR_SIGN_IN_NOTICE.
+  isOperator: boolean;
 }) {
   // Effect-free focus/scroll: callback ref runs at commit time, no useEffect.
   function resultsTitleRef(node: HTMLHeadingElement | null) {
@@ -364,14 +380,17 @@ export function ResultsSection({
                   <MoreHorizontal size={15} />
                 </summary>
                 <div className="result-menu-items">
-                  <button
-                    type="button"
-                    disabled={busy || !configured?.firecrawl}
-                    onClick={onWebContext}
-                  >
-                    <Link2 size={15} />
-                    Web context (fetches page)
-                  </button>
+                  <div className="result-menu-item">
+                    <button
+                      type="button"
+                      disabled={busy || !configured?.firecrawl || !isOperator}
+                      onClick={onWebContext}
+                    >
+                      <Link2 size={15} />
+                      Web context (fetches page)
+                    </button>
+                    {!isOperator && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
+                  </div>
                   <div className="result-menu-item">
                     <button
                       type="button"
@@ -389,14 +408,17 @@ export function ResultsSection({
                       the label says so, and the status line below tracks the
                       job instead of only surfacing it in the Recent imports
                       modal. */}
-                  <button
-                    type="button"
-                    disabled={busy || !configured?.indexing}
-                    onClick={onLiveSearch}
-                  >
-                    <Search size={15} />
-                    Import from X
-                  </button>
+                  <div className="result-menu-item">
+                    <button
+                      type="button"
+                      disabled={busy || !configured?.indexing || !isOperator}
+                      onClick={onLiveSearch}
+                    >
+                      <Search size={15} />
+                      Import from X
+                    </button>
+                    {!isOperator && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
+                  </div>
                 </div>
               </details>
             )}
@@ -467,7 +489,8 @@ export function ResultsSection({
                   the one place actually meant to go get more). */}
               <button
                 type="button"
-                disabled={busy || !!queryError || !configured?.indexing}
+                disabled={busy || !!queryError || !configured?.indexing || !isOperator}
+                title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
                 onClick={onLiveSearch}
               >
                 <Search size={15} />
@@ -504,6 +527,7 @@ export function ResultsSection({
                 onThread={() => onThread(post)}
                 onRead={onRead}
                 threadStatus={threadStatus?.(post.tweetId)}
+                isOperator={isOperator}
               />
             ))}
           </div>

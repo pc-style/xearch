@@ -127,17 +127,24 @@ async function computeAccountTotals(
   let unknown = false;
   let searchableAccounts = 0;
   const pendingWork = emptyPendingWorkTallies();
-
-  for (const accountId of accountIds) {
-    // `.first()` rather than `.unique()`: by_account is not
-    // uniqueness-enforced by the schema, and a second row for one account
-    // would make `.unique()` throw and take the whole dashboard down rather
-    // than degrade one number.
-    const publication = await ctx.db
-      .query("accountPublications")
-      .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .first();
-
+  // One indexed `.first()` per account is unavoidable without a join Convex
+  // doesn't offer (see the module doc comment on N+1 above this function),
+  // but issuing them all CONCURRENTLY rather than one-at-a-time in a
+  // sequential `for await` loop turns N sequential round trips into one
+  // batch — the same fix convex/library.ts `rows` applies below.
+  const publications = await Promise.all(
+    accountIds.map((accountId) =>
+      // `.first()` rather than `.unique()`: by_account is not
+      // uniqueness-enforced by the schema, and a second row for one account
+      // would make `.unique()` throw and take the whole dashboard down
+      // rather than degrade one number.
+      ctx.db
+        .query("accountPublications")
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .first(),
+    ),
+  );
+  for (const publication of publications) {
     if (!publication) continue;
 
     if (publication.state === "searchable") searchableAccounts += 1;
@@ -243,11 +250,44 @@ async function confirmedCaptureIds(
   return set;
 }
 
-// unit "captures" — durable receipts the shared corpus's bulk jobs produced that no
-// accepted publication update has confirmed yet. Guidance in
+// The instant an account's CURRENT "searchable" state took effect
+// (accountPublications.updatedAt from the most recently applied update),
+// cached per account across one summary computation. `undefined` means the
+// account is not currently searchable at all — there is no cutoff to
+// compare a receipt against, so every one of its unconfirmed captures
+// counts regardless of timing.
+async function searchableAsOf(
+  ctx: QueryCtx,
+  accountId: Id<"accounts">,
+  cache: Map<Id<"accounts">, number | undefined>,
+): Promise<number | undefined> {
+  if (cache.has(accountId)) return cache.get(accountId);
+  const publication = await ctx.db
+    .query("accountPublications")
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .first();
+  const asOf = publication?.state === "searchable" ? publication.updatedAt : undefined;
+  cache.set(accountId, asOf);
+  return asOf;
+}
+
+// unit "captures" — durable receipts the shared corpus's bulk jobs produced
+// that no accepted publication update has confirmed yet. Guidance in
 // docs/publication-contract.md "Dashboard-facing shapes"; NEVER a count of
 // posts (a capture/receipt is a file, not a post — to-do.md "Never label a
 // count of files as a count of posts").
+//
+// "Confirmed" is not only "this exact captureId was named by an accepted
+// update". The indexer's manual `publish <handle>` reconcile
+// (docs/search-indexer.md) sends a handle-only update with NO captureIds at
+// all, so a capture that reconcile actually indexed could never be found by
+// id — it would read "awaiting indexing" forever even after the account
+// went fully searchable. A capture is therefore also treated as confirmed
+// when its account's CURRENT state is "searchable" and that state took
+// effect at or after the capture's own receipt was written: the searchable
+// report necessarily swept up everything downloaded before it, named or
+// not. A receipt written AFTER the last searchable report still counts —
+// that content has not yet been through a publication pass at all.
 async function computeSavedCapturesAwaitingIndexing(
   ctx: QueryCtx,
   bulkJobs: Doc<"jobs">[],
@@ -257,6 +297,7 @@ async function computeSavedCapturesAwaitingIndexing(
   accountCache: Map<string, Doc<"accounts"> | null>,
 ): Promise<Count> {
   const confirmedCache = new Map<Id<"accounts">, Set<string>>();
+  const searchableCache = new Map<Id<"accounts">, number | undefined>();
   // Dedupe at the ACCOUNT level across ALL of the shared corpus's bulk jobs for that
   // account, never per job. captureId is content-addressed (same content ->
   // same id — see tests/indexing.test.ts), so a retry job that re-downloads
@@ -266,35 +307,70 @@ async function computeSavedCapturesAwaitingIndexing(
   // exists yet) are pooled under a single `null` bucket rather than each
   // getting their own — the same content-addressed id can just as easily
   // repeat there too.
-  const capturesByAccount = new Map<Id<"accounts"> | null, Set<string>>();
+  //
+  // Each bucket maps captureId -> the NEWEST receipt._creationTime seen for
+  // it (a retried job can re-produce the same captureId; the newest receipt
+  // is the one whose timing actually matters against a searchable cutoff).
+  const capturesByAccount = new Map<Id<"accounts"> | null, Map<string, number>>();
+  // One receipts query per bulk job is unavoidable (receipts are indexed by
+  // jobId, and a job's receipts are exactly what this function needs the
+  // contents of, not merely a count of), but issuing all of them
+  // CONCURRENTLY rather than one job at a time turns N sequential round
+  // trips into one batch. Account resolution is intentionally run
+  // afterward, sequentially, against the SAME shared `accountCache` used by
+  // computeAccountTotals — resolveJobAccount mutates that cache, and
+  // running its misses concurrently could fire the same duplicate lookup
+  // for two jobs sharing an identity before either write lands.
+  const jobsWithReceipts = await Promise.all(
+    bulkJobs.map(async (job) => ({
+      job,
+      receipts: await ctx.db
+        .query("receipts")
+        .withIndex("by_capture", (q) => q.eq("jobId", job._id))
+        .take(MAX_RECEIPTS_PER_JOB),
+    })),
+  );
 
-  for (const job of bulkJobs) {
-    const receipts = await ctx.db
-      .query("receipts")
-      .withIndex("by_capture", (q) => q.eq("jobId", job._id))
-      .take(MAX_RECEIPTS_PER_JOB);
-
+  for (const { job, receipts } of jobsWithReceipts) {
     if (receipts.length === 0) continue;
     const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
     let bucket = capturesByAccount.get(accountId);
 
     if (!bucket) {
-      bucket = new Set<string>();
+      bucket = new Map<string, number>();
       capturesByAccount.set(accountId, bucket);
     }
 
-    for (const receipt of receipts) bucket.add(receipt.captureId);
+    for (const receipt of receipts) {
+      const seenAt = bucket.get(receipt.captureId);
+      if (seenAt === undefined || receipt._creationTime > seenAt)
+        bucket.set(receipt.captureId, receipt._creationTime);
+    }
   }
 
+  // Confirmed-capture and searchable-cutoff lookups are one per unique
+  // account (already deduped by the Map above), so batching them
+  // concurrently is a batch of at most "accounts with unconfirmed
+  // captures", not one per job.
+  const accountEntries = [...capturesByAccount.entries()];
+  const perAccount = await Promise.all(
+    accountEntries.map(async ([accountId, captures]) => ({
+      captures,
+      confirmed: accountId
+        ? await confirmedCaptureIds(ctx, accountId, confirmedCache)
+        : new Set<string>(),
+      searchableCutoff: accountId
+        ? await searchableAsOf(ctx, accountId, searchableCache)
+        : undefined,
+    })),
+  );
   let count = 0;
 
-  for (const [accountId, captureIds] of capturesByAccount) {
-    const confirmed = accountId
-      ? await confirmedCaptureIds(ctx, accountId, confirmedCache)
-      : new Set<string>();
-
-    for (const captureId of captureIds) {
-      if (!confirmed.has(captureId)) count += 1;
+  for (const { captures, confirmed, searchableCutoff } of perAccount) {
+    for (const [captureId, receivedAt] of captures) {
+      if (confirmed.has(captureId)) continue;
+      if (searchableCutoff !== undefined && receivedAt <= searchableCutoff) continue;
+      count += 1;
     }
   }
 

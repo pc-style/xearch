@@ -14,8 +14,8 @@ async function setup() {
     t,
     alice,
     bob,
-    a: t.withIdentity({ subject: `${alice}|s` }),
-    b: t.withIdentity({ subject: `${bob}|s` }),
+    a: t.withIdentity({ subject: `${alice}|s`, email: "alice@test.xearch" }),
+    b: t.withIdentity({ subject: `${bob}|s`, email: "bob@test.xearch" }),
   };
 }
 

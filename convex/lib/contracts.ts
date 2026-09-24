@@ -200,6 +200,14 @@ export const accountLibraryRowValidator = v.object({
       status: jobStatusValidator,
       phase: v.optional(v.string()),
       updatedAt: v.number(),
+      // Copied straight from the job doc, same as convex/library.ts
+      // `history`'s per-run rows: how much history this run downloaded and
+      // whether it hit the provider's own floor, so a caller can say
+      // "3,155 posts back to 2026-07-11 · x.md has no older history"
+      // instead of a bare status word.
+      postsReceived: v.optional(v.number()),
+      oldest: v.optional(v.string()),
+      floorReached: v.optional(v.boolean()),
     }),
   ),
   nextAction: nextActionValidator,

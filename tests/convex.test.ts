@@ -25,8 +25,8 @@ async function setup() {
     t,
     alice,
     bob,
-    a: t.withIdentity({ subject: `${alice}|session` }),
-    b: t.withIdentity({ subject: `${bob}|session` }),
+    a: t.withIdentity({ subject: `${alice}|session`, email: "alice@test.xearch" }),
+    b: t.withIdentity({ subject: `${bob}|session`, email: "bob@test.xearch" }),
   };
 }
 
@@ -489,7 +489,7 @@ describe("Convex application boundaries", () => {
       }),
     ).rejects.toThrow("no longer active");
     await t.mutation(internal.jobs.finish, { jobId, attempt: 1, warnings: [] });
-    expect((await a.query(api.jobs.list, {}))[0].status).toBe("cancelled");
+    expect((await a.query(api.jobs.list, {})).jobs[0].status).toBe("cancelled");
   });
   it("still refuses an unauthenticated caller entirely", async () => {
     const { t, alice } = await setup();

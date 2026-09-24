@@ -109,20 +109,31 @@ export const rows = query({
     await user(ctx);
     const { byAccount, truncated } = await groupJobsByAccount(ctx);
     const search = args.search?.trim().toLowerCase();
+    // The search filter doesn't depend on publication state, so it is
+    // applied first to shrink which accounts need a publication lookup at
+    // all. What remains is then fetched CONCURRENTLY — one indexed
+    // `.unique()` per account is unavoidable without a join Convex doesn't
+    // offer, but issuing them all at once turns N sequential round trips
+    // into a single batch instead of a query-per-row loop.
+    const candidates = [...byAccount.entries()].filter(
+      ([, { account }]) =>
+        !search ||
+        account.handle.toLowerCase().includes(search) ||
+        account.name.toLowerCase().includes(search),
+    );
+    const publications = await Promise.all(
+      candidates.map(([accountId]) =>
+        ctx.db
+          .query("accountPublications")
+          .withIndex("by_account", (q) => q.eq("accountId", accountId))
+          .unique(),
+      ),
+    );
     const out: AccountLibraryRow[] = [];
 
-    for (const [accountId, { account, jobs }] of byAccount) {
-      if (
-        search &&
-        !account.handle.toLowerCase().includes(search) &&
-        !account.name.toLowerCase().includes(search)
-      )
-        continue;
-
-      const publication = await ctx.db
-        .query("accountPublications")
-        .withIndex("by_account", (q) => q.eq("accountId", accountId))
-        .unique();
+    for (let i = 0; i < candidates.length; i++) {
+      const [accountId, { account, jobs }] = candidates[i];
+      const publication = publications[i];
 
       // No publication row yet means no publication update has ever arrived
       // for this account; docs/publication-contract.md collapses "downloaded"
@@ -168,6 +179,9 @@ export const rows = query({
           status: latestJob.status,
           phase: latestJob.phase,
           updatedAt: latestJob.updatedAt,
+          postsReceived: latestJob.postsReceived,
+          oldest: latestJob.oldest,
+          floorReached: latestJob.floorReached,
         },
         nextAction: latestJob ? nextActionFor(latestJob) : { kind: "none" },
       });
@@ -190,6 +204,12 @@ const historyRunValidator = v.object({
   error: v.optional(v.string()),
   count: v.number(),
   postsReceived: v.optional(v.number()),
+  // How far back this run's downloaded history reaches, and whether it hit
+  // the provider's own floor — copied straight from the job doc so the UI
+  // can say "3,155 posts back to 2026-07-11 · x.md has no older history"
+  // instead of a bare status word.
+  oldest: v.optional(v.string()),
+  floorReached: v.optional(v.boolean()),
   attempt: v.number(),
   updatedAt: v.number(),
   // Set when the owner dismissed this run from their feeds. History still
@@ -239,32 +259,36 @@ export const history = query({
     // sorting, so ordering by updatedAt cannot drop a job that the index's
     // own _creationTime order happened to place later.
     const sorted = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_HISTORY_JOBS);
-    const out: Infer<typeof historyRunValidator>[] = [];
-
-    for (const job of sorted) {
-      const receipts = await ctx.db
-        .query("receipts")
-        .withIndex("by_capture", (q) => q.eq("jobId", job._id))
-        .take(MAX_HISTORY_RECEIPTS);
-
-      out.push({
-        jobId: job._id,
-        status: job.status,
-        phase: job.phase,
-        error: job.error,
-        count: job.count,
-        postsReceived: job.postsReceived,
-        attempt: job.attempt,
-        updatedAt: job.updatedAt,
-        dismissedAt: job.dismissedAt,
-        receipts: receipts.map((r) => ({
-          captureId: r.captureId,
-          receiptId: r.receiptId,
-          records: r.records,
-        })),
-      });
-    }
-
-    return out;
+    // One receipts query per displayed run is unavoidable (receipts are
+    // indexed by jobId, and the caller needs each run's actual receipts, not
+    // a count), but issuing all of them CONCURRENTLY rather than one run at
+    // a time turns up to MAX_HISTORY_JOBS sequential round trips into one
+    // batch.
+    const receiptsByJob = await Promise.all(
+      sorted.map((job) =>
+        ctx.db
+          .query("receipts")
+          .withIndex("by_capture", (q) => q.eq("jobId", job._id))
+          .take(MAX_HISTORY_RECEIPTS),
+      ),
+    );
+    return sorted.map((job, i) => ({
+      jobId: job._id,
+      status: job.status,
+      phase: job.phase,
+      error: job.error,
+      count: job.count,
+      postsReceived: job.postsReceived,
+      oldest: job.oldest,
+      floorReached: job.floorReached,
+      attempt: job.attempt,
+      updatedAt: job.updatedAt,
+      dismissedAt: job.dismissedAt,
+      receipts: receiptsByJob[i].map((r) => ({
+        captureId: r.captureId,
+        receiptId: r.receiptId,
+        records: r.records,
+      })),
+    }));
   },
 });

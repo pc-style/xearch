@@ -150,4 +150,81 @@ describe("account identity on the write path", () => {
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((row) => String(row.accountId))).size).toBe(2);
   });
+
+  it("backfills the current handle into history the first time a pre-existing account (with no accountHandles rows yet) is renamed", async () => {
+    const { t, alice } = await setup();
+    // Simulates an account that predates accountHandles ever being written
+    // for it (e.g. data from before this table/logic existed) — the account
+    // row exists, but nothing has ever recorded its handle.
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "legacy", userId: "777", name: "Legacy" }),
+    );
+    const handlesBefore = await t.run((ctx) =>
+      ctx.db
+        .query("accountHandles")
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .collect(),
+    );
+    expect(handlesBefore).toHaveLength(0);
+
+    const job = await runningJob(t, alice, "renamed", "777");
+    await t.mutation(finish, {
+      jobId: job,
+      attempt: 1,
+      warnings: [],
+      profile: { handle: "renamed", userId: "777", name: "Legacy" },
+    });
+
+    // Without recording `existing.handle` before the patch, "legacy" would
+    // never appear anywhere — the only recordHandle call left would be for
+    // "renamed", and the account's very first handle would be gone the
+    // moment its very first rename was detected.
+    const handles = await t.run((ctx) =>
+      ctx.db
+        .query("accountHandles")
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .collect(),
+    );
+    expect(handles.map((h) => h.handle).sort()).toEqual(["legacy", "renamed"]);
+  });
+
+  it("does not re-insert a handle the account has already seen more than 50 handles ago (recordHandle looks up the exact pair, not a capped scan)", async () => {
+    const { t, alice } = await setup();
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "current", userId: "999", name: "Many Handles" }),
+    );
+    // More than the old take(50) cap's worth of handle history, seeded
+    // directly. `.take(50)` with no explicit order reads ascending
+    // `_creationTime` — the OLDEST 50 — so a handle recorded after that
+    // window (like the 60th one below) could never be found by that scan,
+    // and would have been re-inserted as a "new" handle it had already seen.
+    const seededHandles = Array.from({ length: 60 }, (_, i) => `h${i}`);
+    await t.run(async (ctx) => {
+      for (const handle of seededHandles)
+        await ctx.db.insert("accountHandles", {
+          accountId,
+          handle,
+          firstSeenAt: Date.now(),
+          lastSeenAt: Date.now(),
+        });
+    });
+    const target = seededHandles[59];
+    const job = await runningJob(t, alice, target, "999");
+    await t.mutation(finish, {
+      jobId: job,
+      attempt: 1,
+      warnings: [],
+      profile: { handle: target, userId: "999", name: "Many Handles" },
+    });
+
+    const matching = await t.run((ctx) =>
+      ctx.db
+        .query("accountHandles")
+        .withIndex("by_account_and_handle", (q) =>
+          q.eq("accountId", accountId).eq("handle", target),
+        )
+        .collect(),
+    );
+    expect(matching).toHaveLength(1);
+  });
 });

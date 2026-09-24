@@ -46,8 +46,8 @@ async function setup() {
     t,
     alice,
     bob,
-    a: t.withIdentity({ subject: `${alice}|session` }),
-    b: t.withIdentity({ subject: `${bob}|session` }),
+    a: t.withIdentity({ subject: `${alice}|session`, email: "alice@test.xearch" }),
+    b: t.withIdentity({ subject: `${bob}|session`, email: "bob@test.xearch" }),
   };
 }
 
@@ -90,7 +90,7 @@ describe("clearing finished runs", () => {
 
     await a.mutation(api.jobs.dismiss, { jobId: failed });
 
-    const feed = await a.query(api.jobs.list, {});
+    const feed = (await a.query(api.jobs.list, {})).jobs;
     expect(feed.map((job) => job._id)).toEqual([kept]);
 
     const after = await a.query(summaryQuery, { now: Date.now() });
@@ -100,7 +100,7 @@ describe("clearing finished runs", () => {
     // and asking for dismissed rows brings it straight back.
     expect(await t.run((ctx) => ctx.db.get(failed))).not.toBeNull();
     expect(await t.run((ctx) => ctx.db.query("receipts").collect())).toHaveLength(1);
-    const withDismissed = await a.query(api.jobs.list, { includeDismissed: true });
+    const withDismissed = (await a.query(api.jobs.list, { includeDismissed: true })).jobs;
     expect(withDismissed.map((job) => job._id).sort()).toEqual([failed, kept].sort());
   });
 
@@ -108,9 +108,9 @@ describe("clearing finished runs", () => {
     const { t, alice, a } = await setup();
     const job = await insertJob(t, alice, { input: "@theo", status: "failed" });
     await a.mutation(api.jobs.dismiss, { jobId: job });
-    expect(await a.query(api.jobs.list, {})).toHaveLength(0);
+    expect((await a.query(api.jobs.list, {})).jobs).toHaveLength(0);
     await a.mutation(api.jobs.restore, { jobId: job });
-    expect(await a.query(api.jobs.list, {})).toHaveLength(1);
+    expect((await a.query(api.jobs.list, {})).jobs).toHaveLength(1);
   });
 
   it("refuses to dismiss work that is still running, so a run can never be hidden while it is still spending provider allowance", async () => {
@@ -275,7 +275,7 @@ describe("the imported corpus is shared across owners", () => {
 
     // bob (a different anonymous user) sees alice's job in the shared feed —
     // jobs are shared infrastructure, not personal data.
-    const feed = await b.query(api.jobs.list, {});
+    const feed = (await b.query(api.jobs.list, {})).jobs;
     expect(feed.map((j) => j._id)).toContain(job);
 
     // ...and in the account library, same as alice would.
