@@ -1,4 +1,4 @@
-import { createSignal, For, Match, Show, Switch } from "solid-js";
+import { createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
@@ -285,7 +285,7 @@ export function ResultsHead(props: {
           }
         >
           <Match when={props.view === ViewMode.Bookmarks}>
-            <h1 class="qtitle">Bookmarks</h1>
+            <BookmarksTitle />
           </Match>
           <Match when={props.account}>
             {(account) => (
@@ -348,7 +348,9 @@ export function ResultsHead(props: {
               <Icon name="mail" />
               {props.emailNeedsSignIn ? "Email · sign in" : "Email these results"}
             </button>
-            <Show when={!props.configured?.email}>
+            {/* `undefined` is still loading, not "not set up": the button
+                stays disabled then, but only a real `false` says so. */}
+            <Show when={props.configured?.email === false}>
               <p>Email isn't set up on this deployment.</p>
             </Show>
             <Show when={props.isOperator}>
@@ -571,5 +573,25 @@ export function ResultsSection(props: ResultsSectionProps) {
         <NerdStatsPanel frontend={props.frontendStats ?? null} result={props.result} />
       </Show>
     </section>
+  );
+}
+
+/** The Bookmarks view's heading, focused when the view opens so keyboard
+ * and screen-reader users land on it rather than on the toggle they left. */
+function BookmarksTitle() {
+  let title!: HTMLHeadingElement;
+
+  onSettled(() => title.focus({ preventScroll: true }));
+
+  return (
+    <h1
+      ref={(el) => {
+        title = el;
+      }}
+      class="qtitle"
+      tabindex="-1"
+    >
+      Bookmarks
+    </h1>
   );
 }

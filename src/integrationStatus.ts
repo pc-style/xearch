@@ -1,3 +1,5 @@
+import { OPERATOR_BUILD } from "./operatorBuild";
+
 export type IndexingStatus = {
   xmd: boolean;
   indexing: boolean;
@@ -38,7 +40,12 @@ export const IMPORTS_UNAVAILABLE = "Imports are not available on this site.";
  * non-import surface reusing it (web context, linked pages, "Help me
  * search", cancel/dismiss), which don't import anything.
  */
-export const OPERATOR_SIGN_IN_NOTICE = "This action runs from the operator dashboard.";
+// On the operator dashboard itself, pointing at the dashboard is wrong: the
+// real state is that this build's operator token was not accepted (missing
+// at build time, or mid-rotation).
+export const OPERATOR_SIGN_IN_NOTICE = OPERATOR_BUILD
+  ? "Operator access was not accepted. Check the operator token on this deployment."
+  : "This action runs from the operator dashboard.";
 
 /** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {
