@@ -69,12 +69,35 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
       ? isStalledRun(job.status, job.updatedAt)
       : false;
 
+  // A callback ref, not a `useEffect` (this app's own no-`useEffect`-in-app-
+  // code rule): src/library/QueueTimeline.tsx's "Show in dashboard" sets
+  // `location.hash` to this exact id AFTER calling `close()`, but `close()`'s
+  // state update hasn't rendered yet at that point — App.tsx mounts
+  // QueueTimeline and Dashboard from separate, mutually exclusive branches,
+  // so this row does not exist in the DOM the instant the hash is set. The
+  // browser's own hash-navigation only tries once, right then, and never
+  // retries once the element later mounts (CodeRabbit) — so this scrolls
+  // itself into view on mount instead of depending on that native behavior.
+  // Built once via `useState` (the same "stable callback" pattern
+  // src/errors.ts `useTask` uses for its own runner) so it fires exactly
+  // once per real mount, never once per re-render from an inline arrow
+  // function getting a new identity every time.
+  const [scrollIntoViewIfTargeted] = useState<(el: HTMLElement | null) => void>(() => {
+    return (el: HTMLElement | null) => {
+      if (!el || typeof window === "undefined") return;
+      const hash = `#account-${row.accountId}`;
+
+      if (window.location.hash !== hash) return;
+      el.scrollIntoView({ block: "center" });
+      // Consumed, not left standing: without this, filtering the list (which
+      // can remount this same row) would silently re-trigger the scroll later.
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    };
+  });
+
   return (
-    // `id` is a plain in-page anchor target (no scroll effect, no state) for
-    // the Queue timeline's "Show in dashboard" link
-    // (src/library/QueueTimeline.tsx) — the browser's own `#hash` navigation
-    // does the scrolling, so this needs nothing beyond the id existing.
-    <article className="library-row" id={`account-${row.accountId}`}>
+    // `id` is the anchor target `scrollIntoViewIfTargeted` above looks for.
+    <article className="library-row" id={`account-${row.accountId}`} ref={scrollIntoViewIfTargeted}>
       <div className="library-row-head">
         <div className="library-identity">
           {row.avatar ? (
@@ -93,7 +116,9 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           <Badge tone={stateMeta.tone}>{stateMeta.label}</Badge>
           {activeHistoryJob ? (
             <Badge tone={acquisitionStatusTone(activeHistoryJob.status)}>
-              Downloading older history
+              {activeHistoryJob.status === "queued"
+                ? "Older history queued"
+                : "Downloading older history"}
             </Badge>
           ) : (
             job && (
@@ -126,7 +151,10 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
             details (compact row). */}
         {activeHistoryJob ? (
           <span>
-            Downloading older history {formatRelative(activeHistoryJob.updatedAt)}
+            {activeHistoryJob.status === "queued"
+              ? "Older history queued"
+              : "Downloading older history"}{" "}
+            {formatRelative(activeHistoryJob.updatedAt)}
             {stalled && " — no update in over 10m, may be stalled"}
           </span>
         ) : (

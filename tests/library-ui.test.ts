@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { getFunctionName } from "convex/server";
@@ -241,6 +241,10 @@ function reset() {
   mockState.responses = new Map();
   mockState.config = undefined;
   mockState.liveNow = Date.now();
+  // AccountRow's own mount-time scroll ref reads `location.hash` — clear it
+  // between tests so one test's `#account-<id>` target can never leak into
+  // the next and change whether its rows try to scroll.
+  window.history.replaceState(null, "", "/");
 }
 
 function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
@@ -516,6 +520,120 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     // The account row's own headline reflects the backfill, not the base
     // import's stale "Download complete" state.
     expect(html).toContain("Downloading older history");
+  });
+
+  // CodeRabbit (PR #63): `activeHistoryJob` can be "queued" or "running" —
+  // a queued backfill has not started downloading anything yet, so it must
+  // not read "Downloading older history" in either the badge or the state
+  // line, the same distinction the base-import badge already makes via
+  // `acquisitionStatusLabel`.
+  it("labels a queued (not yet running) deep-history backfill distinctly from a running one", () => {
+    reset();
+
+    const queued = makeRow({
+      accountId: accountId("acct-queued-backfill"),
+      handle: "theo",
+      name: "Theo",
+      latestJob: { jobId: jobId("base-import"), status: "complete", updatedAt: Date.now() },
+      historyJob: {
+        jobId: jobId("history-window"),
+        status: "queued",
+        updatedAt: Date.now(),
+        since: "2025-11-01",
+        until: "2025-12-01",
+      },
+    });
+
+    setQuery(api.library.rows, { rows: [queued], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const html = renderLibrary();
+
+    expect(html).toContain("Older history queued");
+    expect(html).not.toContain("Downloading older history");
+  });
+
+  // CodeRabbit (PR #63): a person can start a fresh base-import refresh
+  // while an earlier backfill window is still running, so both `latestJob`
+  // and `historyJob` can be active at once. The Active queue strip's Stop
+  // button must target the SAME job src/library/AccountRow.tsx itself
+  // displays and stops for this account (its own `activeHistoryJob` always
+  // wins), or the two controls could stop two different jobs.
+  it("prefers the active history job over an active base import when both are queued/running at once", () => {
+    reset();
+
+    const both = makeRow({
+      accountId: accountId("acct-both-active"),
+      handle: "theo",
+      name: "Theo",
+      latestJob: { jobId: jobId("base-import"), status: "running", updatedAt: Date.now() },
+      historyJob: {
+        jobId: jobId("history-window"),
+        status: "running",
+        updatedAt: Date.now(),
+        since: "2025-11-01",
+        until: "2025-12-01",
+      },
+    });
+
+    setQuery(api.library.rows, { rows: [both], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const html = renderLibrary();
+
+    // Exactly one active-queue row for this account, and it's the backfill
+    // window's own label, not the base import's.
+    expect(html).toContain("older history 2025-11 → 2025-12");
+    expect(html).toContain("Downloading older history");
+  });
+
+  // CodeRabbit (PR #63, Major): src/library/QueueTimeline.tsx's "Show in
+  // dashboard" sets `location.hash` right after calling `close()`, before
+  // this row exists in the DOM (App.tsx mounts the Queue page and the
+  // dashboard from separate, mutually exclusive branches) — the browser's
+  // own native hash-scroll fires too early and never retries once the row
+  // later mounts. AccountRow's own mount-time ref is what actually does the
+  // scroll instead, checking the SAME `location.hash` once it has a real
+  // element to scroll.
+  it("scrolls its own row into view on mount when location.hash already names its account, and clears the hash after", () => {
+    reset();
+    const scrollIntoView = vi.fn();
+    // jsdom has no real layout, so `Element.prototype.scrollIntoView` isn't
+    // implemented — stub it to observe the call.
+    Element.prototype.scrollIntoView = scrollIntoView;
+    window.history.replaceState(null, "", "/?dashboard=1#account-acct-targeted");
+
+    const targeted = makeRow({
+      accountId: accountId("acct-targeted"),
+      handle: "theo",
+      name: "Theo",
+    });
+    setQuery(api.library.rows, { rows: [targeted], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    renderLibrary();
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(window.location.hash).toBe("");
+  });
+
+  it("does not scroll a row whose account the hash does not name", () => {
+    reset();
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    window.history.replaceState(null, "", "/?dashboard=1#account-someone-else");
+
+    const other = makeRow({
+      accountId: accountId("acct-not-targeted"),
+      handle: "theo",
+      name: "Theo",
+    });
+    setQuery(api.library.rows, { rows: [other], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    renderLibrary();
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("renders an explicit unauthenticated/offline-from-data state", () => {

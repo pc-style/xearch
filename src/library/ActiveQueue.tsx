@@ -11,22 +11,21 @@ import { operatorArgs } from "../operatorToken";
 
 // Which of an account's two job fields is currently active — its base
 // import (`latestJob`, always "bulk") or its deep-history backfill window
-// (`historyJob`, always "live"/"history"). Never both rendered at once: a
-// backfill only ever starts once the base import has already reached a
-// terminal state (convex/jobs.ts `maybeStartHistoryBackfill` runs from
-// `finish`, which only patches a "bulk" job to "complete"), so in practice
-// at most one of the two is ever queued/running for the same account. See
+// (`historyJob`, always "live"/"history"). Usually only one is ever
+// queued/running at once (a backfill only starts once the base import has
+// reached a terminal state — convex/jobs.ts `maybeStartHistoryBackfill`
+// runs from `finish`), but a person can start a fresh bulk refresh while an
+// earlier backfill window is still running, so both CAN be active at the
+// same time. `historyJob` is checked first — matching
+// src/library/AccountRow.tsx's own `activeHistoryJob` priority for the same
+// row — so this strip's Stop button always targets the same job that row
+// itself displays and stops, never the other one (CodeRabbit). See
 // /tmp/issues.md item 2: this is what makes an account's own older-history
 // download show up here at all — before this, the strip only ever looked at
 // `latestJob`, which the backfill window job is never assigned to.
 type ActiveJob = { jobId: Id<"jobs">; status: JobStatus; updatedAt: number; isHistory: boolean };
 
 function activeJobOf(row: AccountLibraryRow): ActiveJob | undefined {
-  const base = row.latestJob;
-
-  if (base && (base.status === "queued" || base.status === "running"))
-    return { jobId: base.jobId, status: base.status, updatedAt: base.updatedAt, isHistory: false };
-
   const history = row.historyJob;
 
   if (history && (history.status === "queued" || history.status === "running"))
@@ -36,6 +35,11 @@ function activeJobOf(row: AccountLibraryRow): ActiveJob | undefined {
       updatedAt: history.updatedAt,
       isHistory: true,
     };
+
+  const base = row.latestJob;
+
+  if (base && (base.status === "queued" || base.status === "running"))
+    return { jobId: base.jobId, status: base.status, updatedAt: base.updatedAt, isHistory: false };
 
   return undefined;
 }

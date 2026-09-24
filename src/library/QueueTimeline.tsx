@@ -83,11 +83,19 @@ function waitReasonText(entry: TimelineEntry): string {
 
 /** "starts ≈ HH:MM · download done ≈ HH:MM", or the same estimate framed as
  * "if retried now" for a stopped job nothing is actually scheduled to act
- * on — the ETA is only true if a person clicks Retry this instant. */
+ * on — the ETA is only true if a person clicks Retry this instant. A
+ * deep-history backfill window job (`origin: "history"`) can never actually
+ * be retried this way (convex/jobs.ts `retry` rejects it outright: "not
+ * retried on its own", since retrying it in place would double-count into
+ * its backfill's `postsFound`) — framing its estimate as "if retried now"
+ * would advertise a control this page doesn't offer for it (see `retryable`
+ * below, CodeRabbit). */
 function etaText(entry: TimelineEntry): string {
   const range = `starts ≈ ${formatClock(entry.estimate.start)} · download done ≈ ${formatClock(entry.estimate.finish)}`;
 
-  return entry.waitReason.kind === "needsRetry" ? `if retried now: ${range}` : range;
+  if (entry.waitReason.kind !== "needsRetry") return range;
+
+  return entry.origin === "history" ? "not retried on its own" : `if retried now: ${range}`;
 }
 
 type ThrottledEntry = TimelineEntry & { waitReason: Extract<WaitReason, { kind: "throttled" }> };
@@ -174,11 +182,13 @@ function QueueIdentity({ entry }: { entry: TimelineEntry }) {
 // `api.jobs.retry` mutation src/library/AccountRow.tsx and src/JobRow.tsx
 // already use (same args shape, same `useTask` busy/error pattern); a
 // history-window job's retry is rejected server-side with its own honest
-// reason (convex/jobs.ts `retry`: "not retried on its own"), which surfaces
-// here the same way any other retry failure would. `onShowInDashboard` is a
-// plain `#account-<id>` in-page anchor (src/library/AccountRow.tsx renders
-// that id on every row) — nothing to build for the scroll itself, since the
-// browser's own hash navigation already does it once back on the dashboard.
+// reason (convex/jobs.ts `retry`: "not retried on its own"), which is why
+// `retryable` below never offers the button for one in the first place.
+// `onShowInDashboard` sets a plain `#account-<id>` hash; the scroll itself
+// is done by src/library/AccountRow.tsx's own mount-time ref (CodeRabbit:
+// the browser's native hash-scroll fires before that row exists — App.tsx
+// mounts QueueTimeline and Dashboard from separate branches — and never
+// retries once it mounts, so this can't rely on that native behavior).
 function QueueTimelineRow({
   entry,
   showIdentity,
@@ -191,7 +201,10 @@ function QueueTimelineRow({
   onShowInDashboard: (accountId: string) => void;
 }) {
   const { busy, message, run } = useTask();
-  const retryable = entry.waitReason.kind === "needsRetry";
+  // Never true for a history-window job — see `etaText`'s own comment: the
+  // server rejects retrying one outright, so no Retry button is offered for
+  // it here either.
+  const retryable = entry.waitReason.kind === "needsRetry" && entry.origin !== "history";
   // A local const, not `entry.account` inline: TypeScript narrows a
   // property access away by the time a closure below (the button's
   // `onClick`) reads it, so this is what lets that closure see it as
@@ -365,9 +378,12 @@ export default function QueueTimeline({ close }: { close: () => void }) {
     retry({ jobId, ...operatorArgs() }).then(() => undefined);
 
   // A plain in-page anchor, not a route/state change: leaving the Queue page
-  // (`close()`) already puts the dashboard back on screen, and the browser's
-  // own `#account-<id>` hash navigation (src/library/AccountRow.tsx renders
-  // that id on every row) does the scrolling — no effect, no extra state.
+  // (`close()`) puts the dashboard back on screen. Setting the hash here
+  // still matters even though the target row doesn't exist yet at this
+  // exact instant — src/library/AccountRow.tsx's own mount-time ref reads
+  // this same `location.hash` once it mounts and scrolls itself into view
+  // then, rather than relying on the browser's native (one-shot, too-early)
+  // hash-scroll attempt.
   const onShowInDashboard = (accountId: string) => {
     close();
 

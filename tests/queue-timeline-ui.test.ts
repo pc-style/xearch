@@ -469,4 +469,38 @@ describe("QueueTimeline (src/library/QueueTimeline.tsx) rendered output", () => 
     expect(html).toContain("@theo");
     expect(html).toContain("older history 2025-11 → 2025-12");
   });
+
+  // CodeRabbit (PR #63): convex/jobs.ts `retry` rejects a history-window
+  // job outright ("not retried on its own" — retrying it in place would
+  // double-count into its backfill's `postsFound`), so offering a Retry
+  // button or an "if retried now" estimate for one would advertise a
+  // control this page cannot actually honor.
+  it("never offers Retry or an 'if retried now' estimate for a stopped deep-history backfill window job", () => {
+    reset();
+    const now = Date.now();
+    setQuery(
+      queueTimelineQuery,
+      makeTimeline({
+        entries: [
+          {
+            jobId: jobId("job-history-stopped"),
+            kind: "live",
+            input: "from:theo since:2025-11-01 until:2025-12-01",
+            account: { accountId: accountId("acct-theo"), handle: "theo", name: "Theo" },
+            origin: "history",
+            since: "2025-11-01",
+            until: "2025-12-01",
+            status: "failed",
+            createdAt: now,
+            waitReason: { kind: "needsRetry", throttledUntil: undefined },
+            estimate: { start: now, finish: now + 60_000 },
+          },
+        ],
+      }),
+    );
+    const html = renderQueueTimeline();
+    expect(html).not.toContain(">Retry<");
+    expect(html).not.toContain("Show in dashboard");
+    expect(html).not.toContain("if retried now");
+  });
 });
