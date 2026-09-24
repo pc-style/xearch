@@ -142,7 +142,11 @@ export default function Dashboard({
   // exists throws into the app's error boundary — which only offers a
   // reload. The dashboard is reachable directly by URL, so that is a normal
   // first load, not an edge case.
-  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
+  const dashboardNow = useDashboardClock();
+  const config = useQuery(
+    api.integrations.operator,
+    isAuthenticated ? { now: dashboardNow } : "skip",
+  );
   const [showDismissed, setShowDismissed] = useState(false);
 
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"

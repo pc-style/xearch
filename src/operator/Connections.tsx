@@ -21,12 +21,14 @@ export function ConnectionsPanel() {
   // Skipped until a session exists: `integrations.operator` requires one,
   // and asking early throws into the app's error boundary.
   const { isAuthenticated } = useConvexAuth();
-  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
-  // Worker liveness is judged against this clock, not inside the Convex
-  // query — a query re-runs when a document changes, never because time
-  // passed, so a server-decided boolean would stay true after the worker
-  // went quiet. Ticking here lets the row decay on its own.
+  // Worker liveness is judged against this clock: convex/integrations.ts's
+  // `operator` takes `now` as a required arg (never reads the wall clock
+  // itself — a query re-runs when a document changes, never because time
+  // passed) and `handoffReady` below re-derives `handoffState.lastSeenAt`
+  // against this same ticking clock, so the reading keeps decaying between
+  // query re-runs instead of freezing at the last write.
   const [now, setNow] = useState(() => Date.now());
+  const config = useQuery(api.integrations.operator, isAuthenticated ? { now } : "skip");
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 5_000);
 

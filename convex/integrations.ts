@@ -9,9 +9,18 @@ import { z } from "zod";
 import { deliverCapture } from "./lib/handoff";
 import { serviceToken } from "./lib/serviceAuth";
 import { parseQuery } from "./lib/search";
+import { isWorkerLive } from "./worker";
+import schema from "./schema";
 
 const firecrawl = new FirecrawlClient(components.firecrawl);
 
+const capabilitiesValidator = v.object({
+  indexing: v.boolean(),
+  search: v.boolean(),
+  firecrawl: v.boolean(),
+  openai: v.boolean(),
+  email: v.boolean(),
+});
 /**
  * What this deployment says about itself, and who is allowed to hear it.
  *
@@ -30,8 +39,20 @@ const firecrawl = new FirecrawlClient(components.firecrawl);
  * reads. The real boundary for the operator UI is that it is not built into
  * the public bundle at all (src/operatorBuild.ts) and is served only from
  * the VM, behind the exe.dev proxy's login.
+ *
+ * `now` is REQUIRED, not read from the wall clock inside the handler (same
+ * rule as convex/summary.ts's `summary`/`health`): a Convex query re-runs
+ * when a document it read changes, never because time passed, so a
+ * liveness boolean decided without a caller-supplied clock would freeze at
+ * whatever was true at the last `collector` write. `configured` is read by
+ * every open client (it's the public bootstrap), so it never receives the
+ * raw `collector` row or a timestamp derived from it — only a same-shot
+ * boolean, computed here from `now` and never persisted. Worker timing
+ * itself (`lastSeenAt`) reaches only `operator`, which the dashboard reads;
+ * see src/integrationStatus.ts's `handoffReady` for how that timestamp gets
+ * turned into a boolean on the client instead.
  */
-async function deployment(ctx: QueryCtx) {
+async function capabilities(ctx: QueryCtx, now: number) {
   const outbound = process.env.COLLECTOR_MODE === "outbound";
 
   const worker = outbound
@@ -41,27 +62,18 @@ async function deployment(ctx: QueryCtx) {
         .unique()
     : null;
 
-  // No wall clock in here. A Convex query re-runs when a document it read
-  // changes, never because time passed, so `Date.now() - lastSeen < 45s`
-  // decided in this handler froze at the last write: a worker that stopped
-  // heartbeating kept reading as live, and the UI kept offering imports it
-  // could not run. `worker.online` is expiry-driven instead —
-  // convex/worker.ts schedules `expire` 45s after every heartbeat, and
-  // that write is what re-runs this query. Liveness now decays through the
-  // database rather than through a clock nobody is watching.
-  //
   // `saving` answers two different questions by mode: in receiver mode
   // whether an env var is set (configuration), in outbound mode whether the
-  // worker is up (liveness). Only `operator` returns the discriminant that
-  // tells those apart, so no consumer can mistake one for the other.
-  const saving = outbound ? !!worker?.online : !!process.env.RAW_CAPTURE_URL;
+  // worker is up (liveness, via convex/worker.ts's `isWorkerLive`). Only
+  // `operator` returns the discriminant that tells those apart, so no
+  // consumer can mistake one for the other.
+  const saving = outbound ? isWorkerLive(worker, now) : !!process.env.RAW_CAPTURE_URL;
 
   return {
     outbound,
     worker,
     saving,
-    // The client-facing surface: one boolean per button a visitor can see.
-    capabilities: {
+    values: {
       indexing: !!process.env.X_MD_API_KEY && saving,
       search: !!process.env.SEARCH_API_URL,
       firecrawl: !!process.env.FIRECRAWL_API_KEY,
@@ -72,20 +84,35 @@ async function deployment(ctx: QueryCtx) {
 }
 
 export const configured = query({
-  args: {},
-  handler: async (ctx) => (await deployment(ctx)).capabilities,
+  args: { now: v.number() },
+  returns: capabilitiesValidator,
+  handler: async (ctx, { now }) => (await capabilities(ctx, now)).values,
 });
 
 export const operator = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { now: v.number() },
+  returns: capabilitiesValidator.extend({
+    xmd: v.boolean(),
+    handoff: v.boolean(),
+    handoffState: v.union(
+      v.object({ kind: v.literal("live"), lastSeenAt: v.union(v.number(), v.null()) }),
+      v.object({ kind: v.literal("configured"), ok: v.boolean() }),
+    ),
+    collectorMode: v.union(v.literal("outbound"), v.literal("receiver")),
+  }),
+  handler: async (ctx, { now }) => {
     await user(ctx);
-    const { outbound, worker, saving, capabilities } = await deployment(ctx);
+    const { outbound, worker, saving, values } = await capabilities(ctx, now);
 
     return {
-      ...capabilities,
+      ...values,
       xmd: !!process.env.X_MD_API_KEY,
       handoff: saving,
+      // Unlike `saving`/`indexing` above, this exposes the raw timestamp
+      // (session-gated, dashboard-only) rather than a boolean already
+      // decided against `now` — see src/operator/Connections.tsx, which
+      // re-derives liveness against its own ticking clock so the value
+      // keeps decaying between query re-runs instead of freezing.
       handoffState: outbound
         ? { kind: "live" as const, lastSeenAt: worker?.online ? worker.lastSeen : null }
         : { kind: "configured" as const, ok: saving },
@@ -98,13 +125,23 @@ export const reserve = internalMutation({
   args: {
     service: v.union(v.literal("firecrawl"), v.literal("openai"), v.literal("xmd")),
   },
+  returns: v.null(),
   handler: async (ctx) => {
     await user(ctx);
+    return null;
   },
+});
+
+const readResultValidator = v.object({
+  title: v.string(),
+  text: v.string(),
+  url: v.string(),
+  collectedAt: v.number(),
 });
 
 export const page = internalQuery({
   args: { url: v.string() },
+  returns: v.union(v.null(), schema.doc("pages")),
   handler: (ctx, { url }) =>
     ctx.db
       .query("pages")
@@ -119,6 +156,7 @@ export const storePage = internalMutation({
     text: v.string(),
     collectedAt: v.number(),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const existing = await ctx.db
       .query("pages")
@@ -127,11 +165,13 @@ export const storePage = internalMutation({
 
     if (existing) await ctx.db.patch(existing._id, args);
     else await ctx.db.insert("pages", args);
+    return null;
   },
 });
 
 export const readLink = action({
   args: { url: v.string() },
+  returns: readResultValidator,
   handler: async (
     ctx,
     args,
@@ -207,6 +247,7 @@ export const readLink = action({
 
 export const webContext = action({
   args: { query: v.string() },
+  returns: v.array(readResultValidator),
   handler: async (ctx, { query }) => {
     if (!query.trim() || query.length > 300)
       throw new ConvexError("Enter a search under 300 characters.");
@@ -272,6 +313,14 @@ export const webContext = action({
 
 export const account = action({
   args: { handle: v.string() },
+  // Unprocessed passthrough of x.md's own profile JSON — this action does no
+  // field-picking (contrast `readLink`/`webContext` above, which normalize
+  // into a fixed shape), and nothing in this app currently reads its result,
+  // so there is no fixed contract yet to pin down field-by-field. `v.any()`
+  // is used deliberately here, not as a shortcut around validation: it is
+  // the honest declaration for "arbitrary third-party JSON", not a stand-in
+  // for the TypeScript `any` this codebase otherwise avoids.
+  returns: v.union(v.null(), v.any()),
   handler: async (ctx, args) => {
     await ctx.runMutation(internal.integrations.reserve, { service: "xmd" });
 
@@ -293,6 +342,7 @@ const interpreted = z.object({
 
 export const interpret = action({
   args: { raw: v.string() },
+  returns: v.object({ query: v.string(), explanation: v.string() }),
   handler: async (ctx, { raw }) => {
     if (!raw.trim() || raw.length > 300)
       throw new ConvexError("Enter a search under 300 characters.");
