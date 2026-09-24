@@ -281,6 +281,9 @@ main {
   height: 46px;
   width: 46px;
 }
+.account-strip {
+  display: none;
+}
 .library-status {
   margin-top: 35px;
   position: relative;
@@ -740,6 +743,13 @@ dialog::backdrop {
   justify-content: flex-start;
   overflow-wrap: anywhere;
 }
+.saved-row > button:first-child > small {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .connection-row {
   padding: 18px 0;
   border-top: 1px solid var(--line);
@@ -902,6 +912,24 @@ code {
   }
   .orbit {
     display: none;
+  }
+  .account-strip {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 4px 2px 10px;
+    margin: 0 -2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .account-strip::-webkit-scrollbar {
+    display: none;
+  }
+  .account-strip > button {
+    flex: 0 0 auto;
+    border: 0;
+    border-radius: 50%;
+    padding: 0;
   }
   .library-status {
     font-size: 11px;

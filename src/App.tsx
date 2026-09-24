@@ -66,6 +66,7 @@ import {
   type SearchAttemptId,
 } from "./searchTelemetry";
 import { ModalKind, ViewMode } from "./uiState";
+import { sortLabel, sorts } from "./sortOptions";
 
 type SearchRequest = FlowSearchRequest & {
   readonly attemptId: SearchAttemptId;
@@ -110,14 +111,6 @@ function isAccountOnlyQuery(raw: string): boolean {
     return false;
   }
 }
-
-const sorts: { value: Sort; label: string }[] = [
-  { value: "relevance", label: "Relevant" },
-  { value: "engagement", label: "Relevant + engagement" },
-  { value: "likes", label: "Most liked" },
-  { value: "newest", label: "Newest" },
-  { value: "oldest", label: "Oldest" },
-];
 
 function Modal({
   title,
@@ -858,15 +851,15 @@ export default function App() {
         <p className="connection" role="status">
           <span className="connection-dot" />
           {connection.hasEverConnected
-            ? "Reconnecting to your search library…"
-            : "Connecting to your search library…"}
+            ? "Reconnecting to the search library…"
+            : "Connecting to the search library…"}
         </p>
       )}
       <main ref={kickPendingRef}>
         <section className="search-stage" aria-label="Search X posts">
           {home && (
             <>
-              <div className="orbit" role="group" aria-label="Imported accounts">
+              <div className="orbit" role="group" aria-label="Indexed accounts">
                 {accounts.slice(0, 32).map((a, i, all) => {
                   const angle = (i / all.length) * Math.PI * 2 - Math.PI / 2;
 
@@ -892,8 +885,23 @@ export default function App() {
                   );
                 })}
               </div>
+              {accounts.length > 0 && (
+                <div className="account-strip" role="group" aria-label="Indexed accounts">
+                  {accounts.map((a) => (
+                    <button
+                      type="button"
+                      title={`Search @${a.handle}`}
+                      aria-label={`Search @${a.handle}`}
+                      key={a._id}
+                      onClick={() => search(`@${a.handle}`)}
+                    >
+                      <Avatar name={a.handle} url={a.avatar} />
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="hero-title">
-                <p>Your people. Their words.</p>
+                <p>Every indexed account, one search.</p>
                 <h1>Search X posts.</h1>
               </div>
             </>
@@ -1000,12 +1008,12 @@ export default function App() {
               {libraryLoading ? (
                 <>
                   <span className="status-dot loading" />
-                  Loading your search library…
+                  Loading the search library…
                 </>
               ) : accounts.length ? (
                 <>
                   <span className="status-dot" />
-                  Select an imported account to search its posts
+                  Select an indexed account to search its posts
                 </>
               ) : (
                 <>
@@ -1073,6 +1081,7 @@ export default function App() {
                 }
                 frontendStats={deferredFrontendStats}
                 searchPending={isSearchPending}
+                emailNeedsSignIn={!verifiedEmail}
               />
             </div>
           </Profiler>
@@ -1196,6 +1205,7 @@ export default function App() {
               >
                 <Search size={16} />
                 {item.query}
+                <small>{sortLabel(item.sort)}</small>
               </button>
               <button
                 type="button"

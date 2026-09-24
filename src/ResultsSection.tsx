@@ -266,6 +266,7 @@ export function ResultsSection({
   threadStatus,
   frontendStats,
   searchPending,
+  emailNeedsSignIn,
 }: {
   view: ViewMode;
   raw: string;
@@ -291,6 +292,7 @@ export function ResultsSection({
   threadStatus?: (tweetId: string) => string | null | undefined;
   frontendStats?: SearchAttemptSnapshot | null;
   searchPending?: boolean;
+  emailNeedsSignIn?: boolean;
 }) {
   // Effect-free focus/scroll: callback ref runs at commit time, no useEffect.
   function resultsTitleRef(node: HTMLHeadingElement | null) {
@@ -310,16 +312,18 @@ export function ResultsSection({
           </h1>
           <p>
             {view === ViewMode.Bookmarks
-              ? `${bookmarkedIds.size} saved posts in this browser's session`
-              : configured === undefined
-                ? "Checking your search service connection"
-                : !configured.search
-                  ? "Waiting for the search service connection"
-                  : result?.status === "complete"
-                    ? `${result.rows.length} posts on this page`
-                    : result?.status === "failed"
-                      ? "Search could not complete"
-                      : "Finding matching posts…"}
+              ? `${bookmarkedIds.size} saved ${bookmarkedIds.size === 1 ? "post" : "posts"} in this browser's session`
+              : queryError
+                ? "Fix the search above to see results"
+                : configured === undefined
+                  ? "Checking your search service connection"
+                  : !configured.search
+                    ? "Waiting for the search service connection"
+                    : result?.status === "complete"
+                      ? `${result.rows.length} posts on this page`
+                      : result?.status === "failed"
+                        ? "Search could not complete"
+                        : "Finding matching posts…"}
           </p>
         </div>
         {view === ViewMode.Search && (
@@ -333,23 +337,31 @@ export function ResultsSection({
               <Bookmark size={15} />
               Save search
             </button>
-            <button type="button" disabled={busy || !configured?.firecrawl} onClick={onWebContext}>
+            <button
+              type="button"
+              disabled={busy || !!queryError || !configured?.firecrawl}
+              onClick={onWebContext}
+            >
               <Link2 size={15} />
               Web context
             </button>
             <button
               type="button"
-              title="Email top results"
-              disabled={!visible.length || !configured?.email}
+              title={emailNeedsSignIn ? "Sign in to email results" : "Email top results"}
+              disabled={!!queryError || !visible.length || !configured?.email}
               onClick={() => onOpenModal(ModalKind.Email)}
             >
               <Mail size={15} />
-              Email
+              {emailNeedsSignIn ? "Email · sign in" : "Email"}
             </button>
             {/* This starts a real x.md fetch against X, not a preview — the
                 label says so, and the status line below tracks the job
                 instead of only surfacing it in the Recent imports modal. */}
-            <button type="button" disabled={busy || !configured?.indexing} onClick={onLiveSearch}>
+            <button
+              type="button"
+              disabled={busy || !!queryError || !configured?.indexing}
+              onClick={onLiveSearch}
+            >
               <Search size={15} />
               Import from X
             </button>
@@ -399,7 +411,7 @@ export function ResultsSection({
           <h2>
             {view === ViewMode.Bookmarks
               ? "Keep the posts worth finding again."
-              : "No matches in your library yet."}
+              : "No matches in the indexed accounts yet."}
           </h2>
           <p>
             {view === ViewMode.Bookmarks
@@ -416,8 +428,9 @@ export function ResultsSection({
       ) : (
         <>
           <p className="scope-note">
-            Results and ordering come from your search service. Engagement reflects the source
-            snapshot.
+            {view === ViewMode.Bookmarks
+              ? "Bookmarks are stored in this browser's session until you remove them."
+              : "Results and ordering come from your search service. Engagement reflects the source snapshot."}
           </p>
           {(result?.stats || frontendStats) && (
             <NerdStatsPanel frontend={frontendStats ?? null} result={result} />
