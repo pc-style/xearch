@@ -26,6 +26,22 @@ Prronsh owns the indexer and Elasticsearch implementation. Preserve the search
 service boundary and the Firecrawl, OpenAI, x.md, and AgentMail integrations.
 Do not build a competing search implementation without an explicit request.
 
+## PostHog
+
+Production observability belongs to EU PostHog project `283153`. When a change
+alters search or result actions, emailed-result success, import/job stages,
+Prronsh call outcomes, identity roles, errors, performance, or replayed UI
+fields, update the matching instrumentation and PostHog dashboards, alerts, or
+scout context in the same work. Keep collection production-only and never send
+email addresses.
+
+For frontend releases, verify the published bundle has the production PostHog
+key and EU host, upload matching source maps with the private build key, and
+confirm live events or errors reach project `283153`. A green deploy check alone
+does not prove observability works. Keep self-driving PR creation behind Adam's
+approval, with no more than three Xearch self-driving PRs per month across the
+old and new PostHog projects.
+
 <!-- convex-ai-start -->
 
 This project uses [Convex](https://convex.dev) as its backend.

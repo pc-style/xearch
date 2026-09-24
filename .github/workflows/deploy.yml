@@ -53,8 +53,20 @@ jobs:
         name: Deploy backend and static hosting
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST }}
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
           NODE_OPTIONS: --max-old-space-size=3072
-        run: bunx @convex-dev/static-hosting deploy --build-command 'bun run build'
+        run: |
+          if [ -z "$VITE_POSTHOG_KEY" ] || [ -z "$POSTHOG_CLI_API_KEY" ]; then
+            echo "::error::Production PostHog build credentials are missing."
+            exit 1
+          fi
+          if [ "$VITE_POSTHOG_HOST" != "https://eu.i.posthog.com" ]; then
+            echo "::error::Production PostHog host must be the EU ingestion endpoint."
+            exit 1
+          fi
+          bash scripts/with-posthog-build-env.sh bunx @convex-dev/static-hosting deploy --build-command 'bun run build'
 
       # A deploy that "succeeded" but serves nothing is not a deploy. Set the
       # PRODUCTION_URL repo variable to turn this into a real gate.
