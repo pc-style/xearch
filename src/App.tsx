@@ -1264,7 +1264,7 @@ export default function App() {
             {/* Repeat runs of the exact same input (e.g. every past click of
                 "Retry" before convex/jobs.ts grew an in-place retry mutation)
                 fold into one row — see dedupeJobsByInput's own comment. */}
-            {dedupeJobsByInput(jobs).map(({ job, earlierCount }) => (
+            {dedupeJobsByInput(jobs).map(({ job, earlierCount, earlierIds }) => (
               <JobRow
                 key={job._id}
                 job={job}
@@ -1284,9 +1284,15 @@ export default function App() {
                   await ensureSession();
                   await retry({ jobId: j._id });
                 }}
+                // Dismiss the WHOLE folded group, not just the one visible
+                // row: `jobs.list` excludes dismissed jobs by default, so
+                // clearing only `j._id` would surface the next-newest
+                // earlier run of this same input on the very next render
+                // instead of actually clearing the list (CodeRabbit, PR
+                // #52) — see dedupeJobsByInput's own `earlierIds` comment.
                 onDismiss={async (j) => {
                   await ensureSession();
-                  await dismissJob({ jobId: j._id });
+                  await Promise.all([j._id, ...earlierIds].map((jobId) => dismissJob({ jobId })));
                 }}
               />
             ))}

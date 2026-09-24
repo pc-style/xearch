@@ -144,4 +144,19 @@ describe("dedupeJobsByInput", () => {
     expect(rows[0]!.earlierCount).toBe(2);
     expect(rows[1]!.earlierCount).toBe(0);
   });
+
+  it("carries every folded job's id, not just a count, so a caller can dismiss the whole group", () => {
+    // CodeRabbit (PR #52): `jobs.list` excludes dismissed jobs by default,
+    // so dismissing only the visible row's id would surface the
+    // next-newest folded job on the very next render. `earlierIds` is what
+    // lets src/App.tsx dismiss the entire group in one action instead.
+    const rows = dedupeJobsByInput([
+      job({ _id: jobId("job-3"), kind: "bulk", input: "theo" }),
+      job({ _id: jobId("job-2"), kind: "bulk", input: "theo" }),
+      job({ _id: jobId("job-1"), kind: "bulk", input: "theo" }),
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.earlierIds).toEqual([jobId("job-2"), jobId("job-1")]);
+  });
 });

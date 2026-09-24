@@ -1,4 +1,4 @@
-import type { Doc } from "../convex/_generated/dataModel";
+import type { Doc, Id } from "../convex/_generated/dataModel";
 import type { JobStatus } from "../convex/lib/contracts";
 
 export function jobLabel(job: Doc<"jobs">) {
@@ -176,17 +176,28 @@ export function jobPhaseDetail(job: Doc<"jobs">, now: number): string {
  * src/JobRow.tsx's "Technical details" disclosure, which is where the count
  * surfaces (/tmp/issues-codex-followup.md item 2 and item 8).
  */
-export function dedupeJobsByInput(
-  jobs: Doc<"jobs">[],
-): { job: Doc<"jobs">; earlierCount: number }[] {
-  const rows = new Map<string, { job: Doc<"jobs">; earlierCount: number }>();
+export type DedupedJobRow = {
+  job: Doc<"jobs">;
+  earlierCount: number;
+  /** Every OTHER job folded into this row (same kind+input, older) — never
+   * includes `job` itself. `jobs.list` excludes dismissed jobs by default,
+   * so dismissing only `job._id` would surface the next-newest of these on
+   * the very next render (CodeRabbit, PR #52): a caller's "Clear from list"
+   * must dismiss the whole group, not just the row it can currently see. */
+  earlierIds: Id<"jobs">[];
+};
+
+export function dedupeJobsByInput(jobs: Doc<"jobs">[]): DedupedJobRow[] {
+  const rows = new Map<string, DedupedJobRow>();
 
   for (const job of jobs) {
     const key = `${job.kind}:${job.input}`;
     const existing = rows.get(key);
 
-    if (existing) existing.earlierCount += 1;
-    else rows.set(key, { job, earlierCount: 0 });
+    if (existing) {
+      existing.earlierCount += 1;
+      existing.earlierIds.push(job._id);
+    } else rows.set(key, { job, earlierCount: 0, earlierIds: [] });
   }
 
   return [...rows.values()];
