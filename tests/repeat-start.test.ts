@@ -105,6 +105,35 @@ describe("a repeated identical import request", () => {
     expect(await countJobs(t)).toBe(2);
   });
 
+  it("continues the stored run even when the client sends a different handle", async () => {
+    const { t, a } = await setup();
+    const first = await a.mutation(api.jobs.start, { kind: "bulk", input: "theo" });
+    await t.run((ctx) =>
+      ctx.db.patch(first, { status: "complete", nextUntil: "2025-01-01T00:00:00.000Z" }),
+    );
+    // The library row sends the account's current handle, which can differ
+    // from the handle the run started with.
+    const next = await a.mutation(api.jobs.start, {
+      kind: "bulk",
+      input: "theo_renamed",
+      previous: first,
+    });
+    const job = await t.run(async (ctx) => (await ctx.db.get(next))!);
+    expect(job.kind).toBe("bulk");
+    expect(job.input).toBe("theo");
+    expect(job.until).toBe("2025-01-01T00:00:00.000Z");
+  });
+
+  it("refuses to continue someone else's run", async () => {
+    const { t, a, b } = await setup();
+    const mine = await a.mutation(api.jobs.start, { kind: "bulk", input: "theo" });
+    await t.run((ctx) => ctx.db.patch(mine, { status: "complete" }));
+    await expect(
+      b.mutation(api.jobs.start, { kind: "bulk", input: "theo", previous: mine }),
+    ).rejects.toThrow("Job not found.");
+    expect(await countJobs(t)).toBe(1);
+  });
+
   it("is scoped to one person — it can never hand back someone else's job", async () => {
     const { t, a, b } = await setup();
     const mine = await a.mutation(api.jobs.start, { kind: "live", input: "from:theo" });
