@@ -180,9 +180,10 @@ Ordering and deduplication are entirely generation-based, per account:
   `uniquePostCountAsOf`, `pendingWork`, `error`) against what was accepted for that
   generation, via a stored digest (`accountPublications.lastAppliedDigest`).
   - **Fields match** → an idempotent replay: do not reapply, log with
-    `outcome: "duplicate_ignored"`, and return the same acceptance response as the
-    original. This is what makes an out-of-order delivery (a slow retry of an
-    already-applied update) harmless.
+    `outcome: "duplicate_ignored"`, and respond with that outcome and the
+    `committedGeneration` (the original application answered `"applied"`). This
+    is what makes an out-of-order delivery (a slow retry of an already-applied
+    update) harmless.
   - **Fields differ** → a contract violation, not a replay: reject without applying,
     log with `outcome: "rejected_invalid"` and a `rejectionReason` naming the
     generation. Two different reports claiming the same generation number is a

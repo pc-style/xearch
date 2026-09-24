@@ -187,12 +187,6 @@ export async function jobsForAccount(
   return { jobs, exhausted: true };
 }
 
-// A handful of legacy/edge-case duplicates is the worst case this ever
-// walks into (accountPublications.by_account is not uniqueness-enforced —
-// see convex/library.ts and convex/summary.ts's own comments on `.first()`
-// there), never an unbounded scan.
-const MAX_DUPLICATE_PUBLICATIONS = 10;
-
 /**
  * The one `accountPublications` row that reflects an account's CURRENT
  * state, tolerant of duplicate rows existing for it.
@@ -220,7 +214,12 @@ export function currentPublication(
   );
 }
 
-/** Bounded read of every `accountPublications` row for one account. */
+/**
+ * Every `accountPublications` row for one account. The receiver writes one
+ * row per account, so this is normally a single document; it is read in full
+ * rather than capped because a cap would silently drop the newest generation
+ * for an account that somehow has more rows than the cap.
+ */
 export function accountPublicationCandidates(
   db: Db,
   accountId: Id<"accounts">,
@@ -228,5 +227,5 @@ export function accountPublicationCandidates(
   return db
     .query("accountPublications")
     .withIndex("by_account", (q) => q.eq("accountId", accountId))
-    .take(MAX_DUPLICATE_PUBLICATIONS);
+    .collect();
 }
