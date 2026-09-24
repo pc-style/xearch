@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { getFunctionName } from "convex/server";
-import type { UserIdentityAttributes } from "convex/server";
+import type { FunctionReturnType, UserIdentityAttributes } from "convex/server";
 import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
 import type { ConvexReactClientOptions } from "convex/react";
 import type { Value } from "convex/values";
@@ -46,10 +46,30 @@ import Library from "../src/library/Library";
  * each assertion.
  */
 
-const mockState = {
+type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
+
+// Named (not anonymous) so a mutable field like `config` keeps its full
+// declared union — an inferred/`satisfies` literal type would instead pin
+// it to `undefined`, the only value the initializer below actually uses,
+// and reject every later `mockState.config = {...}` fixture assignment.
+interface MockState {
+  isAuthenticated: boolean;
+  connected: boolean;
+  responses: Map<string, unknown>;
+  // CodeRabbit (PR #48): <Library> no longer queries `api.integrations.operator`
+  // itself — the integrator (src/Dashboard.tsx) passes its own `config`/
+  // `liveNow` down as props instead, so this fixture feeds those directly
+  // rather than through the `responses` map `setQuery` populates.
+  config: OperatorConfig | undefined;
+  liveNow: number;
+}
+
+const mockState: MockState = {
   isAuthenticated: true,
   connected: true,
   responses: new Map<string, unknown>(),
+  config: undefined,
+  liveNow: Date.now(),
 };
 
 /**
@@ -219,6 +239,8 @@ function reset() {
   mockState.isAuthenticated = true;
   mockState.connected = true;
   mockState.responses = new Map();
+  mockState.config = undefined;
+  mockState.liveNow = Date.now();
 }
 
 function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
@@ -240,7 +262,11 @@ function renderLibrary(): string {
             fetchAccessToken: () => Promise.resolve(null),
           }),
         },
-        createElement(Library, { ensureSession: () => Promise.resolve() }),
+        createElement(Library, {
+          ensureSession: () => Promise.resolve(),
+          config: mockState.config,
+          liveNow: mockState.liveNow,
+        }),
       ),
     );
   });
@@ -428,21 +454,21 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
       collectorMode: "outbound" as const,
     };
 
-    setQuery(api.integrations.operator, {
+    mockState.config = {
       ...baseConfig,
       handoff: true,
       handoffState: { kind: "live" as const, lastSeenAt: Date.now() },
-    });
+    };
     const online = renderLibrary();
     expect(online).toContain("Online");
     expect(online).not.toContain("Not configured");
 
     const lastSeenAt = Date.now() - 5 * 60_000;
-    setQuery(api.integrations.operator, {
+    mockState.config = {
       ...baseConfig,
       handoff: false,
       handoffState: { kind: "live" as const, lastSeenAt },
-    });
+    };
     const offline = renderLibrary();
     // CodeRabbit (PR #48): `workerLastSeenAt` is the last heartbeat
     // observed, not the moment the worker went offline — "last seen", not
@@ -467,6 +493,36 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     const workerRowHtml = workerRowMatch![1];
     expect(workerRowHtml).toContain('<span aria-live="polite">Offline</span>');
     expect(workerRowHtml).not.toMatch(/aria-live="polite">[^<]*last seen/);
+  });
+
+  it("keeps a service's ticking 'last success' detail outside its polite live region (coordinator follow-up)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+
+    const health: ServiceStatus[] = [
+      {
+        service: "indexer",
+        kind: "known",
+        healthy: true,
+        stale: false,
+        observedAt: Date.now(),
+        lastSuccessAt: Date.now() - 3 * 60_000,
+      },
+      { service: "receiver", kind: "unknown" },
+      { service: "search", kind: "unknown" },
+    ];
+
+    setQuery(healthQuery, health);
+    const html = renderLibrary();
+    // CodeRabbit (PR #48): only the service's actual result ("Search
+    // indexer: Healthy") sits in the live region — "(last success 3m ago)"
+    // is recomputed on every `liveNow` re-render whether or not health
+    // changed, so it must sit outside the region or it re-announces
+    // unchanged status text every few seconds.
+    expect(html).toContain('<span aria-live="polite">Search indexer: Healthy</span>');
+    expect(html).not.toMatch(/aria-live="polite">[^<]*last success/);
+    expect(html).toContain("(last success");
   });
 
   it("hides a queued-work tile until the indexer actually reports that unit, and shows it once it does (A4)", () => {

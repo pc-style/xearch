@@ -323,7 +323,14 @@ export default function Dashboard({
           </form>
         </aside>
         <div className="control-main">
-          <Library ensureSession={ensureSession} />
+          {/* CodeRabbit (PR #48): pass this component's own `config`/`liveNow`
+              down instead of letting <Library> start a second, independent
+              `useLiveNow()` tick and a second `operator` query — two
+              separately-ticking clocks would send slightly different `now`
+              values, so the two queries would not actually share one Convex
+              subscription the way the comment near this file's own `config`
+              declaration claims. */}
+          <Library ensureSession={ensureSession} config={config} liveNow={liveNow} />
           <section className="control-feed" aria-label="Other imports">
             <h2>Other imports</h2>
             <p className="control-feed-note">

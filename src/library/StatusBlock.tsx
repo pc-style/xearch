@@ -91,11 +91,14 @@ export default function StatusBlock({
           );
         })}
       </div>
-      <div className="library-health-row" role="status">
+      <div className="library-health-row">
         {!health
           ? (["indexer", "receiver", "search"] as const).map((service) => (
               <Badge key={service} tone="neutral">
-                {SERVICE_DISPLAY_NAME[service]}: {isAuthenticated ? "loading…" : "connect to view"}
+                <span aria-live="polite">
+                  {SERVICE_DISPLAY_NAME[service]}:{" "}
+                  {isAuthenticated ? "loading…" : "connect to view"}
+                </span>
               </Badge>
             ))
           : health.map((status) => {
@@ -110,7 +113,15 @@ export default function StatusBlock({
 
               return (
                 <Badge key={status.service} tone={tone}>
-                  {SERVICE_DISPLAY_NAME[status.service]}: {serviceHealthLabel(status)}
+                  {/* CodeRabbit (PR #48): only the service's actual result
+                      sits in the live region — the still-ticking "last
+                      success Xm ago" text (recomputed on every `liveNow`
+                      re-render, whether or not health changed) stays
+                      outside it, or it would get announced as a new status
+                      on every re-render. */}
+                  <span aria-live="polite">
+                    {SERVICE_DISPLAY_NAME[status.service]}: {serviceHealthLabel(status)}
+                  </span>
                   {status.kind === "known" && status.lastSuccessAt !== undefined
                     ? ` (last success ${formatRelative(status.lastSuccessAt)})`
                     : ""}
