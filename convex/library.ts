@@ -112,10 +112,10 @@ export const rows = query({
 
     // The search filter doesn't depend on publication state, so it is
     // applied first to shrink which accounts need a publication lookup at
-    // all. What remains is then fetched CONCURRENTLY — one indexed
-    // `.unique()` per account is unavoidable without a join Convex doesn't
-    // offer, but issuing them all at once turns N sequential round trips
-    // into a single batch instead of a query-per-row loop.
+    // all. What remains is then fetched CONCURRENTLY — one indexed lookup
+    // per account is unavoidable without a join Convex doesn't offer, but
+    // issuing them all at once turns N sequential round trips into a single
+    // batch instead of a query-per-row loop.
     const candidates = [...byAccount.entries()].filter(
       ([, { account }]) =>
         !search ||
@@ -123,12 +123,18 @@ export const rows = query({
         account.name.toLowerCase().includes(search),
     );
 
+    // `.first()`, not `.unique()`: `by_account` is not uniqueness-enforced
+    // by the schema (same reasoning convex/summary.ts's `computeAccountTotals`
+    // already applies) — a second row for one account would make `.unique()`
+    // throw, and because these lookups run inside `Promise.all`, that one
+    // throw would fail the whole `rows` query and show no rows at all
+    // (CodeRabbit #4089340887).
     const publications = await Promise.all(
       candidates.map(([accountId]) =>
         ctx.db
           .query("accountPublications")
           .withIndex("by_account", (q) => q.eq("accountId", accountId))
-          .unique(),
+          .first(),
       ),
     );
 

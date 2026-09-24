@@ -258,6 +258,18 @@ async function confirmedCaptureIds(
 // account is not currently searchable at all — there is no cutoff to
 // compare a receipt against, so every one of its unconfirmed captures
 // counts regardless of timing.
+//
+// Known approximation (CodeRabbit #4089340901, verified, deferred): this is
+// OUR acceptance time for the update (`receivedAt`), not the indexer's own
+// pass-start/coverage boundary. A capture written after an indexing pass
+// began reading but before that pass's update was accepted here would be
+// (incorrectly) treated as covered, since its receipt time still falls
+// before `updatedAt`. A precise fix needs the indexer to report when ITS
+// scan actually started or what it covered, which is a new field on the
+// publication-update contract (search/crates/indexer/src/publish.rs +
+// docs/publication-contract.md) — a cross-repo change, not something this
+// receiver can invent a number for (to-do.md "never invent a number").
+// Tracked as follow-up work; not fixed in this pass.
 async function searchableAsOf(
   ctx: QueryCtx,
   accountId: Id<"accounts">,

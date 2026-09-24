@@ -91,16 +91,24 @@ function materialDigest(args: {
   reportedState: string;
   captureIds: string[];
   uniquePostCount?: number;
+  uniquePostCountAsOf?: number;
   pendingWork?: { unit: string; count: number };
   error?: { message: string; code?: string };
 }): string {
   // captureIds sorted before hashing: the same set of confirmed captures
   // resent in a different order is the same report, not a conflicting one.
+  //
+  // `uniquePostCountAsOf` is included alongside `uniquePostCount`: two
+  // reports can state the same count as of two different observation
+  // times, which is a different report even though the number matches
+  // (CodeRabbit #4089340892) — omitting it would let such a resend under
+  // the same generation number pass as a true replay.
   return fnv1a(
     JSON.stringify({
       reportedState: args.reportedState,
       captureIds: [...args.captureIds].sort(),
       uniquePostCount: args.uniquePostCount ?? null,
+      uniquePostCountAsOf: args.uniquePostCountAsOf ?? null,
       pendingWork: args.pendingWork ?? null,
       error: args.error ?? null,
     }),

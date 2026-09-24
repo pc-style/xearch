@@ -239,7 +239,7 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
       error:
-        "The search service could not return a valid result page (the search service rejected the request (HTTP 400)). Try again.",
+        "The search service could not return a valid result page (the search service rejected the request (HTTP 400)).",
     });
   });
 
@@ -266,7 +266,7 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
       error:
-        "The search service could not return a valid result page after retrying once (the search service's response not valid JSON). Try again.",
+        "The search service could not return a valid result page after retrying once (the search service's response was not valid JSON). Try again.",
     });
   });
 });
@@ -325,7 +325,7 @@ describe("stale search cursor — restart search, not a generic failure", () => 
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
       error:
-        "The search service could not return a valid result page (the search service rejected the request (HTTP 409)). Try again.",
+        "The search service could not return a valid result page (the search service rejected the request (HTTP 409)).",
     });
   });
 

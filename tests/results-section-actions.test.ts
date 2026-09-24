@@ -172,7 +172,7 @@ describe("operator authorization boundary in the results UI", () => {
     expect(html).toMatch(webContextButton);
     expect(html).toMatch(importFromXButton);
     expect(html).toMatch(conversationButton);
-    expect(html).toContain("Sign in as an operator to import.");
+    expect(html).toContain("Sign in as an operator to use this action.");
   });
 
   it("leaves Web context, Import from X, and Fetch conversation enabled for an operator", () => {
@@ -182,6 +182,25 @@ describe("operator authorization boundary in the results UI", () => {
 
     expect(html).not.toMatch(webContextButton);
     expect(html).not.toMatch(importFromXButton);
-    expect(html).not.toContain("Sign in as an operator to import.");
+    expect(html).not.toContain("Sign in as an operator to use this action.");
+  });
+
+  it("disables a post's linked-page buttons for a non-operator and shows the sign-in notice (CodeRabbit #4089730732)", () => {
+    const withLink = { ...post(), links: ["https://example.com/article"] };
+    const html = render({ isOperator: false, visible: [withLink] });
+
+    const linkButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*example\.com/;
+
+    expect(html).toMatch(linkButton);
+    expect(html).toContain("Sign in as an operator to use this action.");
+  });
+
+  it("leaves a post's linked-page buttons enabled for an operator", () => {
+    const withLink = { ...post(), links: ["https://example.com/article"] };
+    const html = render({ isOperator: true, visible: [withLink] });
+
+    const linkButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*example\.com/;
+
+    expect(html).not.toMatch(linkButton);
   });
 });

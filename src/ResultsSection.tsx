@@ -176,12 +176,24 @@ export function PostCard({
       {post.links.length > 0 && (
         <div className="links">
           {post.links.slice(0, 3).map((url) => (
-            <button type="button" key={url} onClick={() => onRead(url)} title={url}>
+            <button
+              type="button"
+              key={url}
+              disabled={!isOperator}
+              onClick={() => onRead(url)}
+              title={url}
+            >
               <Link2 size={14} />
               <span>{safeHostname(url)}</span>
               <ArrowUpRight size={13} />
             </button>
           ))}
+          {/* onRead sends the URL to the protected readLink action
+              (Firecrawl) — gated the same as every other paid action
+              (CodeRabbit #4089730732). A disabled `title` alone is
+              unreliable for keyboard/touch users, so the reason is also
+              shown as visible text (CodeRabbit #4089730724). */}
+          {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
         </div>
       )}
       <footer>
@@ -210,18 +222,17 @@ export function PostCard({
               doesn't open a preview — the label says so, and the status
               line below tracks the job it starts instead of only surfacing
               it in the Recent imports modal. */}
-          <button
-            type="button"
-            disabled={!isOperator}
-            title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
-            onClick={onThread}
-          >
+          <button type="button" disabled={!isOperator} onClick={onThread}>
             Fetch conversation from X
           </button>
           <a href={post.url} target="_blank" rel="noreferrer">
             Open on X <ArrowUpRight size={14} />
           </a>
         </div>
+        {/* A disabled `title` alone is unreliable for keyboard/touch users
+            (CodeRabbit #4089730724) — the reason is also shown as visible
+            text. */}
+        {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
         {threadStatus && (
           <p className="scope-note" role="status">
             {threadStatus}
@@ -507,7 +518,6 @@ export function ResultsSection({
               <button
                 type="button"
                 disabled={busy || !!queryError || !configured?.indexing || !isOperator}
-                title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
                 onClick={onLiveSearch}
               >
                 <Search size={15} />
@@ -517,6 +527,8 @@ export function ResultsSection({
                 <Plus size={15} />
                 Import an account
               </button>
+              {/* Visible reason, not just a disabled `title` (CodeRabbit #4089730724). */}
+              {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
             </div>
           )}
         </div>

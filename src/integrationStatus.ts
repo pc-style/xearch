@@ -27,7 +27,7 @@ export const IMPORTS_UNAVAILABLE = "Imports are not available on this site.";
  * shows this exact copy, so the boundary reads the same everywhere instead
  * of one place explaining it and another silently failing.
  */
-export const OPERATOR_SIGN_IN_NOTICE = "Sign in as an operator to import.";
+export const OPERATOR_SIGN_IN_NOTICE = "Sign in as an operator to use this action.";
 
 /** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {

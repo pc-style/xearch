@@ -1,6 +1,9 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
-import { query } from "./_generated/server";
+import { internalQuery, query } from "./_generated/server";
+import { internal } from "./_generated/api";
+import schema from "./schema";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx, MutationCtx, ActionCtx } from "./_generated/server";
 
 // `getAuthUserId` only ever reads `ctx.auth` (see @convex-dev/auth/server's
@@ -49,16 +52,44 @@ function operatorEmails(env: Record<string, string | undefined> = process.env): 
   );
 }
 
-export async function requireOperator(ctx: QueryCtx | MutationCtx | ActionCtx) {
-  const identity = await ctx.auth.getUserIdentity();
-  const email = identity?.email?.trim().toLowerCase();
+// The `users` row is the authoritative record of whether an email is
+// verified (`emailVerificationTime`, set by convex/auth.ts's Email OTP
+// provider only once a code is confirmed — see convex/email.ts `send` for
+// the same pattern). `ctx.auth.getUserIdentity().email` is NOT a safe
+// substitute: `UserIdentity.email` is an optional JWT claim whose presence
+// and meaning depend entirely on the identity provider's configuration, and
+// nothing ties it to `emailVerificationTime` — reading it directly for an
+// authorization decision is exactly CWE-863 (Incorrect Authorization: an
+// access-control decision based on the wrong/unverified data). Actions
+// don't have `ctx.db`, so they reach the same row through an internal query
+// instead.
+export const operatorAccount = internalQuery({
+  args: { id: v.id("users") },
+  returns: v.union(v.null(), schema.doc("users")),
+  handler: (ctx, { id }) => ctx.db.get(id),
+});
 
-  if (!email || !operatorEmails().has(email))
+async function loadAccount(
+  ctx: QueryCtx | MutationCtx | ActionCtx,
+  id: Id<"users">,
+): Promise<Doc<"users"> | null> {
+  if ("db" in ctx) return ctx.db.get(id);
+
+  return ctx.runQuery(internal.access.operatorAccount, { id });
+}
+
+export async function requireOperator(ctx: QueryCtx | MutationCtx | ActionCtx) {
+  const id = await getAuthUserId(ctx);
+  const account = id === null ? null : await loadAccount(ctx, id);
+  // `emailVerificationTime` is only ever set once convex/auth.ts's Email OTP
+  // provider confirms a code — this is the one fact this app trusts, never a
+  // claim carried on the identity/JWT itself.
+  const email = account?.emailVerificationTime ? account.email?.trim().toLowerCase() : undefined;
+
+  if (!id || !email || !operatorEmails().has(email))
     throw new ConvexError("Sign in as an operator to import.");
 
-  // Also asserts a session exists at all (getUserIdentity() already implies
-  // this when email is present), and gives callers the stable user id.
-  return user(ctx);
+  return id;
 }
 
 /**

@@ -150,6 +150,41 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
     });
   });
 
+  it("rejects a same-generation resend that repeats uniquePostCount but with a different uniquePostCountAsOf (CodeRabbit #4089340892)", async () => {
+    const t = setup();
+    await seedAccount(t);
+    await t.mutation(
+      applyUpdate,
+      envelope({
+        providerAccountId: "111",
+        generation: 1,
+        reportedState: "searchable",
+        uniquePostCount: 480,
+        uniquePostCountAsOf: 1_000,
+      }),
+    );
+
+    // Same reportedState, same uniquePostCount — but a different observation
+    // time for that count. This is a different report, not a byte-for-byte
+    // replay, so it must not be silently accepted as duplicate_ignored.
+    const result = await t.mutation(
+      applyUpdate,
+      envelope({
+        providerAccountId: "111",
+        generation: 1,
+        reportedState: "searchable",
+        uniquePostCount: 480,
+        uniquePostCountAsOf: 2_000,
+      }),
+    );
+
+    expect(result).toEqual({
+      outcome: "rejected_invalid",
+      committedGeneration: 1,
+      rejectionReason: "conflicting replay of generation 1",
+    });
+  });
+
   it("rejects a stale, out-of-order update without regressing the displayed state", async () => {
     const t = setup();
     const accountId = await seedAccount(t);

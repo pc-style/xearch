@@ -16,17 +16,29 @@ afterEach(() => {
 async function setup() {
   const t = convexTest(schema, modules);
 
+  // Verified email lives on the `users` row itself
+  // (`emailVerificationTime`), never on the identity/JWT `email` claim —
+  // convex/access.ts `requireOperator` only ever trusts the row (CodeRabbit
+  // #4089340875, CWE-863).
   const [alice, bob] = await t.run(async (ctx) => [
-    await ctx.db.insert("users", { isAnonymous: true }),
-    await ctx.db.insert("users", { isAnonymous: true }),
+    await ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "alice@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
+    await ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "bob@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
   ]);
 
   return {
     t,
     alice,
     bob,
-    a: t.withIdentity({ subject: `${alice}|session`, email: "alice@test.xearch" }),
-    b: t.withIdentity({ subject: `${bob}|session`, email: "bob@test.xearch" }),
+    a: t.withIdentity({ subject: `${alice}|session` }),
+    b: t.withIdentity({ subject: `${bob}|session` }),
   };
 }
 

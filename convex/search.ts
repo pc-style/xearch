@@ -271,7 +271,7 @@ async function attemptSearch(
   try {
     body = await response.json();
   } catch {
-    return { kind: "failed", failure: { kind: "invalid_body", detail: "not valid JSON" } };
+    return { kind: "failed", failure: { kind: "invalid_body", detail: "was not valid JSON" } };
   }
 
   try {
@@ -307,6 +307,13 @@ function describeFailure(failure: Exclude<SearchFailure, { kind: "stale_cursor" 
 function failureMessage(failure: SearchFailure, retried: boolean): string {
   if (failure.kind === "stale_cursor") return "This search expired. Restart your search.";
   const cause = describeFailure(failure);
+
+  // A 4xx (client_error) is never retried (see RETRYABLE_FAILURE_KINDS
+  // above) because the identical request cannot succeed on a retry — so
+  // "Try again" is actively wrong advice here, not just unnecessary
+  // (CodeRabbit #4089340895).
+  if (failure.kind === "client_error")
+    return `The search service could not return a valid result page (${cause}).`;
 
   return retried
     ? `The search service could not return a valid result page after retrying once (${cause}). Try again.`

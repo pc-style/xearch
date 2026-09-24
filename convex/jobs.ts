@@ -752,12 +752,18 @@ export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise
 async function recordHandle(ctx: MutationCtx, accountId: Id<"accounts">, handleText: string) {
   const now = Date.now();
 
+  // `.first()`, not `.unique()`: Convex does not enforce uniqueness on this
+  // (or any) index, and the comment above this function already describes
+  // how a duplicate (accountId, handle) pair could exist from before this
+  // exact-lookup fix — `.unique()` throws on a second match and would fail
+  // the whole import page mutation for every account that already has one
+  // (CodeRabbit #4089340879).
   const existing = await ctx.db
     .query("accountHandles")
     .withIndex("by_account_and_handle", (q) =>
       q.eq("accountId", accountId).eq("handle", handleText),
     )
-    .unique();
+    .first();
 
   if (existing) await ctx.db.patch(existing._id, { lastSeenAt: now });
   else

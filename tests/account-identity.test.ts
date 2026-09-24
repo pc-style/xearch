@@ -234,4 +234,41 @@ describe("account identity on the write path", () => {
 
     expect(matching).toHaveLength(1);
   });
+
+  it("does not throw when an account already has a duplicate (accountId, handle) row — CodeRabbit #4089340879", async () => {
+    const { t, alice } = await setup();
+
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "dup", userId: "555", name: "Dup" }),
+    );
+
+    // A pre-existing duplicate pair, e.g. left over from before the exact
+    // (accountId, handle) lookup existed. `.unique()` would throw here;
+    // `.first()` must not.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("accountHandles", {
+        accountId,
+        handle: "dup",
+        firstSeenAt: 0,
+        lastSeenAt: 0,
+      });
+      await ctx.db.insert("accountHandles", {
+        accountId,
+        handle: "dup",
+        firstSeenAt: 1,
+        lastSeenAt: 1,
+      });
+    });
+
+    const job = await runningJob(t, alice, "dup", "555");
+
+    await expect(
+      t.mutation(finish, {
+        jobId: job,
+        attempt: 1,
+        warnings: [],
+        profile: { handle: "dup", userId: "555", name: "Dup" },
+      }),
+    ).resolves.toBeDefined();
+  });
 });

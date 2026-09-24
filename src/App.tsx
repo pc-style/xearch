@@ -1062,16 +1062,22 @@ export default function App() {
                 Search everything, select a creator, or start with <b>@</b> to filter by account.
               </span>
               {configured?.openai && (
-                <button
-                  type="button"
-                  className="text-button ai"
-                  disabled={busy || !draft.trim() || !isOperator}
-                  title={isOperator ? "Suggest a clearer search" : OPERATOR_SIGN_IN_NOTICE}
-                  onClick={() => void task(proposeSearch())}
-                >
-                  <Sparkles size={13} />
-                  Help me search
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="text-button ai"
+                    disabled={busy || !draft.trim() || !isOperator}
+                    title={isOperator ? "Suggest a clearer search" : undefined}
+                    onClick={() => void task(proposeSearch())}
+                  >
+                    <Sparkles size={13} />
+                    Help me search
+                  </button>
+                  {/* A disabled `title` alone is unreliable for keyboard/touch
+                      users (CodeRabbit #4089730724) — the reason is also shown
+                      as visible text. */}
+                  {!isOperator && <span className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</span>}
+                </>
               )}
             </div>
           </form>
@@ -1203,7 +1209,9 @@ export default function App() {
               <p className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</p>
               <EmailSignIn
                 className="stack-form"
-                onSignedIn={() => setNotice("Signed in. You can now import.")}
+                onSignedIn={() =>
+                  setNotice("Signed in. Imports unlock if this email is an operator address.")
+                }
               />
             </>
           )}
