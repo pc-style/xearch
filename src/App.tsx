@@ -36,7 +36,7 @@ import * as Effect from "effect/Effect";
 import { ResultsSection, Avatar } from "./ResultsSection";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE } from "./integrationStatus";
-import { useDashboardNow } from "./library/clock";
+import { useLiveNow } from "./library/clock";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { describeError } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
@@ -246,9 +246,11 @@ export default function App() {
   // `configured.indexing` decays with real time (worker liveness), not only
   // when the underlying row changes — convex/integrations.ts requires `now`
   // for exactly the reason convex/summary.ts's queries do (a query re-runs
-  // on a document write, never merely because time passed). Refresh it on
-  // the shared dashboard clock rather than once at mount.
-  const now = useDashboardNow();
+  // on a document write, never merely because time passed). `useLiveNow`,
+  // not the bucketed `useDashboardClock`: this feeds convex/worker.ts's
+  // tight 45s `isWorkerLive` window, which a rounded `now` corrupts in
+  // either rounding direction (see that hook's comment).
+  const now = useLiveNow();
   const configured = useQuery(api.integrations.configured, { now });
   const libraryLoading = accountResults === undefined || configured === undefined;
   // The caller's own identity (convex/auth.ts `me`) — never a client-supplied

@@ -3,16 +3,24 @@ import { bucketNow, DASHBOARD_CLOCK_INTERVAL_MS } from "../src/library/clock";
 import { isWorkerLive, WORKER_LIVE_WINDOW_MS } from "../convex/worker";
 
 /**
- * convex/integrations.ts's `configured` (the public bootstrap, read by
- * every open client) takes the caller's `now` as an argument, and Convex's
- * query cache/subscription fan-out is keyed on the exact argument value —
- * see convex/worker.ts's `isWorkerLive` and the OCC-contention fix this
- * clock feeds. Two browsers whose `Date.now()` calls land a millisecond
- * apart must still agree on the value they send, or the whole point of
- * cutting per-client churn on the `collector` row is lost. `bucketNow`
- * quantizes to a shared wall-clock grid so that happens.
+ * `bucketNow` backs `useDashboardClock`/`useDashboardNow`, used only for
+ * loose-tolerance staleness displays (convex/summary.ts's `summary`/`health`,
+ * read by src/library/Library.tsx) where several open browsers sharing one
+ * rounded `now` is a pure win with no correctness downside.
+ *
+ * It must NEVER feed convex/worker.ts's 45s `isWorkerLive` window (used by
+ * convex/integrations.ts's `configured`/`operator`) — see
+ * src/library/clock.ts's `useLiveNow`, which exists specifically because
+ * rounding `now` in either direction corrupts that comparison. Two separate
+ * CodeRabbit findings on the same change caught one direction each:
+ * flooring understated elapsed time (a dead worker read live for up to ~75s
+ * instead of 45s), and the ceiling fix for that overstated it instead (a
+ * worker that heartbeat 15s ago could read dead). This file tests
+ * `bucketNow`'s own (now narrower) contract, and separately proves the
+ * underlying `isWorkerLive` algorithm is correct against exact time, which
+ * is what `useLiveNow` supplies it in production.
  */
-describe("bucketNow (shared time bucket for configured's `now` argument)", () => {
+describe("bucketNow (shared time bucket for loose-tolerance staleness displays only)", () => {
   it("rounds up to the end of the current bucket", () => {
     const bucketEnd = 10 * DASHBOARD_CLOCK_INTERVAL_MS;
     const bucketStart = bucketEnd - DASHBOARD_CLOCK_INTERVAL_MS;
@@ -34,7 +42,7 @@ describe("bucketNow (shared time bucket for configured's `now` argument)", () =>
     expect(bucketNow(bucketEnd + 1)).toBe(bucketEnd + DASHBOARD_CLOCK_INTERVAL_MS);
   });
 
-  it("never returns a value behind the real clock — the property the 45s worker-liveness window depends on", () => {
+  it("never returns a value behind its input", () => {
     for (const offset of [0, 1, 5_000, 29_999, 30_000, 30_001]) {
       const value = 100 * DASHBOARD_CLOCK_INTERVAL_MS + offset;
       expect(bucketNow(value)).toBeGreaterThanOrEqual(value);
@@ -42,26 +50,25 @@ describe("bucketNow (shared time bucket for configured's `now` argument)", () =>
   });
 });
 
-describe("bucketNow feeding convex/worker.ts's isWorkerLive (the 45s worker-liveness window)", () => {
-  it("never reports a worker live for longer than the true 45s window because `now` got rounded down", () => {
-    // CodeRabbit's finding: with a floor-based bucket, `lastSeen` landing
-    // just after a bucket's start could make the bucketed `now` used for
-    // the liveness check lag the real clock by nearly a whole
-    // DASHBOARD_CLOCK_INTERVAL_MS, so a worker that crashed could still
-    // read as live for up to ~75s (45s window + ~30s of rounding lag)
-    // instead of 45s. Reproduce the worst-case alignment and assert the
-    // bucketed `now` still expires the worker at or before the true 45s
-    // mark, never after.
-    const lastSeen = 3 * DASHBOARD_CLOCK_INTERVAL_MS + 1; // just after a bucket boundary
-    const trueExpiry = lastSeen + WORKER_LIVE_WINDOW_MS;
-    const bucketedNow = bucketNow(trueExpiry);
-    expect(bucketedNow).toBeGreaterThanOrEqual(trueExpiry);
-    expect(isWorkerLive({ online: true, lastSeen }, bucketedNow)).toBe(false);
+describe("isWorkerLive against exact time (what useLiveNow supplies, never a bucketed value)", () => {
+  it("reproduces the CodeRabbit regression: a worker seen 15s ago must read live, not dead", () => {
+    // The exact numbers from the finding: lastSeen at 105_000, real time at
+    // 120_001 (15_001ms of real elapsed time — deep inside the 45s window).
+    // Feeding this through `bucketNow` first (ceil) used to push the
+    // computed elapsed time to a full 45_000ms, right at the boundary,
+    // misreporting the worker as dead. With the exact, unbucketed time
+    // `useLiveNow` now supplies, this must read live.
+    const lastSeen = 105_000;
+    const now = 120_001;
+    expect(now - lastSeen).toBeLessThan(WORKER_LIVE_WINDOW_MS);
+    expect(isWorkerLive({ online: true, lastSeen }, now)).toBe(true);
   });
 
-  it("still reads live for a worker that heartbeat well within the window, bucketing included", () => {
-    const lastSeen = 3 * DASHBOARD_CLOCK_INTERVAL_MS + 1;
-    const bucketedNow = bucketNow(lastSeen + 5_000);
-    expect(isWorkerLive({ online: true, lastSeen }, bucketedNow)).toBe(true);
+  it("expires at exactly the true 45s mark, not 30s early or 30s late", () => {
+    const lastSeen = 105_000;
+    expect(isWorkerLive({ online: true, lastSeen }, lastSeen + WORKER_LIVE_WINDOW_MS - 1)).toBe(
+      true,
+    );
+    expect(isWorkerLive({ online: true, lastSeen }, lastSeen + WORKER_LIVE_WINDOW_MS)).toBe(false);
   });
 });

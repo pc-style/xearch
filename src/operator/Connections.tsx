@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
 import { useConvexAuth, useQuery } from "convex/react";
 import { Check } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { AccountBadge } from "../auth/AccountBadge";
 import { handoffReady, receiverConnection, type Connection } from "../integrationStatus";
+import { useLiveNow } from "../library/clock";
 
 /**
  * The Connections panel: which services this deployment has been given, and
@@ -26,15 +26,11 @@ export function ConnectionsPanel() {
   // itself — a query re-runs when a document changes, never because time
   // passed) and `handoffReady` below re-derives `handoffState.lastSeenAt`
   // against this same ticking clock, so the reading keeps decaying between
-  // query re-runs instead of freezing at the last write.
-  const [now, setNow] = useState(() => Date.now());
+  // query re-runs instead of freezing at the last write. `useLiveNow`, not
+  // the bucketed dashboard clock — see its comment in src/library/clock.ts
+  // for why a rounded `now` cannot feed this 45s liveness window safely.
+  const now = useLiveNow();
   const config = useQuery(api.integrations.operator, isAuthenticated ? { now } : "skip");
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 5_000);
-
-    return () => clearInterval(id);
-  }, []);
-
   const connections: Connection[] = [
     {
       name: "Search service",
