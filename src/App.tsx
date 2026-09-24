@@ -73,7 +73,7 @@ import { ModalKind, ViewMode } from "./uiState";
 import { isAlreadySaved, sortChangeQuery, sortLabel, sorts } from "./sortOptions";
 import { ringAvatarUrl } from "./avatarUrl";
 import { splitRing } from "./ring";
-import { capture, captureError, identifyUser, redactEmail } from "./posthog";
+import { capture, captureError, identifyUser, redactEmail, resetUser } from "./posthog";
 
 type SearchRequest = FlowSearchRequest & {
   readonly attemptId: SearchAttemptId;
@@ -463,9 +463,26 @@ export default function App() {
   // notice waits for a confirmed `false` so an operator never sees it flash.
   const isOperator = useQuery(api.access.isOperator, isAuthenticated ? operatorArgs() : "skip");
 
+  const identifiedUserRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (me && !me.isAnonymous && isOperator !== undefined)
-      identifyUser(me.id, isOperator ? "operator" : "user");
+    if (!me || me.isAnonymous) {
+      if (identifiedUserRef.current !== null) {
+        resetUser();
+        identifiedUserRef.current = null;
+      }
+
+      return;
+    }
+
+    if (identifiedUserRef.current !== null && identifiedUserRef.current !== me.id) {
+      resetUser();
+      identifiedUserRef.current = null;
+    }
+
+    if (isOperator === undefined) return;
+    identifyUser(me.id, isOperator ? "operator" : "user");
+    identifiedUserRef.current = me.id;
   }, [me, isOperator]);
 
   let queryError = "";
@@ -782,7 +799,9 @@ export default function App() {
 
   const runBookmark = async (post: ResultPost) => {
     await ensureSession();
-    await bookmark({ tweetId: post.tweetId, sessionId: sessionId ?? undefined });
+    const added = await bookmark({ tweetId: post.tweetId, sessionId: sessionId ?? undefined });
+
+    if (!added) return;
     capture("result_bookmarked", { query: redactEmail(raw), result_url: redactEmail(post.url) });
     capture("search_success", { method: "bookmarked", query: redactEmail(raw) });
   };

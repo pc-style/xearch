@@ -1,16 +1,13 @@
 import { mutation, query, internalAction, internalQuery } from "./_generated/server";
 import { components, internal } from "./_generated/api";
 import { AgentMail, vOutboundStatus, type OutboundId } from "@agentmail/convex";
-import { PostHog } from "@posthog/convex";
 import { v, ConvexError } from "convex/values";
 import { user } from "./access";
 import schema from "./schema";
 import type { Doc } from "./_generated/dataModel";
-import { redactEmail } from "./lib/posthog";
+import { capturePostHog, redactEmail } from "./lib/posthog";
 
 const mail = new AgentMail(components.agentmail);
-
-const posthog = new PostHog(components.posthog);
 
 const DIGEST_ROW_LIMIT = 10;
 
@@ -132,12 +129,12 @@ export const checkDelivery = internalAction({
     if (!state) return null;
 
     if (state.status === "sent" || state.status === "delivered") {
-      await posthog.capture(ctx, {
+      await capturePostHog(ctx, {
         distinctId: state.owner,
         event: "results_email_sent",
         properties: { delivery_id: args.deliveryId, query: redactEmail(state.query) },
       });
-      await posthog.capture(ctx, {
+      await capturePostHog(ctx, {
         distinctId: state.owner,
         event: "search_success",
         properties: { method: "emailed", query: redactEmail(state.query) },

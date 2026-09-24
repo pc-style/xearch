@@ -5,8 +5,7 @@ import {
   internalQuery,
   internalAction,
 } from "./_generated/server";
-import { components, internal } from "./_generated/api";
-import { PostHog } from "@posthog/convex";
+import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import schema, { postFields, searchStatsFields, sortValidator } from "./schema";
 import { parseQuery, assertAuthorizedScope, STALE_CURSOR_STATUS } from "./lib/search";
@@ -14,9 +13,8 @@ import { decodeSearchResponse } from "./lib/results";
 import { serviceToken } from "./lib/serviceAuth";
 import { summaryScopeValidator } from "./lib/contracts";
 import { user } from "./access";
+import { capturePostHog } from "./lib/posthog";
 import type { Doc } from "./_generated/dataModel";
-
-const posthog = new PostHog(components.posthog);
 
 /** Wire request body for the external search service (docs/integration-contract.md). */
 type SearchRequestBody = {
@@ -363,7 +361,7 @@ export const execute = internalAction({
 
       if (attempt.kind === "ok") {
         await ctx.runMutation(internal.search.complete, { sessionId, ...attempt.result });
-        await posthog.capture(ctx, {
+        await capturePostHog(ctx, {
           distinctId: session.owner,
           event: "search_service_completed",
           properties: {
@@ -381,7 +379,7 @@ export const execute = internalAction({
           warnings: [],
           error: failureMessage(attempt.failure, retried),
         });
-        await posthog.capture(ctx, {
+        await capturePostHog(ctx, {
           distinctId: session.owner,
           event: "search_service_failed",
           properties: {
@@ -404,7 +402,7 @@ export const execute = internalAction({
         error:
           "The search service could not return a valid result page. Try again or check its connection.",
       });
-      await posthog.capture(ctx, {
+      await capturePostHog(ctx, {
         distinctId: session.owner,
         event: "search_service_failed",
         properties: {
@@ -493,7 +491,7 @@ export const bookmarks = query({
 
 export const bookmark = mutation({
   args: { tweetId: v.string(), sessionId: v.optional(v.id("sessions")) },
-  returns: v.null(),
+  returns: v.boolean(),
   handler: async (ctx, { tweetId, sessionId }) => {
     const owner = await user(ctx);
 
@@ -505,7 +503,7 @@ export const bookmark = mutation({
     if (existing) {
       await ctx.db.delete(existing._id);
 
-      return null;
+      return false;
     }
 
     const session = sessionId ? await ctx.db.get(sessionId) : null;
@@ -524,6 +522,6 @@ export const bookmark = mutation({
       throw new ConvexError("Remove a bookmark before saving another.");
     await ctx.db.insert("bookmarks", { owner, post });
 
-    return null;
+    return true;
   },
 });

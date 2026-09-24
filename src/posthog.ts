@@ -42,6 +42,10 @@ export function identifyUser(id: string, role: "operator" | "user"): void {
   if (posthog.__loaded) posthog.identify(id, { role });
 }
 
+export function resetUser(): void {
+  if (posthog.__loaded) posthog.reset();
+}
+
 export function captureError(error: Error, area: string): void {
   const sanitized = new Error(redactEmail(error.message));
   sanitized.stack = redactEmail(error.stack ?? sanitized.stack ?? "");

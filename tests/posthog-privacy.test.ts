@@ -18,4 +18,10 @@ it("removes URLs and credentials from import diagnostics", () => {
   expect(
     sanitizeError("GET https://api.example.com/path?token=secret failed for a@b.com; Bearer abc"),
   ).toBe("GET [url] failed for [email]; Bearer [redacted]");
+  expect(sanitizeError("request failed: Authorization: Bearer secret")).toBe(
+    "request failed: Authorization: [redacted]",
+  );
+  expect(sanitizeError("Authorization: Basic dXNlcjpwYXNz; request failed")).toBe(
+    "Authorization: [redacted]; request failed",
+  );
 });
