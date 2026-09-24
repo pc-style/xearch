@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLocation, previewPatch } from "../src/locationStore";
+import { opsEntryPatch, parseLocation, previewPatch } from "../src/locationStore";
 import { ViewMode } from "../src/uiState";
 
 describe("parseLocation", () => {
@@ -96,5 +96,27 @@ describe("parseLocation queue route", () => {
   it("reads ?queue=1 as the queue route", () => {
     expect(parseLocation("https://xearch.invalid/?queue=1").queue).toBe(true);
     expect(parseLocation("https://xearch.invalid/").queue).toBe(false);
+  });
+});
+
+describe("opsEntryPatch", () => {
+  it("sends /ops to the dashboard at / in the operator build", () => {
+    const patch = opsEntryPatch("/ops", true);
+
+    expect(patch).not.toBeNull();
+    expect(previewPatch("https://xearch.invalid/ops?search=1&q=theo", patch!)).toBe("/");
+  });
+
+  it("sends /ops to the plain home page at / in the public build, keeping the query", () => {
+    const patch = opsEntryPatch("/ops", false);
+
+    expect(patch).not.toBeNull();
+    expect(previewPatch("https://xearch.invalid/ops?q=theo", patch!)).toBe("/?q=theo");
+  });
+
+  it("leaves every other path alone", () => {
+    expect(opsEntryPatch("/", true)).toBeNull();
+    expect(opsEntryPatch("/ops/extra", true)).toBeNull();
+    expect(opsEntryPatch("/nope", false)).toBeNull();
   });
 });

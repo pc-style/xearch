@@ -31,7 +31,13 @@ import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
 import { parseQuery, type Sort } from "../convex/lib/search";
-import { getSnapshot, pushLocation, replaceLocation, useLocation } from "./locationStore";
+import {
+  getSnapshot,
+  opsEntryPatch,
+  pushLocation,
+  replaceLocation,
+  useLocation,
+} from "./locationStore";
 import { runTask } from "./runTask";
 import {
   mergeSearchPages,
@@ -151,6 +157,13 @@ function WebContextPage(props: { page: Page; expanded: boolean; onExpand: () => 
 export default function App() {
   const convex = useConvex();
   const isAuthenticated = convex.isAuthenticated;
+  // `/ops` is rewritten to "/" before anything reads the route (see
+  // `opsEntryPatch`), so closing the dashboard lands on "/" like any other
+  // direct link into it.
+  const opsEntry = opsEntryPatch(getSnapshot().path, OPERATOR_BUILD);
+
+  if (opsEntry) replaceLocation(opsEntry);
+
   const route = useLocation();
   const initialRoute = untrack(route);
   const telemetry = createSearchTelemetryStore();

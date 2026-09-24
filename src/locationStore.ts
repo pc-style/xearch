@@ -21,16 +21,17 @@ export interface LocationSnapshot {
   // src/App.tsx's `queue` render branch.
   readonly queue: boolean;
   readonly view: ViewMode;
-  /** Read-only: the app has no path-based routes (dashboard, search, etc.
-   * are all query params on "/"), so this exists only so a caller can tell
-   * a genuine unknown path (e.g. a typo'd shared link) apart from "/" — QA
-   * report A14, which found `/nope/does-not-exist` silently rendering the
-   * full home page with a 200. Never written by `pushLocation`/
-   * `replaceLocation`; a real path change needs a real navigation. */
+  /** The app has no path-based routes (dashboard, search, etc. are all
+   * query params on "/"), so this exists so a caller can tell a genuine
+   * unknown path (e.g. a typo'd shared link) apart from "/" — QA report
+   * A14, which found `/nope/does-not-exist` silently rendering the full
+   * home page with a 200. The one other address the app answers is
+   * `OPS_PATH`, which `opsEntryPatch` rewrites to "/" on load. */
   readonly path: string;
 }
 
 export interface LocationPatch {
+  readonly path?: string;
   readonly raw?: string;
   readonly sort?: Sort;
   readonly includeStats?: boolean;
@@ -203,6 +204,8 @@ export function previewPatch(input: string | URL, patch: LocationPatch): string 
 }
 
 function applyPatch(url: URL, patch: LocationPatch): void {
+  if (patch.path !== undefined) url.pathname = patch.path;
+
   if (patch.raw !== undefined) {
     if (patch.raw) url.searchParams.set("q", patch.raw);
     else url.searchParams.delete("q");
@@ -246,6 +249,22 @@ function navigate(mode: "pushState" | "replaceState", patch: LocationPatch): voi
   applyPatch(url, patch);
   currentWindow.history[mode](null, "", url);
   publishBrowserLocation();
+}
+
+/** A memorable address for the operator dashboard. */
+export const OPS_PATH = "/ops";
+
+/**
+ * What to do with a page load at `path`: `OPS_PATH` becomes "/" (keeping
+ * the rest of the URL), and in the operator build also clears whatever
+ * would ask for the search view instead, so the dashboard opens — the same
+ * URL the header's Dashboard button produces. The public build has no
+ * dashboard, so there `/ops` is just the home page. Anything else: null.
+ */
+export function opsEntryPatch(path: string, operator: boolean): LocationPatch | null {
+  if (path !== OPS_PATH) return null;
+
+  return operator ? { path: "/", search: false, raw: "" } : { path: "/" };
 }
 
 export function pushLocation(patch: LocationPatch): void {

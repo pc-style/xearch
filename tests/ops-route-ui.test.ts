@@ -1,0 +1,62 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import App from "../src/App";
+import { fakeConvex, mount, settle, type Mounted } from "./solid";
+
+/**
+ * `/ops` opens the operator dashboard (src/locationStore.ts `opsEntryPatch`,
+ * applied at the top of src/App.tsx). Vitest has no build-time alias, so
+ * this renders the operator build; the public build's side of
+ * `opsEntryPatch` is covered in tests/locationStore.test.ts.
+ */
+let mounted: Mounted | null = null;
+
+async function mountAppAt(path: string) {
+  window.history.replaceState(null, "", path);
+  // Signed out, so the dashboard's own queries skip rather than wait on
+  // fixtures this test has no use for.
+  mounted = mount(App, {}, fakeConvex({ isAuthenticated: false }));
+  await settle();
+
+  return mounted;
+}
+
+/** Wait for `selector` to render: the dashboard is a lazy import. */
+function rendered(app: Mounted, selector: string) {
+  return vi.waitFor(() => {
+    app.html();
+    const element = app.container.querySelector<HTMLElement>(selector);
+
+    if (!element) throw new Error(`${selector} has not rendered`);
+
+    return element;
+  });
+}
+
+afterEach(() => {
+  mounted?.unmount();
+  mounted = null;
+});
+
+describe("/ops", () => {
+  it("opens the dashboard in the operator build and rewrites the address to /", async () => {
+    const app = await mountAppAt("/ops?q=theo");
+
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
+    await rendered(app, "main.control-room");
+    expect(app.html()).not.toContain("Page not found");
+  });
+
+  it("closing the dashboard opened at /ops lands on the search home at /", async () => {
+    const app = await mountAppAt("/ops");
+    const close = await rendered(app, "main.control-room .logo");
+
+    close.click();
+    await settle();
+
+    expect(window.location.pathname).toBe("/");
+    expect(app.container.querySelector("main.control-room")).toBeNull();
+    expect(app.container.querySelector("#query")).not.toBeNull();
+  });
+});
