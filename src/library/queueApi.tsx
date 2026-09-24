@@ -16,6 +16,9 @@ import type { Timeline } from "../../convex/queue";
 // read the wall clock itself — convex/_generated/ai/guidelines.md "Do not
 // read the wall clock inside a query"). Callers refresh it the same way
 // src/library/Library.tsx refreshes `now` for `summaryQuery`/`healthQuery`.
+// `operatorToken` is optional — the query itself is operator-gated
+// (`requireOperator`), and callers pass it via `src/operatorToken.ts`'s
+// `operatorArgs()`, the same as every other paid-action-adjacent call.
 // SAFETY: `anyApi.queue.timeline` is typed as `FunctionReference<any, any>`
 // because `convex/_generated/api.d.ts` has not picked up `convex/queue.ts`
 // yet (see the module comment above); the `any` type parameters make this a
@@ -23,6 +26,6 @@ import type { Timeline } from "../../convex/queue";
 export const queueTimelineQuery = anyApi.queue.timeline as FunctionReference<
   "query",
   "public",
-  { now: number },
+  { now: number; operatorToken?: string },
   Timeline
 >;

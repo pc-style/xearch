@@ -158,7 +158,11 @@ function renderDashboard(isOperator: boolean): RenderedDashboard {
             fetchAccessToken: () => Promise.resolve(null),
           }),
         },
-        createElement(Dashboard, { ensureSession: () => Promise.resolve(), close: () => {} }),
+        createElement(Dashboard, {
+          ensureSession: () => Promise.resolve(),
+          close: () => {},
+          onOpenQueue: () => {},
+        }),
       ),
     );
   });

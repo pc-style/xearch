@@ -8,7 +8,6 @@ import { describeError } from "../errors";
 import { acquisitionStatusTone, formatRelative, isStalledRun } from "./format";
 import { Badge } from "./format.tsx";
 import { operatorArgs } from "../operatorToken";
-import { pushLocation } from "../locationStore";
 
 /**
  * The compact "what's downloading right now" strip. Built only from
@@ -20,9 +19,15 @@ import { pushLocation } from "../locationStore";
 export default function ActiveQueue({
   rows,
   isAuthenticated,
+  // Optional (unlike Library.tsx/Dashboard.tsx's own required onOpenQueue,
+  // which src/App.tsx always supplies in the real tree): tests/signed-out-
+  // states.test.ts renders this alongside RecentActivity from one shared
+  // props object that has no reason to know about Queue navigation.
+  onOpenQueue,
 }: {
   rows: AccountLibraryRow[] | undefined;
   isAuthenticated: boolean;
+  onOpenQueue?: () => void;
 }) {
   if (!rows)
     return (
@@ -50,8 +55,11 @@ export default function ActiveQueue({
         {/* The full worker timeline — every queued/running/retryable job,
             with wait reasons and ETAs — is a separate operator page
             (src/library/QueueTimeline.tsx); this strip stays the compact
-            "what's downloading right now" summary. */}
-        <button type="button" className="text-button" onClick={() => pushLocation({ queue: true })}>
+            "what's downloading right now" summary. Goes through the
+            App-provided `onOpenQueue` (not a direct `pushLocation`) so the
+            pushed history entry is tracked for a correct Back — see
+            src/App.tsx's `openQueue`. */}
+        <button type="button" className="text-button" onClick={() => onOpenQueue?.()}>
           See timeline
         </button>
       </div>

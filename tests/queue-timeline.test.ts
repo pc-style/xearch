@@ -22,7 +22,7 @@ const modules = import.meta.glob("../convex/**/*.ts");
 const timeline = anyApi.queue.timeline as FunctionReference<
   "query",
   "public",
-  { now: number },
+  { now: number; operatorToken?: string },
   Timeline
 >;
 
@@ -30,7 +30,25 @@ function setup() {
   return convexTest(schema, modules);
 }
 
-async function withUser(t: ReturnType<typeof setup>) {
+// `timeline` is operator-gated (convex/access.ts `requireOperator`), same as
+// `jobs.start`/`cancel`/`retry` — a verified email on the test-only
+// OPERATOR_EMAILS allowlist (tests/setupEnv.ts) is what makes this caller an
+// operator, mirroring tests/repeat-start.test.ts's own fixture.
+async function withOperator(t: ReturnType<typeof setup>) {
+  const userId: Id<"users"> = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "operator@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
+  );
+
+  return { a: t.withIdentity({ subject: `${userId}|session` }), userId };
+}
+
+// A real, signed-in session with no verified operator email at all — the
+// exact caller CodeRabbit's security finding says `user(ctx)` used to admit.
+async function withNonOperator(t: ReturnType<typeof setup>) {
   const userId: Id<"users"> = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
 
   return { a: t.withIdentity({ subject: `${userId}|session` }), userId };
@@ -85,13 +103,27 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
   it("requires a signed-in caller", async () => {
     const t = setup();
     await expect(t.query(timeline, { now: Date.now() })).rejects.toThrow(
-      "Start a session to use your workspace.",
+      "Sign in as an operator to import.",
+    );
+  });
+
+  // Security finding (CodeRabbit, CWE-862 Missing Authorization): this used
+  // to check only `user(ctx)`, which a signed-in-but-not-operator (including
+  // an anonymous-session) caller satisfies — and this query returns shared
+  // queue telemetry (job input, error, phase, account identity) that is not
+  // meant to be public. `requireOperator` is the same boundary
+  // `jobs.start`/`cancel`/`retry` already enforce.
+  it("rejects a signed-in caller who is not an operator", async () => {
+    const t = setup();
+    const { a } = await withNonOperator(t);
+    await expect(a.query(timeline, { now: Date.now() })).rejects.toThrow(
+      "Sign in as an operator to import.",
     );
   });
 
   it("orders running first, then queued by readyAt ascending, then terminal-retryable last", async () => {
     const t = setup();
-    const { a, userId } = await withUser(t);
+    const { a, userId } = await withOperator(t);
     const now = Date.now();
 
     const laterQueued = await seedJob(t, userId, {
@@ -114,6 +146,16 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
       input: "stopped",
       status: "failed",
       retryable: true,
+      updatedAt: now,
+    });
+
+    // `jobs.retry` accepts a cancelled job unconditionally (it is a
+    // person's own choice to stop, never a permanent-failure verdict), so
+    // it belongs in the terminal-retryable set too — CodeRabbit.
+    const cancelled = await seedJob(t, userId, {
+      input: "stopped-by-choice",
+      status: "cancelled",
+      updatedAt: now - 1_000,
     });
 
     // Not retryable — a permanent provider rejection — must be excluded.
@@ -130,18 +172,21 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     const result = await a.query(timeline, { now });
     expect(result.truncated).toBe(false);
     expect(result.workerBusy).toBe(true);
+    // Terminal-retryable jobs sort most-recently-stopped first: `retryable`
+    // (updatedAt: now) ahead of `cancelled` (updatedAt: now - 1s).
     expect(result.entries.map((e) => e.jobId)).toEqual([
       running,
       readyNow,
       soonerQueued,
       laterQueued,
       retryable,
+      cancelled,
     ]);
   });
 
   it("classifies the head of an idle queue as ready, and everything behind it as behind", async () => {
     const t = setup();
-    const { a, userId } = await withUser(t);
+    const { a, userId } = await withOperator(t);
     const now = Date.now();
 
     await seedJob(t, userId, { input: "next", status: "queued" });
@@ -158,7 +203,7 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
 
   it("classifies a queued job behind a running one, and one with a future readyAt as backoff", async () => {
     const t = setup();
-    const { a, userId } = await withUser(t);
+    const { a, userId } = await withOperator(t);
     const now = Date.now();
 
     await seedJob(t, userId, { input: "r", status: "running" });
@@ -183,7 +228,7 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
 
   it("classifies a queued job as throttled when x.md's own reset time is still in the future", async () => {
     const t = setup();
-    const { a, userId } = await withUser(t);
+    const { a, userId } = await withOperator(t);
     const now = Date.now();
     const resetAt = now + 30 * 60_000;
 
@@ -224,9 +269,67 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     });
   });
 
+  // CodeRabbit: a failed/partial/cancelled job is not queued at all — a
+  // person must click Retry before anything happens to it — so it must
+  // never read as "behind" (implies passive queueing) or "throttled"
+  // (implies the scheduler is already going to act on it).
+  it("gives terminal-but-retryable jobs their own needsRetry wait reason, never behind or throttled", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const failedId = await seedJob(t, userId, { input: "failed", status: "failed" });
+
+    const partialId = await seedJob(t, userId, {
+      input: "partial",
+      status: "partial",
+      updatedAt: now - 1,
+    });
+
+    const cancelledId = await seedJob(t, userId, {
+      input: "cancelled",
+      status: "cancelled",
+      updatedAt: now - 2,
+    });
+
+    const result = await a.query(timeline, { now });
+    const byId = new Map(result.entries.map((e) => [e.jobId, e]));
+
+    for (const id of [failedId, partialId, cancelledId])
+      expect(byId.get(id)?.waitReason).toEqual({ kind: "needsRetry", throttledUntil: undefined });
+  });
+
+  it("carries the active x.md throttle onto a terminal-but-retryable job's needsRetry reason", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+    const resetAt = now + 30 * 60_000;
+
+    await t.run((ctx) =>
+      ctx.db.insert("providerThrottleEvents", {
+        provider: "xmd",
+        operation: "history",
+        reason: "x.md rate limit reached.",
+        remaining: 0,
+        resetAt,
+        observedAt: now,
+      }),
+    );
+
+    const failedId = await seedJob(t, userId, { input: "failed-throttled", status: "failed" });
+
+    const result = await a.query(timeline, { now });
+    const entry = result.entries.find((e) => e.jobId === failedId);
+    expect(entry?.waitReason).toEqual({ kind: "needsRetry", throttledUntil: resetAt });
+    // The ETA respects the throttle even though the wait reason is
+    // "needsRetry", not "throttled" — retrying before `resetAt` would just
+    // fail the same way again.
+    expect(entry?.estimate.start).toBe(resetAt);
+  });
+
   it("computes secondsPerPage/medianPages from the last completed bulk jobs and uses them for a queued job's ETA", async () => {
     const t = setup();
-    const { a, userId } = await withUser(t);
+    const { a, userId } = await withOperator(t);
 
     // Three completed bulk jobs, each created at a well-separated instant
     // (so convex-test's monotonic _creationTime tie-breaker never nudges one
@@ -237,7 +340,7 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     // a document's `_creationTime` by +0.001ms whenever an insert's mocked
     // `Date.now()` collides with (or falls behind) the previous insert's
     // creation time, which a real-clock anchor risks colliding with
-    // (e.g. the `withUser` insert above). A fixed future instant has no
+    // (e.g. the withOperator fixture's own insert above). A fixed future instant has no
     // such prior insert to collide with.
     const base = Date.UTC(2030, 0, 1);
     const base1 = base;
@@ -283,11 +386,11 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
 
   it("chains a second queued job's start to the first job's estimated finish", async () => {
     const t = setup();
-    const { a, userId } = await withUser(t);
+    const { a, userId } = await withOperator(t);
 
     // Fixed, far-future anchor — see the previous test's comment on why
-    // `Date.now()` risks a `_creationTime` collision with the `withUser`
-    // insert above.
+    // `Date.now()` risks a `_creationTime` collision with the withOperator
+    // fixture's own insert above.
     const start = Date.UTC(2031, 0, 1);
 
     try {
@@ -310,7 +413,7 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
       const byId = new Map(result.entries.map((e) => [e.jobId, e]));
       const firstEntry = byId.get(first)!;
       const secondEntry = byId.get(second)!;
-      // remaining = max(0, 4 - 0) = 4 pages * 20s = 80s.
+      // remaining = max(1, 4 - 0) = 4 pages * 20s = 80s.
       expect(firstEntry.estimate.finish).toBe(now + 80_000);
       // The second job cannot start before the first one is estimated to finish.
       expect(secondEntry.estimate.start).toBe(firstEntry.estimate.finish);
@@ -320,9 +423,45 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     }
   });
 
+  // CodeRabbit: a running/queued bulk job whose OWN `pages` has already
+  // caught up to (or passed) the recent median must still get at least one
+  // remaining page — it is still going, not finished — or it would show
+  // "download done ≈ now" while actively downloading, and every job behind
+  // it in the chain would start too early.
+  it("never estimates zero remaining pages for an unfinished bulk job, even past the recent median", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+
+    const start = Date.UTC(2032, 0, 1);
+
+    try {
+      vi.setSystemTime(start);
+      const sample = await seedJob(t, userId, { input: "sample", status: "queued", pages: 2 });
+      vi.setSystemTime(start + 40_000); // 20s/page over 2 pages -> median 2 pages
+      await t.run((ctx) => ctx.db.patch(sample, { status: "complete", updatedAt: start + 40_000 }));
+
+      const now = start + 40_000;
+
+      // Already at the median (2 pages) but still running — not finished.
+      const runningId = await seedJob(t, userId, {
+        input: "big-account",
+        status: "running",
+        pages: 5,
+      });
+
+      const result = await a.query(timeline, { now });
+      const entry = result.entries.find((e) => e.jobId === runningId);
+      // Must be strictly after `now`, never `finish === start` ("done ≈ now").
+      expect(entry?.estimate.finish).toBeGreaterThan(entry!.estimate.start);
+      expect(entry?.estimate.finish).toBe(now + 20_000); // 1 page (the floor) * 20s.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sets truncated when the whole-table scan hits its bound", async () => {
     const t = setup();
-    const { a, userId } = await withUser(t);
+    const { a, userId } = await withOperator(t);
     const now = Date.now();
 
     // Insert more (non-candidate) jobs than QUEUE_SCAN_CAP so the scan

@@ -46,10 +46,12 @@ export default function Library({
   ensureSession,
   config,
   liveNow,
+  onOpenQueue,
 }: {
   ensureSession: () => Promise<void>;
   config: OperatorConfig | undefined;
   liveNow: number;
+  onOpenQueue: () => void;
 }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
@@ -88,7 +90,7 @@ export default function Library({
           void ensureSession();
         }}
       />
-      <ActiveQueue rows={allRows} isAuthenticated={isAuthenticated} />
+      <ActiveQueue rows={allRows} isAuthenticated={isAuthenticated} onOpenQueue={onOpenQueue} />
       <RecentActivity rows={allRows} isAuthenticated={isAuthenticated} />
     </div>
   );

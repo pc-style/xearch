@@ -289,6 +289,7 @@ export default function App() {
 
   const [threadJobs, setThreadJobs] = useState<Record<string, Id<"jobs">>>({});
   const pushedDashboardEntry = useRef(false);
+  const pushedQueueEntry = useRef(false);
 
   const [page, setPage] = useState<{
     title: string;
@@ -802,6 +803,19 @@ export default function App() {
     pushLocation({ search: false, raw: "" });
   };
 
+  // Reachable both from Dashboard's own "Queue" nav link and ActiveQueue's
+  // "See timeline" link (both nested well below this component — Library,
+  // AccountRow, etc. — so this is threaded down as a prop rather than each
+  // of them calling `pushLocation` directly, which is what let the entry
+  // this pushes go un-tracked before: CodeRabbit found that a `replaceLocation`
+  // close() rewrote the pushed history entry in place instead of popping it,
+  // leaving a duplicate dashboard entry behind on the stack).
+  const openQueue = () => {
+    if (!OPERATOR_BUILD) return;
+    pushedQueueEntry.current = true;
+    pushLocation({ queue: true });
+  };
+
   const search = (query: string, nextSort?: Sort) => {
     const trimmed = query.trim();
     const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort);
@@ -909,14 +923,20 @@ export default function App() {
         <span ref={authProbe} hidden />
         <QueueTimeline
           close={() => {
-            // Unlike `openDashboard` below, nothing here pushes a dedicated
-            // history entry to reach `?queue=1` — the only entry points are
-            // a direct link/reload and Dashboard's "Queue" nav link, above.
-            // Clearing just the `queue` flag in place is therefore always
-            // the right undo: it falls back to the Dashboard page when this
-            // was reached from there (the URL still resolves `dashboard` to
-            // true — see the inversion above), and to plain search otherwise.
-            replaceLocation({ queue: false });
+            // Same back-vs-clear-the-flag rule as `openDashboard`'s own
+            // close below: `openQueue` pushed exactly one history entry to
+            // get here, so undo it with a real Back instead of rewriting
+            // this entry in place — a `replaceLocation` here would leave a
+            // duplicate dashboard entry on the stack (CodeRabbit). A direct
+            // link/reload into `?queue=1` never pushed that entry, so there
+            // is nothing to go back to; fall back to clearing the flag on
+            // the current entry instead.
+            if (pushedQueueEntry.current) {
+              pushedQueueEntry.current = false;
+              window.history.back();
+            } else {
+              replaceLocation({ queue: false });
+            }
           }}
         />
       </Suspense>
@@ -928,6 +948,7 @@ export default function App() {
         <span ref={authProbe} hidden />
         <Dashboard
           ensureSession={ensureSession}
+          onOpenQueue={openQueue}
           close={() => {
             // `openDashboard` pushed exactly one history entry to get here,
             // so undo it with a real Back instead of rewriting this entry

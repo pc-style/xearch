@@ -1,8 +1,10 @@
-import { useConvexAuth, useConvexConnectionState, useQuery } from "convex/react";
+import { useConvexAuth, useConvexConnectionState } from "convex/react";
 import type { Timeline, TimelineEntry, WaitReason } from "../../convex/queue";
 import { queueTimelineQuery } from "./queueApi";
 import { useDashboardClock } from "./clock";
+import { useStableQuery } from "./stableQuery";
 import { useLocation } from "../locationStore";
+import { operatorArgs } from "../operatorToken";
 import { acquisitionStatusLabel } from "../jobText";
 import { acquisitionStatusTone } from "./format";
 import { Badge } from "./format.tsx";
@@ -56,7 +58,20 @@ function waitReasonText(entry: TimelineEntry): string {
       return `Waiting for x.md's limit to reset at ${formatClock(entry.waitReason.resetAt)}`;
     case "behind":
       return `Behind ${entry.waitReason.aheadCount} import${entry.waitReason.aheadCount === 1 ? "" : "s"}`;
+    case "needsRetry":
+      return entry.waitReason.throttledUntil !== undefined
+        ? `Stopped: retry to resume (x.md throttled until ${formatClock(entry.waitReason.throttledUntil)})`
+        : "Stopped: retry to resume";
   }
+}
+
+/** "starts ≈ HH:MM · download done ≈ HH:MM", or the same estimate framed as
+ * "if retried now" for a stopped job nothing is actually scheduled to act
+ * on — the ETA is only true if a person clicks Retry this instant. */
+function etaText(entry: TimelineEntry): string {
+  const range = `starts ≈ ${formatClock(entry.estimate.start)} · download done ≈ ${formatClock(entry.estimate.finish)}`;
+
+  return entry.waitReason.kind === "needsRetry" ? `if retried now: ${range}` : range;
 }
 
 type ThrottledEntry = TimelineEntry & { waitReason: Extract<WaitReason, { kind: "throttled" }> };
@@ -94,7 +109,16 @@ function groupEntries(entries: TimelineEntry[]): Group[] {
 }
 
 function QueueIdentity({ entry }: { entry: TimelineEntry }) {
-  const handle = entry.account?.handle ?? entry.input;
+  // `entry.input` is a handle for every kind except "post" (a status URL)
+  // and "live" (a free-text search) — showing it as "@..." for those two
+  // rendered "@https://x.com/…/status/…" and "@some search query", neither
+  // of which is a handle. Only fall back to it when the job's own input
+  // actually is one.
+  const handle =
+    entry.account?.handle ??
+    (entry.kind === "post" || entry.kind === "live" ? undefined : entry.input);
+
+  const initial = (handle ?? fallbackLabel(entry)).slice(0, 1).toUpperCase();
 
   return (
     <div className="library-identity">
@@ -102,12 +126,12 @@ function QueueIdentity({ entry }: { entry: TimelineEntry }) {
         <img className="library-avatar" src={entry.account.avatar} alt="" />
       ) : (
         <span className="library-avatar-fallback" aria-hidden="true">
-          {handle.slice(0, 1).toUpperCase()}
+          {initial}
         </span>
       )}
       <div className="library-identity-text">
         <h3>{entry.account?.name ?? fallbackLabel(entry)}</h3>
-        <span>@{handle}</span>
+        {handle !== undefined && <span>@{handle}</span>}
       </div>
     </div>
   );
@@ -133,9 +157,7 @@ function QueueTimelineRow({
             : "No posts downloaded yet"}
         </span>
         <span>{waitReasonText(entry)}</span>
-        <span className="library-muted">
-          starts ≈ {formatClock(entry.estimate.start)} · done ≈ {formatClock(entry.estimate.finish)}
-        </span>
+        <span className="library-muted">{etaText(entry)}</span>
         {isThrottled(entry) && (
           // The shaded "throttle window" band: a full-width strip on every
           // row this observed x.md throttle is currently holding back, with
@@ -168,7 +190,7 @@ function QueueTimelineGroup({ group }: { group: Group }) {
         <div className="queue-timeline-group-head">
           <QueueIdentity entry={first} />
           {accountFinish !== undefined && (
-            <span className="library-muted">done ≈ {formatClock(accountFinish)}</span>
+            <span className="library-muted">download done ≈ {formatClock(accountFinish)}</span>
           )}
         </div>
       )}
@@ -207,7 +229,7 @@ function QueueTimelineBody({ timeline }: { timeline: Timeline }) {
         <p className="library-muted">{estimateInputsText(estimateInputs)}</p>
         {truncated && (
           <p role="status" className="config-warning">
-            Showing only the most recent jobs — the full queue is larger than one page.
+            Some older jobs may be missing: the scan stopped at its limit.
           </p>
         )}
       </div>
@@ -228,7 +250,17 @@ export default function QueueTimeline({ close }: { close: () => void }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
   const now = useDashboardClock();
-  const timeline = useQuery(queueTimelineQuery, isAuthenticated ? { now } : "skip");
+
+  // `useStableQuery`, not `useQuery`: `now` ticks on `useDashboardClock`'s own
+  // interval, and a bare `useQuery` reports `undefined` on every argument
+  // change until the new result lands — see src/library/stableQuery.ts.
+  // `operatorArgs()` because `convex/queue.ts` `timeline` is operator-gated,
+  // like every other paid-action-adjacent read this app makes.
+  const timeline = useStableQuery(
+    queueTimelineQuery,
+    isAuthenticated ? { now, ...operatorArgs() } : "skip",
+  );
+
   const route = useLocation();
   // This component only ever mounts in the operator build (it is
   // module-swapped out of the public one — see operatorSurface.ts), where
@@ -260,7 +292,7 @@ export default function QueueTimeline({ close }: { close: () => void }) {
       </header>
       <div className="control-main">
         {!isAuthenticated ? (
-          <p className="library-muted">Connect to view the queue.</p>
+          <p className="library-muted">Start a session to view the queue.</p>
         ) : !timeline ? (
           <p className="library-loading">Loading queue timeline…</p>
         ) : (

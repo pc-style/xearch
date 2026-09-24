@@ -30,6 +30,7 @@ export { OPERATOR_BUILD };
 export type DashboardProps = {
   ensureSession: () => Promise<void>;
   close: () => void;
+  onOpenQueue: () => void;
 };
 
 export const Dashboard: ComponentType<DashboardProps> | null = lazy(() => import("./Dashboard"));

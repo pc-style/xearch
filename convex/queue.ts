@@ -2,7 +2,7 @@ import { v, type Infer } from "convex/values";
 import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { user } from "./access";
+import { requireOperator } from "./access";
 import { jobStatusValidator, kindValidator, throttleProviderValidator } from "./schema";
 import { ACCOUNT_JOB_KIND, resolveJobAccount } from "./lib/accounts";
 import { activeThrottleUntil, loadProviderLimit } from "./limits";
@@ -29,9 +29,9 @@ import { activeThrottleUntil, loadProviderLimit } from "./limits";
  * Terminal-but-retryable jobs (failed/partial/cancelled, still eligible for
  * `jobs.retry`) are not queued at all — nothing will touch them until a
  * person clicks Retry — so they are listed after every queued/running job,
- * oldest-decision-first (by `updatedAt` descending, i.e. most recently
- * stopped first), and their estimate chains after the active queue as the
- * honest worst case if someone retries them right now.
+ * most recently stopped first (by `updatedAt` descending), and their
+ * estimate chains after the active queue as the honest worst case if
+ * someone retries them right now.
  */
 
 // Bounded read (convex/_generated/ai/guidelines.md "never an unbounded
@@ -72,9 +72,15 @@ export const waitReasonValidator = v.union(
     provider: throttleProviderValidator,
     resetAt: v.number(),
   }),
-  // Ready (or terminal-retryable) but something else is ahead of it in the
-  // order the worker actually claims jobs.
+  // Ready but something else is ahead of it in the order the worker
+  // actually claims jobs.
   v.object({ kind: v.literal("behind"), aheadCount: v.number() }),
+  // Failed/partial/cancelled: not queued at all, and never "behind" or
+  // "throttled" (both imply the scheduler is already going to act on this
+  // job on its own) — a person has to click Retry before anything happens.
+  // `throttledUntil` is carried along only so the ETA can still respect an
+  // active x.md throttle without pretending this job is scheduled.
+  v.object({ kind: v.literal("needsRetry"), throttledUntil: v.optional(v.number()) }),
 );
 
 export type WaitReason = Infer<typeof waitReasonValidator>;
@@ -191,11 +197,18 @@ function computeEstimateInputs(sample: Doc<"jobs">[]): EstimateInputs {
   };
 }
 
-/** Pages this job still needs, per the spec's estimation rule. */
+/**
+ * Pages this job still needs, per the spec's estimation rule. Only ever
+ * called on a job this timeline has already decided is not "complete" (see
+ * `loadCandidateJobs`), so at least one page must always remain — a bulk
+ * job whose own `pages` has already caught up to (or passed) the recent
+ * median is still running/queued, not finished; reporting 0 would show
+ * "done ≈ now" for a job that has not actually stopped.
+ */
 function remainingPages(job: Doc<"jobs">, medianPages: number | undefined): number {
   const pages = job.pages ?? 0;
 
-  if (job.kind === ACCOUNT_JOB_KIND) return Math.max(0, (medianPages ?? pages + 1) - pages);
+  if (job.kind === ACCOUNT_JOB_KIND) return Math.max(1, (medianPages ?? pages + 1) - pages);
 
   // Non-bulk kinds page by provider cursor, not by the bulk history medians
   // above. `floorReached` is this app's own signal for "the provider says
@@ -223,8 +236,14 @@ async function loadCandidateJobs(
 
     if (job.dismissedAt !== undefined) continue;
 
+    // Mirrors convex/jobs.ts `retry`'s own eligibility exactly: "cancelled"
+    // is always retryable (a person's own choice to stop, not a failure),
+    // and "failed"/"partial" are retryable unless the provider said the
+    // failure is permanent (`retryable === false` — see that field's
+    // comment on the `jobs` table in convex/schema.ts).
     const terminalRetryable =
-      (job.status === "failed" || job.status === "partial") && job.retryable !== false;
+      job.status === "cancelled" ||
+      ((job.status === "failed" || job.status === "partial") && job.retryable !== false);
 
     if (job.status === "queued" || job.status === "running" || terminalRetryable) jobs.push(job);
   }
@@ -233,10 +252,17 @@ async function loadCandidateJobs(
 }
 
 export const timeline = query({
-  args: { now: v.number() },
+  // Operator-only, like every other paid-action-adjacent view (convex/
+  // access.ts): this returns shared queue telemetry — job input, phase,
+  // error text, and account identity — for every in-flight and stopped
+  // job in the corpus, not merely a signed-in caller's own. `user(ctx)`
+  // alone would let any authenticated (including anonymous-session)
+  // visitor read it; `requireOperator` is the same operator-token-or-
+  // allowlisted-email boundary `jobs.start`/`cancel`/`retry` already use.
+  args: { now: v.number(), operatorToken: v.optional(v.string()) },
   returns: timelineValidator,
   handler: async (ctx, args): Promise<Timeline> => {
-    await user(ctx);
+    await requireOperator(ctx, args.operatorToken);
     const now = args.now;
 
     // Reuses convex/limits.ts's own `loadProviderLimit`/`activeThrottleUntil`
@@ -264,7 +290,7 @@ export const timeline = query({
       .sort((a, b) => (a.readyAt ?? 0) - (b.readyAt ?? 0));
 
     const terminalRetryable = jobs
-      .filter((j) => j.status === "failed" || j.status === "partial")
+      .filter((j) => j.status === "failed" || j.status === "partial" || j.status === "cancelled")
       .sort((a, b) => b.updatedAt - a.updatedAt);
 
     // The exact order the worker will take them: running first (there is
@@ -294,13 +320,15 @@ export const timeline = query({
 
       if (job.status === "running") {
         waitReason = { kind: "running" };
-      } else if (job.status === "failed" || job.status === "partial") {
-        // Terminal-but-retryable: nothing is "ahead of it" in the queued
-        // sense, but it also is not next — a person has to act on it first.
-        waitReason =
-          xmdThrottleUntil !== undefined
-            ? { kind: "throttled", provider: "xmd", resetAt: xmdThrottleUntil }
-            : { kind: "behind", aheadCount };
+      } else if (
+        job.status === "failed" ||
+        job.status === "partial" ||
+        job.status === "cancelled"
+      ) {
+        // Terminal-but-retryable: not queued, not throttled in the
+        // scheduler's own sense — nothing happens to this job until a
+        // person clicks Retry.
+        waitReason = { kind: "needsRetry", throttledUntil: xmdThrottleUntil };
       } else {
         const effectiveReadyAt = job.readyAt ?? 0;
         const ready = effectiveReadyAt <= now;
@@ -329,6 +357,9 @@ export const timeline = query({
         now,
         job.status === "queued" ? (job.readyAt ?? 0) : now,
         waitReason.kind === "throttled" ? waitReason.resetAt : now,
+        waitReason.kind === "needsRetry" && waitReason.throttledUntil !== undefined
+          ? waitReason.throttledUntil
+          : now,
       );
 
       const remaining = remainingPages(job, estimateInputs.medianPages);

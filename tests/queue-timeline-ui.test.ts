@@ -253,7 +253,7 @@ describe("QueueTimeline (src/library/QueueTimeline.tsx) rendered output", () => 
               name: "Grouped Acct",
             },
             status: "failed",
-            waitReason: { kind: "behind", aheadCount: 1 },
+            waitReason: { kind: "needsRetry", throttledUntil: undefined },
             estimate: { start: now + 30_000, finish: now + 90_000, accountFinish: now + 90_000 },
           },
         ],
@@ -264,7 +264,68 @@ describe("QueueTimeline (src/library/QueueTimeline.tsx) rendered output", () => 
     expect(html.match(/Grouped Acct/g)?.length).toBe(1);
     expect(html).toContain("2 jobs");
     expect(html).toContain("worker busy");
-    expect(html).toContain("Behind 1 import");
-    expect(html).toContain("done ≈");
+    // A stopped-but-retryable job is never "behind" (that implies passive
+    // queueing) or "throttled" (implies the scheduler will act on its own)
+    // — it needs a person to click Retry.
+    expect(html).toContain("Stopped: retry to resume");
+    expect(html).toContain("download done ≈");
+  });
+
+  it("shows terminal-retryable jobs' retry-if-now ETA and the throttle reason when x.md is still blocking a retry", () => {
+    reset();
+    const now = Date.now();
+    const resetAt = now + 45 * 60_000;
+    setQuery(
+      queueTimelineQuery,
+      makeTimeline({
+        entries: [
+          {
+            jobId: jobId("job-failed-throttled"),
+            kind: "bulk",
+            input: "someone",
+            status: "failed",
+            waitReason: { kind: "needsRetry", throttledUntil: resetAt },
+            estimate: { start: resetAt, finish: resetAt + 60_000 },
+          },
+        ],
+      }),
+    );
+    const html = renderQueueTimeline();
+    expect(html).toContain("Stopped: retry to resume");
+    expect(html).toContain("x.md throttled until");
+    expect(html).toContain("if retried now");
+  });
+
+  it("only shows @handle for a job kind whose input actually is one — not a post URL or a live search query", () => {
+    reset();
+    const now = Date.now();
+    setQuery(
+      queueTimelineQuery,
+      makeTimeline({
+        entries: [
+          {
+            jobId: jobId("job-post"),
+            kind: "post",
+            input: "https://x.com/someone/status/123",
+            status: "queued",
+            waitReason: { kind: "ready" },
+            estimate: { start: now, finish: now + 60_000 },
+          },
+          {
+            jobId: jobId("job-live"),
+            kind: "live",
+            input: "from:someone hello",
+            status: "queued",
+            waitReason: { kind: "behind", aheadCount: 1 },
+            estimate: { start: now, finish: now + 60_000 },
+          },
+        ],
+      }),
+    );
+    const html = renderQueueTimeline();
+    expect(html).not.toContain("@https://x.com");
+    expect(html).not.toContain("@from:someone hello");
+    expect(html).toContain("Post / conversation");
+    expect(html).toContain("Live search: from:someone hello");
   });
 });
