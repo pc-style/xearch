@@ -619,15 +619,21 @@ describe("a history page the provider is slow to deliver", () => {
   });
   it("asks x.md once more with its maximum chain concurrency when x.md ran out of time", async () => {
     const asked: string[] = [];
+
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(requestUrl(input));
+
       if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
       asked.push(url.searchParams.get("concurrency") ?? "");
+
       if (asked.length === 1) return new Response("gateway timeout", { status: 504 });
+
       return Response.json(page(3));
     });
+
     const store = receiver();
     const phases: string[] = [];
+
     const result = await collectXmd(
       new XmdClient("test-key", fetcher),
       request,
@@ -640,6 +646,7 @@ describe("a history page the provider is slow to deliver", () => {
         phases.push(phase);
       },
     );
+
     expect(asked).toEqual(["8", String(MAX_CHAIN_CONCURRENCY)]);
     expect(result.postsReceived).toBe(3);
     expect(phases).toContain(
@@ -648,13 +655,18 @@ describe("a history page the provider is slow to deliver", () => {
   });
   it("does not keep asking after the second try also ran out of time", async () => {
     const asked: string[] = [];
+
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(requestUrl(input));
+
       if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
       asked.push(url.searchParams.get("concurrency") ?? "");
+
       return new Response("gateway timeout", { status: 504 });
     });
+
     const store = receiver();
+
     const failure = await collectXmd(
       new XmdClient("test-key", fetcher),
       request,
@@ -662,9 +674,16 @@ describe("a history page the provider is slow to deliver", () => {
         deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
       async () => {},
       () => NOW,
-    ).catch((error: unknown) => error);
-    expect((failure as ProviderError).code).toBe("http_504");
-    expect((failure as ProviderError).retryable).toBe(true);
+    ).catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(ProviderError);
+
+    // SAFETY: the assertion immediately above proves `failure` is a
+    // `ProviderError`; every code path this test exercises rejects with one.
+    const providerFailure = failure as ProviderError;
+
+    expect(providerFailure.code).toBe("http_504");
+    expect(providerFailure.retryable).toBe(true);
     expect(asked).toEqual(["8", String(MAX_CHAIN_CONCURRENCY)]);
   });
   it("asks for the same full page again on the next attempt rather than a smaller one", async () => {

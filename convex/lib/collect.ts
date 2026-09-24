@@ -102,8 +102,10 @@ async function historyPage(
     const gaveUp =
       error instanceof ProviderError &&
       (error.code === "provider_timeout" || error.code === "http_504");
+
     if (!gaveUp || options.concurrency !== undefined) throw error;
     await onStage?.(`x.md ran out of time; asking again with ${MAX_CHAIN_CONCURRENCY} chains`);
+
     return client.history(input, { ...options, concurrency: MAX_CHAIN_CONCURRENCY });
   }
 }

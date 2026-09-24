@@ -395,6 +395,7 @@ export const MAX_POSTS_PER_PAGE = 5000;
  * exchange for more upstream retries. Left at the value in production use.
  */
 const CHAIN_CONCURRENCY = "8";
+
 /**
  * The provider's documented maximum. Used only as a second try after x.md
  * itself gave up on a page (its gateway answers 504 at about two minutes):
@@ -402,6 +403,7 @@ const CHAIN_CONCURRENCY = "8";
  * more parallel chains is the one lever left that shortens x.md's own work.
  */
 export const MAX_CHAIN_CONCURRENCY = 32;
+
 /** How long an ordinary x.md request may take before it is reported as `provider_timeout`. */
 export const REQUEST_TIMEOUT_MS = 120_000;
 
@@ -559,22 +561,25 @@ export class XmdClient {
       concurrency?: number;
     },
   ): Promise<RawObject> {
-    const query: Record<string, string> = {
-      format: "json",
-      max_posts: String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts))),
-      with_replies: "true",
-      with_reposts: "true",
-      concurrency:
+    const queryEntries: [string, string][] = [
+      ["format", "json"],
+      ["max_posts", String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts)))],
+      ["with_replies", "true"],
+      ["with_reposts", "true"],
+      [
+        "concurrency",
         options.concurrency === undefined
           ? CHAIN_CONCURRENCY
           : String(Math.min(MAX_CHAIN_CONCURRENCY, Math.max(1, Math.floor(options.concurrency)))),
-    };
+      ],
+    ];
 
     if (options.since) queryEntries.push(["since", options.since]);
 
     if (options.until) queryEntries.push(["until", options.until]);
 
     if (options.refresh) queryEntries.push(["refresh", "true"]);
+
     const query = Object.fromEntries(queryEntries);
 
     return record(
