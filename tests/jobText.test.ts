@@ -24,9 +24,9 @@ describe("inlineImportStatus", () => {
     expect(inlineImportStatus(undefined)).toBeNull();
   });
 
-  it("reports an in-flight download for queued jobs", () => {
+  it("reports a waiting state for queued jobs, distinct from downloading", () => {
     expect(inlineImportStatus(job({ status: "queued" }))).toBe(
-      "Downloading from X… Progress appears in Recent imports.",
+      "Waiting to download from X… Progress appears in Recent imports.",
     );
   });
 

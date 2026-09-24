@@ -123,12 +123,15 @@ function withSentenceEnd(text: string): string {
 
 export function inlineImportStatus(job: Doc<"jobs"> | undefined): string | null {
   if (!job) return null;
-  if (job.status === "queued" || job.status === "running")
-    // "Downloading", not "Fetching…results" — this only reports the x.md
-    // download landing in Recent imports, a different state from the
-    // download later becoming searchable (see docs/publication-contract.md);
-    // "results" here read as search results, which this is not.
-    return "Downloading from X… Progress appears in Recent imports.";
+  // "Downloading", not "Fetching…results" — this only reports the x.md
+  // download landing in Recent imports, a different state from the
+  // download later becoming searchable (see docs/publication-contract.md);
+  // "results" here read as search results, which this is not. Queued and
+  // running are also kept distinct: nothing is downloading yet while the
+  // job waits its turn.
+  if (job.status === "queued")
+    return "Waiting to download from X… Progress appears in Recent imports.";
+  if (job.status === "running") return "Downloading from X… Progress appears in Recent imports.";
   const detail = job.error ?? jobSummary(job);
   return `${jobLabel(job)} — ${withSentenceEnd(detail)} See Recent imports for details.`;
 }

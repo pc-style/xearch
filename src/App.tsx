@@ -271,8 +271,17 @@ export default function App() {
   // Job ids for imports kicked off directly from a result (Conversation /
   // Find on X). Those are real x.md fetches, not previews, so the inline
   // status line below reads live from `jobs.list` instead of just firing a
-  // toast and hoping the Recent imports modal gets opened.
-  const [liveImportJobId, setLiveImportJobId] = useState<Id<"jobs"> | null>(null);
+  // toast and hoping the Recent imports modal gets opened. `liveImportJob`
+  // pairs the job with the query it was started for, so the status is only
+  // ever shown while that's still the current query — this covers a plain
+  // new search AND a route-driven query change (Back/Forward), and a
+  // `runLoadLive()` that resolves late (after the query has since moved on)
+  // can't resurrect an old job's status either, since the query it wrote no
+  // longer matches `raw` by the time anything reads it.
+  const [liveImportJob, setLiveImportJob] = useState<{
+    query: string;
+    jobId: Id<"jobs">;
+  } | null>(null);
   const [threadJobs, setThreadJobs] = useState<Record<string, Id<"jobs">>>({});
   const pushedDashboardEntry = useRef(false);
   const [page, setPage] = useState<{
@@ -559,11 +568,12 @@ export default function App() {
 
   const runLoadLive = async () => {
     await ensureSession();
+    const query = raw;
     const jobId = await start({
       kind: "live",
-      input: raw.replace(/(^|\s)@([\w]+)/g, "$1from:$2"),
+      input: query.replace(/(^|\s)@([\w]+)/g, "$1from:$2"),
     });
-    setLiveImportJobId(jobId);
+    setLiveImportJob({ query, jobId });
   };
 
   const runRead = async (url: string) => {
@@ -663,10 +673,11 @@ export default function App() {
     const trimmed = query.trim();
     const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort);
     appendModeRef.current = false;
-    // A "Find on X" job belongs to the query that started it; a new search
-    // must not keep showing that old job's inline status as if it were
-    // about the new one.
-    setLiveImportJobId(null);
+    // No explicit liveImportJob reset needed here: its query is compared
+    // against `raw` at the point of use (below), so a stale job from a
+    // previous query is never shown once `raw` has moved on — see the
+    // `liveImportJob` declaration above for why that also covers
+    // route-driven changes and a late-resolving `runLoadLive()`.
     const attemptId = allocateAttempt();
 
     const request: SearchRequest = {
@@ -1009,7 +1020,11 @@ export default function App() {
                 onRead={read}
                 onBookmark={(post) => void task(runBookmark(post))}
                 onThread={(post) => void task(runThread(post))}
-                liveImportStatus={inlineImportStatus(jobs.find((j) => j._id === liveImportJobId))}
+                liveImportStatus={
+                  liveImportJob && liveImportJob.query === raw
+                    ? inlineImportStatus(jobs.find((j) => j._id === liveImportJob.jobId))
+                    : null
+                }
                 threadStatus={(tweetId) =>
                   inlineImportStatus(jobs.find((j) => j._id === threadJobs[tweetId]))
                 }

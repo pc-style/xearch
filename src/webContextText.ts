@@ -35,13 +35,13 @@ export function shortenUrlForDisplay(href: string, maxLength = 60): string {
   return shortenUrl(href, maxLength);
 }
 
-// Markdown link `[label](https://…)` or a bare URL, whichever comes first.
-// The markdown-link href excludes ")" — it's bounded by the link syntax's
-// own closing paren. The bare-URL alternative matches the same charset as
-// `src/linkify.ts`'s `URL_PATTERN` (parens included), so a URL like
-// `…/Mercury_(planet)` is captured whole and `restoreBalancedParens` below
-// can tell a URL-owned ")" apart from one closing surrounding prose.
-const INLINE_PATTERN = /\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"']+)/g;
+// Matches the *start* of either a Markdown link (up to and including its
+// opening "(") or a bare URL. A Markdown link's href is scanned separately
+// by `scanBalancedHref` below rather than captured by this regex: a fixed
+// character class like `[^\s)]+` can't tell a URL-owned ")" (as in
+// `Mercury_(planet)`) from the one that closes the Markdown link syntax
+// itself, so it always picks the first ")" — wrong for either case.
+const INLINE_START = /\[([^\]]*)\]\(|https?:\/\/[^\s<>"']+/g;
 const HEADING_PREFIX = /^#{1,6}\s+/;
 const BULLET_PREFIX = /^(?:[-*+]|\d+\.)\s+/;
 const BLOCKQUOTE_PREFIX = /^>+\s?/;
@@ -86,37 +86,72 @@ function splitBlocks(markdown: string): string[] {
   return blocks;
 }
 
+/**
+ * From `start` (just after a Markdown link's opening "("), scan for the
+ * matching closing ")", counting nested parens so a URL like
+ * `Mercury_(planet)` doesn't end the href at its own inner ")". Bails on
+ * whitespace/newlines — a real href never contains them — so malformed or
+ * unterminated input falls back to being treated as plain text rather than
+ * consuming the rest of the document.
+ */
+function scanBalancedHref(text: string, start: number): { href: string; end: number } | null {
+  let depth = 1;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return { href: text.slice(start, i), end: i + 1 };
+    } else if (ch === " " || ch === "\n" || ch === "\t") return null;
+  }
+  return null;
+}
+
 function parseInlineSegments(text: string): WebContextSegment[] {
   const segments: WebContextSegment[] = [];
   let cursor = 0;
-  for (const match of text.matchAll(INLINE_PATTERN)) {
-    const start = match.index ?? 0;
-    const [whole, mdLabel, mdHref, bareHref] = match;
-    let href = mdHref ?? bareHref ?? "";
-    let label = mdHref !== undefined ? mdLabel || shortenUrlForDisplay(mdHref) : "";
-    let matchedLength = whole.length;
+  INLINE_START.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = INLINE_START.exec(text))) {
+    const start = match.index;
+    const mdLabel = match[1];
+    if (mdLabel !== undefined) {
+      const hrefStart = INLINE_START.lastIndex;
+      const isHttp =
+        text.startsWith("http://", hrefStart) || text.startsWith("https://", hrefStart);
+      const parsed = isHttp ? scanBalancedHref(text, hrefStart) : null;
+      if (!parsed) continue; // not a well-formed http(s) Markdown link; leave as plain text
+      if (start > cursor) segments.push({ type: "text", value: text.slice(cursor, start) });
+      segments.push({
+        type: "link",
+        href: parsed.href,
+        label: mdLabel || shortenUrlForDisplay(parsed.href),
+      });
+      cursor = parsed.end;
+      INLINE_START.lastIndex = cursor;
+      continue;
+    }
+    // Bare URL.
+    let href = match[0];
+    const trailingMatch = href.match(TRAILING_PUNCTUATION);
     let trailing = "";
-    if (bareHref !== undefined) {
-      const trailingMatch = bareHref.match(TRAILING_PUNCTUATION);
-      if (trailingMatch) {
-        trailing = trailingMatch[0];
-        href = bareHref.slice(0, bareHref.length - trailing.length);
-        // Keep a closing ")" that the URL's own path needs, e.g.
-        // `…/Mercury_(planet)` — otherwise it's stripped as trailing
-        // punctuation and the link points at a URL that doesn't exist.
-        ({ raw: href, trailing } = restoreBalancedParens(href, trailing));
-        matchedLength = whole.length - trailing.length;
-      }
-      label = shortenUrlForDisplay(href);
+    if (trailingMatch) {
+      trailing = trailingMatch[0];
+      href = href.slice(0, href.length - trailing.length);
+      // Keep a closing ")" that the URL's own path needs, e.g.
+      // `…/Mercury_(planet)` — otherwise it's stripped as trailing
+      // punctuation and the link points at a URL that doesn't exist.
+      ({ raw: href, trailing } = restoreBalancedParens(href, trailing));
     }
     if (!href) continue;
     if (start > cursor) segments.push({ type: "text", value: text.slice(cursor, start) });
-    segments.push({ type: "link", href, label });
-    cursor = start + matchedLength;
+    segments.push({ type: "link", href, label: shortenUrlForDisplay(href) });
+    cursor = start + href.length;
     if (trailing) {
       segments.push({ type: "text", value: trailing });
       cursor += trailing.length;
     }
+    INLINE_START.lastIndex = cursor;
   }
   if (cursor < text.length) segments.push({ type: "text", value: text.slice(cursor) });
   return segments.length ? segments : [{ type: "text", value: text }];

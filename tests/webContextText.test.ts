@@ -36,6 +36,39 @@ describe("parseWebContextMarkdown", () => {
     });
   });
 
+  it("parses balanced parentheses inside a markdown link href", () => {
+    const paragraphs = parseWebContextMarkdown(
+      "See [article](https://en.wikipedia.org/wiki/Mercury_(planet)) for more.",
+    );
+    expect(paragraphs[0].segments).toEqual([
+      { type: "text", value: "See " },
+      {
+        type: "link",
+        href: "https://en.wikipedia.org/wiki/Mercury_(planet)",
+        label: "article",
+      },
+      { type: "text", value: " for more." },
+    ]);
+  });
+
+  it("leaves a non-http markdown link target as plain text", () => {
+    const paragraphs = parseWebContextMarkdown("[not a link](not-a-url)");
+    expect(paragraphs.map(plainText)).toEqual(["[not a link](not-a-url)"]);
+  });
+
+  it("falls back to a bare link when a markdown link's href is unterminated", () => {
+    // "[broken](" isn't a valid link on its own (no matching ")"), but the
+    // text right after it is still a real URL, so it's still linkified —
+    // just as a bare URL rather than with the "broken" label.
+    const paragraphs = parseWebContextMarkdown("[broken](https://example.com/page and more");
+    const link = paragraphs[0].segments.find((s) => s.type === "link");
+    expect(link).toEqual({
+      type: "link",
+      href: "https://example.com/page",
+      label: "example.com/page",
+    });
+  });
+
   it("falls back to a shortened URL as the label when a markdown link has no text", () => {
     const paragraphs = parseWebContextMarkdown("[](https://anthropic.com/news/announcement)");
     const link = paragraphs[0].segments.find((s) => s.type === "link");
