@@ -1,5 +1,6 @@
-import { lazy, type ComponentType } from "react";
+import { lazy, type Component } from "solid-js";
 import { OPERATOR_BUILD } from "./operatorBuild";
+import type { OpsTab } from "./locationStore";
 
 /**
  * The operator UI, and whether this bundle has it.
@@ -10,7 +11,7 @@ import { OPERATOR_BUILD } from "./operatorBuild";
  *     client-facing search app and nothing else;
  *   - the operator one, built with `VITE_XEARCH_OPERATOR=1`, served by nginx
  *     on this VM behind the exe.dev proxy's login, which is where the
- *     dashboard and the Connections panel live.
+ *     dashboard (src/ops) and the Connections panel live.
  *
  * The public build gets `operatorSurface.public.ts` in this module's place,
  * swapped by a resolve alias in vite.config.ts. That is deliberately a
@@ -28,23 +29,13 @@ import { OPERATOR_BUILD } from "./operatorBuild";
 export { OPERATOR_BUILD };
 
 export type DashboardProps = {
+  /** Which tab the address is on (src/locationStore.ts `opsTabFromPath`). */
+  tab: OpsTab;
   ensureSession: () => Promise<void>;
-  close: () => void;
-  onOpenQueue: () => void;
+  /** Leave for the search app, optionally running `query` there. */
+  openSearch: (query?: string) => void;
 };
 
-export const Dashboard: ComponentType<DashboardProps> | null = lazy(() => import("./Dashboard"));
+export const Dashboard: Component<DashboardProps> | null = lazy(() => import("./ops/Ops"));
 
-export const ConnectionsPanel: ComponentType | null = lazy(() => import("./operator/Connections"));
-
-export type QueueTimelineProps = { close: () => void };
-
-// The operator Queue page (src/library/QueueTimeline.tsx): "what is the
-// worker going to do next, and when". Same module-swap exclusion as
-// Dashboard/ConnectionsPanel above — the public build's
-// `operatorSurface.public.ts` resolves this to `null` instead, so nothing
-// in that file's module graph (including convex/queue.ts's operator-only
-// wire shapes) is reachable from the public bundle.
-export const QueueTimeline: ComponentType<QueueTimelineProps> | null = lazy(
-  () => import("./library/QueueTimeline"),
-);
+export const ConnectionsPanel: Component | null = lazy(() => import("./operator/Connections"));

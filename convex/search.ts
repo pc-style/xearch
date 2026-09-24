@@ -17,7 +17,7 @@ import { capturePostHog } from "./lib/posthog";
 import type { Doc } from "./_generated/dataModel";
 
 /** Wire request body for the external search service (docs/integration-contract.md). */
-type SearchRequestBody = {
+export type SearchRequestBody = {
   version: 1;
   query: string;
   author?: string;
@@ -224,14 +224,14 @@ type SearchAttempt =
   | { kind: "ok"; result: ReturnType<typeof decodeSearchResponse> }
   | { kind: "failed"; failure: SearchFailure };
 
-const RETRYABLE_FAILURE_KINDS = new Set<SearchFailure["kind"]>([
+export const RETRYABLE_FAILURE_KINDS = new Set<SearchFailure["kind"]>([
   "network",
   "server_error",
   "invalid_body",
 ]);
 
 /** One request/response round trip against the search service, classified. */
-async function attemptSearch(
+export async function attemptSearch(
   url: string,
   headers: Record<string, string>,
   requestBody: SearchRequestBody,

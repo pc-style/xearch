@@ -25,16 +25,20 @@ cd "$REPO"
 # operator site is already restricted to exe.dev accounts with VM access, so
 # being on it is the operator proof. Sourced the same way the indexer unit
 # reads publication.env (deploy/systemd/xearch-search-indexer.service) — a
-# plain KEY=VALUE file, never committed, never echoed. Its absence is not
-# fatal: the build falls back to the verified-email allowlist, same as
-# before this token existed.
+# plain KEY=VALUE file, never committed, never echoed. There is no email
+# sign-in UI any more, so a build without the token publishes a dashboard
+# whose every gated action fails: refuse instead, the same way a build with
+# no dashboard is refused below.
 if [ -f "$OPERATOR_ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1090
   source "$OPERATOR_ENV_FILE"
   set +a
-else
-  echo "deploy-operator-site: no $OPERATOR_ENV_FILE — building without an operator token; the email allowlist will be the only way in." >&2
+fi
+
+if [ -z "${VITE_OPERATOR_TOKEN:-}" ]; then
+  echo "deploy-operator-site: no VITE_OPERATOR_TOKEN in $OPERATOR_ENV_FILE — refusing to publish an operator site whose gated actions cannot work." >&2
+  exit 1
 fi
 
 # A wrong or unreachable endpoint publishes an operator site that loads and
@@ -64,7 +68,7 @@ VITE_CONVEX_SITE_URL="$CONVEX_SITE_URL" \
 VITE_OPERATOR_TOKEN="${VITE_OPERATOR_TOKEN:-}" \
   bash scripts/with-posthog-build-env.sh bun run build:operator
 
-grep -rqF "Account library" dist-operator/assets || {
+grep -rqF "Needs attention" dist-operator/assets || {
   echo "deploy-operator-site: built tree has no dashboard in it — refusing to publish." >&2
   exit 1
 }

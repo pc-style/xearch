@@ -1,5 +1,4 @@
 import type { Doc } from "../convex/_generated/dataModel";
-import type { JobStatus } from "../convex/lib/contracts";
 
 export function jobLabel(job: Doc<"jobs">) {
   // A "complete" job never has more to fetch: convex/jobs.ts `finish`
@@ -66,9 +65,8 @@ export function jobSummary(job: Doc<"jobs">) {
 // `statusUrl`, e.g. "https://x.com/theo/status/123") for a human label on a
 // "post" job. Never throws: an unparseable/legacy input just falls back to
 // the generic label in `jobKindLabel` below instead of showing raw internals.
-// Exported for src/library/QueueTimeline.tsx, which needs the same identity
-// for a "post" entry that never resolves to a tracked account (a single
-// conversation isn't an account library row) — see `jobPostIdentity` below.
+// Exported for the /ops dashboard (src/ops/model.ts), which names the
+// account a "post" job is about.
 export function handleFromStatusUrl(url: string): string | null {
   try {
     const segment = new URL(url).pathname.split("/").find((part) => part.length > 0);
@@ -115,10 +113,8 @@ export type JobPostIdentity = { handle: string | null; postId: string | null };
 /**
  * A "post"/"conversation" job's identity: the author's handle when the
  * status URL parses to one, and a short, still-unique fragment of the post
- * id. Shared by `jobKindLabel` below and src/library/QueueTimeline.tsx's own
- * fallback label, so a failed conversation reads the same distinguishable
- * way in both the "Other imports" feed and the Queue timeline, instead of
- * the timeline collapsing every one of them to a bare "Post / conversation"
+ * id. Used by `jobKindLabel` below, so a failed conversation reads
+ * distinguishably instead of as a bare "Post / conversation"
  * (/tmp/issues.md item 3).
  */
 export function jobPostIdentity(input: string): JobPostIdentity {
@@ -138,9 +134,8 @@ export function conversationLabel(input: string): string {
 
 /** "older history YYYY-MM → YYYY-MM" — the dated slice of one deep-history
  * backfill window job (convex/jobs.ts `insertHistoryWindowJob`), shared by
- * `jobKindLabel` below, src/library/ActiveQueue.tsx, and
- * src/library/QueueTimeline.tsx so the three surfaces never drift on how
- * this window is worded. */
+ * `jobKindLabel` below and the /ops dashboard (src/ops/model.ts) so they
+ * never drift on how this window is worded. */
 export function historyWindowRange(since: string, until: string): string {
   return `older history ${since.slice(0, 7)} → ${until.slice(0, 7)}`;
 }
@@ -206,12 +201,9 @@ export function isPermanentFailure(job: Doc<"jobs">): boolean {
   return (job.status === "failed" || job.status === "partial") && job.retryable === false;
 }
 
-/** "HH:MM" in the viewer's own locale/timezone — shared by src/JobRow.tsx
- * (a post/conversation job's exact start time, which `relativeTime` below
- * rounds away and so cannot tell two runs a minute apart) and
- * src/library/QueueTimeline.tsx (every "starts ≈"/"retry at" clock time on
- * that page), so the two surfaces never format a clock time two different
- * ways. */
+/** "HH:MM" in the viewer's own locale/timezone, for src/JobRow.tsx: a
+ * post/conversation job's exact start time, which `relativeTime` below
+ * rounds away and so cannot tell two runs a minute apart. */
 export function exactClockTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
@@ -312,54 +304,6 @@ export function jobWarnings(job: Doc<"jobs">) {
 }
 
 /**
- * Acquisition-job status label for callers that only have the job's own
- * `status` — not a full `Doc<"jobs">` — such as
- * `convex/lib/contracts.ts` AccountLibraryRow.latestJob and
- * convex/library.ts's HistoryRun. Deliberately does NOT reuse jobLabel's
- * existing wording (it maps "queued" to "Waiting"): that word collides with
- * the unrelated publication state "waiting_for_indexing", which is exactly
- * the copy-conflation bug the account library exists to remove — see
- * docs/publication-contract.md and to-do.md P0 "Remove contradictory copy".
- * This label always says "download", never bare "waiting"/"complete", so it
- * can never be misread as a search-publication state.
- */
-export function acquisitionStatusLabel(status: JobStatus): string {
-  return {
-    queued: "Queued to download",
-    running: "Downloading",
-    complete: "Download complete",
-    partial: "Download interrupted",
-    failed: "Download failed",
-    cancelled: "Download stopped",
-  }[status];
-}
-
-/**
- * /tmp/issues.md item 2: "Download complete" reads like a claim that this
- * account's ENTIRE X history is now in the index — a person can have tens
- * of thousands of posts on X and still see this exact label after a run
- * that only ever got through a few thousand of them. It only ever means one
- * run of the acquisition job finished handing over whatever x.md returned
- * for it, which is "everything x.md could give" for that run, never "all of
- * X" for that account. Shared by every place that shows the "Download
- * complete" badge for an account-history job, so the caveat reads the same
- * way everywhere it appears.
- */
-export const DOWNLOAD_COMPLETE_CAVEAT =
-  '"Download complete" means x.md finished handing over what it had for this run — not that every post on X was retrieved.';
-
-/**
- * One coherent sentence describing a single acquisition run's outcome: the
- * failure (verbatim, when there is one) plus how much was actually
- * retained. Never returns a bare internal progress string like "Saving raw
- * capture" for a run that has already stopped — to-do.md P0 "Do not leave
- * failed jobs showing only 'Saving raw capture.'" `phase` is only used for a
- * still-active run (queued/running), where it is the honest current step;
- * for a stopped run it is stale progress text left over from before the
- * stop (see convex/jobs.ts finish, which never clears `phase` on failure),
- * so it is deliberately not surfaced here as if it explained the outcome.
- */
-/**
  * Inline status line for a job started directly from a result (Conversation
  * / Find on X). Those buttons trigger a real paid x.md fetch, not a preview,
  * so the caller needs an honest "this is happening" state instead of just
@@ -394,31 +338,6 @@ export function inlineImportStatus(job: Doc<"jobs"> | undefined): string | null 
   return `${jobLabel(job)} — ${withSentenceEnd(detail)} See Recent imports for details.`;
 }
 
-export function describeRunOutcome(run: {
-  status: JobStatus;
-  phase?: string;
-  error?: string;
-  count: number;
-  postsReceived?: number;
-}): string {
-  const retained =
-    run.postsReceived !== undefined
-      ? `${run.postsReceived.toLocaleString()} post${run.postsReceived === 1 ? "" : "s"} retained`
-      : run.count > 0
-        ? `${run.count.toLocaleString()} record${run.count === 1 ? "" : "s"} retained`
-        : "Nothing was retained from this attempt";
-
-  if (run.status === "failed" || run.status === "partial")
-    return `${run.error ?? "This run failed for an unreported reason."} ${retained}.`;
-
-  if (run.status === "cancelled") return `Stopped by request. ${retained}.`;
-
-  if (run.status === "running" || run.status === "queued")
-    return run.phase ?? "Waiting for the next batch.";
-
-  return `${retained}.`;
-}
-
 /**
  * One line saying why a discovered run exists: which indexed accounts
  * interact with this one, and how often. Empty for runs a person started.
@@ -440,7 +359,9 @@ export function discoveredVia(
   if (!job || job.origin !== "discovered") return "";
   const from = job.discoveredFrom ?? [];
   const shown = from.slice(0, 3);
-  const total = shown.reduce((sum, f) => sum + f.interactions, 0);
+  // Every stored source, not just the names shown, so the figure is the
+  // whole count that caused the import.
+  const total = from.reduce((sum, f) => sum + f.interactions, 0);
 
   const names = shown.map((f) => `@${f.handle}`).join(", ");
 

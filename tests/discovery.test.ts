@@ -52,6 +52,22 @@ describe("discovery ranking", () => {
     ]);
   });
 
+  it("credits a reposter with the original author only, not the post's own targets", () => {
+    const posts = [
+      post("stranger", {
+        reposted_by: [{ screen_name: "theo" }],
+        replying_to: [{ screen_name: "carol" }],
+        raw_text: { facets: [{ type: "mention", original: "bob" }] },
+      }),
+    ];
+
+    expect(
+      rankInteractions(posts, { indexed: ["theo"], exclude: [], minInteractions: 1 }).map(
+        (r) => r.handle,
+      ),
+    ).toEqual(["stranger"]);
+  });
+
   it("applies the threshold and skips accounts that already have an import", () => {
     const posts = [reply("theo", "alpha"), reply("theo", "alpha"), reply("theo", "beta")];
     expect(

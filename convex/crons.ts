@@ -21,4 +21,8 @@ crons.interval("expire transient UI snapshots", { minutes: 10 }, internal.cleanu
 // reference at runtime.
 crons.interval("probe search service health", { minutes: 2 }, anyApi.health.probeSearch, {});
 
+// Refill the home page's popular-posts wall (convex/wall.ts). Hourly: likes
+// move slowly and the wall is decoration, not a live feed.
+crons.interval("refresh home page wall", { minutes: 60 }, internal.wall.refresh, {});
+
 export default crons;

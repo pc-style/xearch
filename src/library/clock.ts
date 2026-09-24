@@ -1,11 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { createSignal, onSettled, type Accessor } from "solid-js";
+import { fromStore } from "../data/external";
 
 export const DASHBOARD_CLOCK_INTERVAL_MS = 30_000;
 
 // Rounded to a shared wall-clock bucket, not the raw instant this module
 // happened to load or tick, purely so widely-shared, loose-tolerance
-// staleness displays (convex/summary.ts's `summary`/`health`, read by
-// src/library/Library.tsx) don't each mint their own slightly-different
+// staleness displays (convex/summary.ts's `summary`/`health`, read by the
+// /ops dashboard, src/ops/Ops.tsx) don't each mint their own slightly-different
 // `now` per browser.
 //
 // NEVER use this (or `useDashboardClock`/`useDashboardNow` below) to feed a
@@ -78,8 +79,8 @@ export function getServerSnapshot(): number {
   return initialNow;
 }
 
-export function useDashboardClock(): number {
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+export function useDashboardClock(): Accessor<number> {
+  return fromStore(subscribe, getSnapshot);
 }
 
 export const useDashboardNow = useDashboardClock;
@@ -104,13 +105,14 @@ const LIVE_CLOCK_INTERVAL_MS = 5_000;
  * every open client and getting the liveness math right matters more than
  * the query-cache sharing a bucketed value would buy.
  */
-export function useLiveNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
+export function useLiveNow(): Accessor<number> {
+  const [now, setNow] = createSignal(Date.now());
+
+  onSettled(() => {
     const id = setInterval(() => setNow(Date.now()), LIVE_CLOCK_INTERVAL_MS);
 
     return () => clearInterval(id);
-  }, []);
+  });
 
   return now;
 }

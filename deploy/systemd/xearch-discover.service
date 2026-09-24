@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# A oneshot has no start timeout by default: one hung `convex run` would keep
+# the unit active and the hourly timer would never fire again.
+TimeoutStartSec=30min
 WorkingDirectory=/home/exedev/xearch-worker
 EnvironmentFile=-%h/xearch-data/discover.env
 Environment=CONVEX_DEPLOYMENT=prod:utmost-kudu-321

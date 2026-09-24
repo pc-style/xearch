@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import type { Component } from "solid-js";
 import type { DashboardProps } from "./operatorSurface";
 import { OPERATOR_BUILD } from "./operatorBuild";
 
@@ -15,10 +15,6 @@ export { OPERATOR_BUILD };
 
 export type { DashboardProps };
 
-export const Dashboard: ComponentType<DashboardProps> | null = null;
+export const Dashboard: Component<DashboardProps> | null = null;
 
-export const ConnectionsPanel: ComponentType | null = null;
-
-export type QueueTimelineProps = { close: () => void };
-
-export const QueueTimeline: ComponentType<QueueTimelineProps> | null = null;
+export const ConnectionsPanel: Component | null = null;

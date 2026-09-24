@@ -1,221 +1,162 @@
 // QA reports /tmp/issues-claude-qa.md A12 and /tmp/issues-claude-preview.md
 // P2 (2026-09-24):
 // - A12: "Save search" never showed a saved state, so clicking it twice
-//   looked like nothing happened (the entry is de-duped server-side, but
-//   the button was silent about it).
+//   looked like nothing happened.
 // - P2: the "Stats for nerds" panel rendered on every search regardless of
-//   the checkbox, because ResultsSection gated it on `frontendStats`
-//   existing rather than the caller's includeStats choice — client
-//   telemetry is always populated once a search runs.
-// Rendered with plain renderToStaticMarkup + createElement, matching this
-// repo's no-jsdom test convention (tests/signed-out-states.test.ts).
+//   the checkbox, because it was gated on `frontendStats` existing rather
+//   than the caller's includeStats choice — client telemetry is always
+//   populated once a search runs.
 import { describe, expect, it } from "vitest";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { ResultsSection } from "../src/ResultsSection";
+import { ResultsHead } from "../src/ResultsSection";
 import { ViewMode } from "../src/uiState";
-import { SearchStatus, SearchTrigger, type SearchAttemptSnapshot } from "../src/searchTelemetry";
-import type { Doc, Id } from "../convex/_generated/dataModel";
-import type { ResultPost } from "../convex/lib/results";
+import { mount } from "./solid";
+import {
+  configured,
+  frontendStats,
+  noop,
+  post,
+  renderHead,
+  renderResults as render,
+  session,
+} from "./fixtures/results";
 
-const configured = {
-  indexing: true,
-  search: true,
-  firecrawl: true,
-  openai: true,
-  email: true,
-};
-
-const noop = () => {};
-
-function post(): ResultPost {
-  return {
-    tweetId: "123",
-    author: "anthropicai",
-    text: "hello world",
-    url: "https://x.com/anthropicai/status/123",
-    links: [],
-  };
-}
-
-function sessionId(id: string) {
-  // SAFETY: `Id<"sessions">` is `string & { __tableName: "sessions" }`, a
-  // subtype of `string`; this fixture helper attaches that brand to a
-  // test-authored id, same pattern as tests/jobText.test.ts's `jobId`/`userId`.
-  return id as Id<"sessions">;
-}
-
-function userId(id: string) {
-  // SAFETY: `Id<"users">` is `string & { __tableName: "users" }`, a subtype
-  // of `string`; this fixture helper attaches that brand to a test-authored
-  // id.
-  return id as Id<"users">;
-}
-
-function session(overrides: Partial<Doc<"sessions">> = {}): Doc<"sessions"> {
-  const base = {
-    _id: sessionId("s1"),
-    _creationTime: 0,
-    owner: userId("user-1"),
-    raw: "convex",
-    sort: "relevance" as const,
-    status: "complete" as const,
-    rows: [post()],
-    warnings: [],
-    ...overrides,
-  };
-
-  // SAFETY: `base` covers every required field of `Doc<"sessions">` (the
-  // fixture literal above lists them all); `overrides` only ever narrows
-  // optional or same-shaped fields, so this is a plain upcast to the full
-  // document type, not a lie about its shape.
-  return base as Doc<"sessions">;
-}
-
-const frontendStats: SearchAttemptSnapshot = {
-  attemptId: 1,
-  trigger: SearchTrigger.Submit,
-  submittedAt: 0,
-  mutationStartedAt: 0,
-  sessionAt: 0,
-  sessionId: null,
-  firstResultCommitAt: 0,
-  terminalCommitAt: 0,
-  status: SearchStatus.Complete,
-  terminalStatus: SearchStatus.Complete,
-  terminalRowCount: 1,
-  nextFramePaintAt: 0,
-  actualDurationMs: 1,
-  baseDurationMs: 1,
-  connectionAtSubmit: null,
-  connectionAtSession: null,
-  connectionAtTerminal: null,
-};
-
-function render(props: Partial<Parameters<typeof ResultsSection>[0]> = {}) {
-  return renderToStaticMarkup(
-    createElement(ResultsSection, {
-      view: ViewMode.Search,
-      raw: "convex",
-      configured,
-      result: session(),
-      queryError: "",
-      visible: [post()],
-      bookmarkedIds: new Set<string>(),
-      busy: false,
-      onSearch: noop,
-      onSave: noop,
-      onOpenModal: noop,
-      onRetry: noop,
-      onLiveSearch: noop,
-      onWebContext: noop,
-      onLoadMore: noop,
-      onRead: noop,
-      onBookmark: noop,
-      onThread: noop,
-      isOperator: true,
-      ...props,
-    }),
-  );
-}
+const complete = { result: session({ rows: [post()] }), visible: [post()] };
 
 describe("A12: Save search reflects whether the current query+sort is already saved", () => {
-  it("shows 'Save search' and stays enabled when not yet saved", () => {
-    const html = render({ alreadySaved: false });
-    expect(html).toContain("Save search");
-    expect(html).not.toContain(">Saved<");
+  it("offers 'Save search' when not yet saved", () => {
+    const html = renderHead({ alreadySaved: false });
+    expect(html).toContain('aria-label="Save search"');
+    expect(html).toContain('aria-pressed="false"');
   });
 
-  it("flips to a disabled 'Saved' state once it is", () => {
-    const html = render({ alreadySaved: true });
-    expect(html).toContain(">Saved<");
-    const re = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Saved/;
-    expect(html).toMatch(re);
+  it("shows the saved state once it is, and offers to remove it", () => {
+    const html = renderHead({ alreadySaved: true });
+    expect(html).toContain('aria-label="Remove saved search"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toMatch(/class="ib saved"/);
   });
 });
 
 describe("P2: the nerd stats panel only renders when the caller asked for it", () => {
   it("stays hidden when statsForNerds is off, even though client telemetry exists", () => {
-    const html = render({ statsForNerds: false, frontendStats });
+    const html = render({ ...complete, statsForNerds: false, frontendStats });
     expect(html).not.toContain("Stats for nerds —");
   });
 
   it("renders once statsForNerds is on", () => {
-    const html = render({ statsForNerds: true, frontendStats });
+    const html = render({ ...complete, statsForNerds: true, frontendStats });
     expect(html).toContain("Stats for nerds —");
   });
 
-  it("offers a footnote toggle that reflects the current state", () => {
-    const off = render({ statsForNerds: false, onToggleStats: noop });
-    expect(off).toContain(">Stats for nerds<");
-    const on = render({ statsForNerds: true, onToggleStats: noop });
-    expect(on).toContain("Stats for nerds: on");
+  it("names the sort in the result count only for nerds", () => {
+    expect(render({ ...complete, sort: "likes", statsForNerds: true })).toContain(
+      "1 post loaded · most liked",
+    );
+    expect(render({ ...complete, sort: "likes", statsForNerds: false })).not.toContain(
+      "most liked",
+    );
   });
 });
 
 describe("B6: results footnote drops the internal service copy", () => {
   it("does not mention 'search service' for the search view", () => {
-    const html = render({});
+    const html = render(complete);
     expect(html).not.toMatch(/search service/i);
   });
 });
 
 describe("operator authorization boundary in the results UI", () => {
-  it("disables Web context, Import from X, and each post's Fetch conversation button for a non-operator, and shows the sign-in notice", () => {
-    const html = render({ isOperator: false });
-    const webContextButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Web context/;
-    const importFromXButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Import from X/;
+  // Provider-spending actions (Web context, Import from X, Fetch
+  // conversation, reading a linked page) cannot run on the public site, so
+  // they aren't offered there at all; the server enforces the boundary
+  // regardless (convex/access.ts `requireOperator`).
+  it("leaves Web context, Import from X and Fetch conversation out for a non-operator", () => {
+    const head = renderHead({ isOperator: false });
+    const results = render({ ...complete, isOperator: false });
 
-    const conversationButton =
-      /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Fetch conversation from X/;
-
-    expect(html).toMatch(webContextButton);
-    expect(html).toMatch(importFromXButton);
-    expect(html).toMatch(conversationButton);
-    expect(html).toContain("This action runs from the operator dashboard.");
+    expect(head).not.toContain("Web context");
+    expect(head).not.toContain("Import from X");
+    expect(results).not.toContain("Fetch conversation");
   });
 
-  it("leaves Web context, Import from X, and Fetch conversation enabled for an operator", () => {
-    const html = render({ isOperator: true });
-    const webContextButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Web context/;
-    const importFromXButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Import from X/;
+  it("offers them, enabled, to an operator", () => {
+    const head = renderHead({ isOperator: true });
+    const results = render({ ...complete, isOperator: true });
 
-    expect(html).not.toMatch(webContextButton);
-    expect(html).not.toMatch(importFromXButton);
-    expect(html).not.toContain("This action runs from the operator dashboard.");
+    const disabled = (label: string) =>
+      new RegExp(`<button[^>]*disabled=""[^>]*>(?:(?!</button>)[\\s\\S])*${label}`);
+
+    expect(head).toContain("Web context");
+    expect(head).toContain("Import from X");
+    expect(results).toContain("Fetch conversation");
+    expect(head).not.toMatch(disabled("Web context"));
+    expect(head).not.toMatch(disabled("Import from X"));
   });
 
-  it("disables a post's linked-page buttons for a non-operator and shows the sign-in notice (CodeRabbit #4089730732)", () => {
+  it("while the operator check is loading, offers nothing it might have to take back", () => {
+    const head = renderHead({ isOperator: undefined });
+    const results = render({ ...complete, isOperator: undefined });
+
+    expect(head).not.toContain("Web context");
+    expect(results).not.toContain("Fetch conversation");
+  });
+
+  it("leaves a post's linked-page buttons out for a non-operator (CodeRabbit #4089730732)", () => {
     const withLink = { ...post(), links: ["https://example.com/article"] };
-    const html = render({ isOperator: false, visible: [withLink] });
+    const html = render({ ...complete, isOperator: false, visible: [withLink] });
 
-    const linkButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*example\.com/;
-
-    expect(html).toMatch(linkButton);
-    expect(html).toContain("This action runs from the operator dashboard.");
+    expect(html).not.toContain("example.com</span>");
   });
 
-  it("leaves a post's linked-page buttons enabled for an operator", () => {
+  it("offers a post's linked-page buttons, enabled, to an operator", () => {
     const withLink = { ...post(), links: ["https://example.com/article"] };
-    const html = render({ isOperator: true, visible: [withLink] });
+    const html = render({ ...complete, isOperator: true, visible: [withLink] });
 
-    const linkButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*example\.com/;
+    expect(html).toContain("example.com</span>");
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*example\.com/);
+  });
+});
 
-    expect(html).not.toMatch(linkButton);
+describe("email availability copy in the results menu", () => {
+  it("says email isn't set up only when the deployment reports it off", () => {
+    expect(renderHead({ configured: { ...configured, email: false } })).toContain(
+      "Email isn't set up on this deployment.",
+    );
   });
 
-  it("shows the sign-in notice once per post card, not once per gated control (CodeRabbit #4089916567)", () => {
-    const withLink = { ...post(), links: ["https://example.com/article"] };
-    const html = render({ isOperator: false, visible: [withLink] });
-    // Isolate the one rendered <article className="post"> card: the header
-    // and overflow menu legitimately show their OWN copy of this notice for
-    // their own gated controls (Web context, Import from X) — this test is
-    // specifically about the post CARD not repeating it once per control on
-    // the same card (a linked-page button and "Fetch conversation from X").
-    const cardHtml = html.slice(html.indexOf("<article"), html.indexOf("</article>"));
-    const notice = "This action runs from the operator dashboard.";
-    const occurrences = cardHtml.split(notice).length - 1;
+  it("says nothing while the configuration is still loading, and keeps the button disabled", () => {
+    const html = renderHead({ configured: undefined });
 
-    expect(occurrences).toBe(1);
+    expect(html).not.toContain("Email isn't set up");
+    expect(html).toMatch(
+      /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Email these results/,
+    );
+  });
+});
+
+describe("opening Bookmarks", () => {
+  it("moves focus to the Bookmarks heading", () => {
+    const mounted = mount(ResultsHead, {
+      view: ViewMode.Bookmarks,
+      raw: "",
+      account: undefined,
+      alreadySaved: false,
+      busy: false,
+      queryError: "",
+      hasUsableResults: false,
+      configured,
+      isOperator: true,
+      emailNeedsSignIn: false,
+      onBack: noop,
+      onSave: noop,
+      onCopy: noop,
+      onEmail: noop,
+      onWebContext: noop,
+      onLiveSearch: noop,
+    });
+
+    expect(document.activeElement?.textContent).toBe("Bookmarks");
+    expect(document.activeElement?.getAttribute("tabindex")).toBe("-1");
+    mounted.unmount();
   });
 });

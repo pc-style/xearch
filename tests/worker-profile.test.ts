@@ -88,4 +88,28 @@ describe("the outbound worker's finish report", () => {
     expect(await t.run((ctx) => ctx.db.query("accounts").collect())).toHaveLength(0);
     expect((await t.run((ctx) => ctx.db.get(jobId)))?.status).toBe("complete");
   });
+
+  // The worker is the only thing that sees the provider's answer, so it is
+  // the only thing that can say whether a Retry could help. Before it
+  // forwarded `retryable`, every production failure was recorded (and
+  // reported to PostHog) as a transient provider error, even a permanent 4xx.
+  it("keeps the worker's verdict that a failure is permanent", async () => {
+    const { t, owner } = await setup();
+    const jobId = await runningJob(t, owner);
+
+    await t.action(api.worker.report, {
+      token: "worker-secret",
+      jobId,
+      attempt: 1,
+      event: "finish",
+      warnings: [],
+      error: "x.md 404: this account does not exist",
+      retryable: false,
+    });
+
+    const job = await t.run((ctx) => ctx.db.get(jobId));
+    // One batch was already stored, so the run ends "partial", not "failed".
+    expect(job?.status).toBe("partial");
+    expect(job?.retryable).toBe(false);
+  });
 });

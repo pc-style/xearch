@@ -1,104 +1,17 @@
-// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
-import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
-import type { ConvexReactClientOptions } from "convex/react";
-import type { Value } from "convex/values";
-import type {
-  AuthTokenFetcher,
-  ConnectionState,
-  MutationOptions,
-  QueryJournal,
-  QueryToken,
-} from "convex/browser";
 import type { Doc, Id } from "../convex/_generated/dataModel";
 import { JobRow } from "../src/JobRow";
 import { OPERATOR_SIGN_IN_NOTICE } from "../src/integrationStatus";
+import { fakeConvex, mount, stripMarkers } from "./solid";
 
 /**
  * A rendered-DOM test for src/JobRow.tsx — the one job row shared by the
  * header modal (src/App.tsx, public build) and the operator dashboard
- * (src/Dashboard.tsx, operator build only). Follows the same fake-transport
- * pattern as tests/library-ui.test.ts: `convex/react`'s hooks run for real
- * (`useQuery` for `api.jobs.receipts`), only the transport underneath is
- * faked, keyed by function name. No fixtures are ever set here (every job
- * below stays collapsed), so `useQuery` reads its real "still loading"
- * `undefined` — good enough, since nothing in these assertions depends on
- * the receipts list itself.
+ * (src/Dashboard.tsx, operator build only). Renders under the fake Convex
+ * app in tests/solid.ts, so `useQuery` (for `api.jobs.receipts`) runs for
+ * real against a transport that answers nothing: every job below stays
+ * collapsed, and nothing here depends on the receipts list itself.
  */
-
-interface FakeBaseConvexClient {
-  readonly url: string;
-  addOnTransitionHandler(fn: (transition: never) => void): () => void;
-  setAuth(
-    fetchToken: AuthTokenFetcher,
-    onChange: (isAuthenticated: boolean) => void,
-    onRefreshChange?: (isRefreshing: boolean) => void,
-  ): void;
-  setAdminAuth(value: string): void;
-  clearAuth(): void;
-  subscribe(
-    name: string,
-    args?: Record<string, Value>,
-  ): { queryToken: QueryToken; unsubscribe: () => void };
-  localQueryResult(udfPath: string, args?: Record<string, Value>): Value | undefined;
-  localQueryResultByToken(queryToken: QueryToken): Value | undefined;
-  hasLocalQueryResultByToken(queryToken: QueryToken): boolean;
-  localQueryLogs(udfPath: string, args?: Record<string, Value>): string[] | undefined;
-  queryJournal(name: string, args?: Record<string, Value>): QueryJournal | undefined;
-  connectionState(): ConnectionState;
-  subscribeToConnectionState(cb: (connectionState: ConnectionState) => void): () => void;
-  mutation(
-    name: string,
-    args?: Record<string, Value>,
-    options?: MutationOptions,
-  ): Promise<Value | undefined>;
-  action(name: string, args?: Record<string, Value>): Promise<Value | undefined>;
-  close(): Promise<void>;
-}
-
-function makeFakeBaseClient(): FakeBaseConvexClient {
-  return {
-    url: "https://job-row-test.convex.cloud",
-    addOnTransitionHandler: () => () => {},
-    setAuth: (_fetchToken, onChange) => onChange(true),
-    setAdminAuth: () => {},
-    clearAuth: () => {},
-    // SAFETY: `QueryToken` is `string & { __queryToken: true }`. This fake
-    // never needs collision-proof tokens (there's no real dedupe to do),
-    // only a stable per-query-name key for the caller's own bookkeeping.
-    subscribe: (name) => ({ queryToken: name as QueryToken, unsubscribe: () => {} }),
-    localQueryResult: () => undefined,
-    localQueryResultByToken: () => undefined,
-    hasLocalQueryResultByToken: () => false,
-    localQueryLogs: () => undefined,
-    queryJournal: () => undefined,
-    connectionState: (): ConnectionState => ({
-      hasInflightRequests: false,
-      isWebSocketConnected: true,
-      timeOfOldestInflightRequest: null,
-      hasEverConnected: true,
-      connectionCount: 1,
-      connectionRetries: 0,
-      inflightMutations: 0,
-      inflightActions: 0,
-    }),
-    subscribeToConnectionState: () => () => {},
-    mutation: () => Promise.resolve(undefined),
-    action: () => Promise.resolve(undefined),
-    close: () => Promise.resolve(),
-  };
-}
-
-// SAFETY: `options.baseClient` is a real, working constructor option (see
-// `ConvexReactClient`'s `sync` getter in
-// `node_modules/convex/src/react/client.ts`) marked `@internal` and so
-// missing from the published `ConvexReactClientOptions` type, not from the
-// runtime — the same gap tests/library-ui.test.ts bridges the same way.
-const convexClient = new ConvexReactClient("https://job-row-test.convex.cloud", {
-  baseClient: makeFakeBaseClient(),
-} as ConvexReactClientOptions);
 
 function jobId(id: string) {
   // SAFETY: `Id<"jobs">` is `string & { __tableName: "jobs" }`, a subtype of
@@ -146,38 +59,12 @@ function renderRow(
     isOperator?: boolean;
   },
 ): RenderedRow {
-  // Attached to `document.body`, not a detached node: React's delegated
-  // event listeners (the click test below dispatches a real MouseEvent) are
-  // registered on the root container, but bubbling through a node with no
-  // document owner never reaches them.
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
-
-  act(() => {
-    root.render(
-      createElement(
-        ConvexProviderWithAuth,
-        {
-          client: convexClient,
-          useAuth: () => ({
-            isLoading: false,
-            isAuthenticated: true,
-            fetchAccessToken: () => Promise.resolve(null),
-          }),
-        },
-        createElement(JobRow, { now: 0, isOperator: true, ...props }),
-      ),
-    );
-  });
+  const mounted = mount(JobRow, { now: 0, isOperator: true, ...props }, fakeConvex());
 
   return {
-    html: container.innerHTML,
-    container,
-    unmount: () => {
-      act(() => root.unmount());
-      container.remove();
-    },
+    html: stripMarkers(mounted.html()),
+    container: mounted.container,
+    unmount: mounted.unmount,
   };
 }
 
@@ -273,7 +160,7 @@ describe("JobRow (src/JobRow.tsx) rendered output", () => {
     unmount();
   });
 
-  it("calls onDismiss with the job when Clear from list is clicked, and never offers it for an active job", () => {
+  it("calls onDismiss with the job when Clear from list is clicked, and never offers it for an active job", async () => {
     const onDismiss = vi.fn((_job: Doc<"jobs">) => Promise.resolve());
     const finished = renderRow({ job: job({ status: "complete" }), onDismiss });
 
@@ -282,7 +169,8 @@ describe("JobRow (src/JobRow.tsx) rendered output", () => {
     );
 
     expect(button).toBeDefined();
-    act(() => button!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
     expect(onDismiss).toHaveBeenCalledTimes(1);
 
     const [dismissed] = onDismiss.mock.calls[0]!;

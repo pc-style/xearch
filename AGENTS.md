@@ -15,7 +15,7 @@ before adding a budget mechanism back.
 
 ## Stack and scope
 
-Use Bun with the committed `bun.lock`. The app uses TypeScript, React 19, Vite,
+Use Bun with the committed `bun.lock`. The app uses TypeScript, SolidJS 2 (pinned release candidate), Vite,
 and hosted Convex. Use Oxlint for linting, Oxfmt for formatting, and Vitest for
 tests. Do not introduce TypeScript `any` or suppress checks to make code pass
 unless explicitly requested. Keep changes scoped; do not add unrequested

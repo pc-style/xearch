@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseLocation, previewPatch } from "../src/locationStore";
+import {
+  OPS_TABS,
+  opsEntryPatch,
+  opsPath,
+  opsTabFromPath,
+  parseLocation,
+  previewPatch,
+} from "../src/locationStore";
 import { ViewMode } from "../src/uiState";
 
 describe("parseLocation", () => {
@@ -96,5 +103,65 @@ describe("parseLocation queue route", () => {
   it("reads ?queue=1 as the queue route", () => {
     expect(parseLocation("https://xearch.invalid/?queue=1").queue).toBe(true);
     expect(parseLocation("https://xearch.invalid/").queue).toBe(false);
+  });
+});
+
+const at = (href: string) => parseLocation(`https://xearch.invalid${href}`);
+
+describe("ops tab paths", () => {
+  it("maps every tab to its own path and back", () => {
+    for (const tab of OPS_TABS) expect(opsTabFromPath(opsPath(tab))).toBe(tab);
+    expect(opsPath("overview")).toBe("/ops");
+    expect(opsPath("jobs")).toBe("/ops/jobs");
+  });
+
+  it("accepts a trailing slash and rejects anything else", () => {
+    expect(opsTabFromPath("/ops/")).toBe("overview");
+    expect(opsTabFromPath("/ops/accounts/")).toBe("accounts");
+    expect(opsTabFromPath("/ops/overview")).toBeNull();
+    expect(opsTabFromPath("/ops/nope")).toBeNull();
+    expect(opsTabFromPath("/opsy")).toBeNull();
+    expect(opsTabFromPath("/")).toBeNull();
+  });
+});
+
+describe("opsEntryPatch", () => {
+  it("keeps a clean dashboard address as it is in the operator build", () => {
+    expect(opsEntryPatch(at("/ops"), true)).toBeNull();
+    expect(opsEntryPatch(at("/ops/provider"), true)).toBeNull();
+  });
+
+  it("drops search state from a dashboard address in the operator build", () => {
+    const patch = opsEntryPatch(at("/ops/jobs?search=1&q=theo&queue=1"), true);
+
+    expect(patch).not.toBeNull();
+    expect(previewPatch("https://xearch.invalid/ops/jobs?search=1&q=theo&queue=1", patch!)).toBe(
+      "/ops/jobs",
+    );
+  });
+
+  it("sends a bare / to /ops, and the old ?queue=1 to /ops/jobs, in the operator build", () => {
+    expect(previewPatch("https://xearch.invalid/", opsEntryPatch(at("/"), true)!)).toBe("/ops");
+    expect(
+      previewPatch("https://xearch.invalid/?queue=1", opsEntryPatch(at("/?queue=1"), true)!),
+    ).toBe("/ops/jobs");
+  });
+
+  it("leaves search addresses alone in the operator build", () => {
+    expect(opsEntryPatch(at("/?search=1"), true)).toBeNull();
+    expect(opsEntryPatch(at("/?q=theo"), true)).toBeNull();
+    expect(opsEntryPatch(at("/nope"), true)).toBeNull();
+  });
+
+  it("sends a dashboard address to the plain home page in the public build, keeping the query", () => {
+    const patch = opsEntryPatch(at("/ops/accounts?q=theo"), false);
+
+    expect(patch).not.toBeNull();
+    expect(previewPatch("https://xearch.invalid/ops/accounts?q=theo", patch!)).toBe("/?q=theo");
+  });
+
+  it("leaves every other address alone in the public build", () => {
+    expect(opsEntryPatch(at("/"), false)).toBeNull();
+    expect(opsEntryPatch(at("/nope"), false)).toBeNull();
   });
 });

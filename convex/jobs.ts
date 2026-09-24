@@ -42,6 +42,10 @@ const JOB_FEED_SCAN = 2_000;
 
 const JOB_FEED_LIMIT = 20;
 
+// The most a caller may ask for in one page (the /ops Jobs table shows
+// active work and recent history together, so it asks for more than 20).
+const JOB_FEED_MAX_LIMIT = 100;
+
 // Which kinds a caller wants. "account" is the full-history import that owns
 // a library row; "other" is everything else (live search, single post,
 // profile, follower/following lookups) — the split src/Dashboard.tsx's
@@ -52,6 +56,7 @@ export const list = query({
   args: {
     includeDismissed: v.optional(v.boolean()),
     scope: v.optional(jobScopeValidator),
+    limit: v.optional(v.number()),
   },
   returns: v.object({
     jobs: v.array(schema.doc("jobs")),
@@ -67,6 +72,14 @@ export const list = query({
     // shared feed, so nothing about the identity narrows what comes back.
     await user(ctx);
     const scope = args.scope ?? "all";
+
+    // v.number() lets NaN and Infinity through; either would slip past the
+    // page-size guard below, so they fall back to the default.
+    const requested =
+      args.limit !== undefined && Number.isFinite(args.limit) ? args.limit : JOB_FEED_LIMIT;
+
+    const limit = Math.max(1, Math.min(JOB_FEED_MAX_LIMIT, Math.floor(requested)));
+
     const out: Doc<"jobs">[] = [];
     let scanned = 0;
     let truncated = false;
@@ -82,7 +95,7 @@ export const list = query({
       if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
       out.push(job);
 
-      if (out.length >= JOB_FEED_LIMIT) break;
+      if (out.length >= limit) break;
     }
 
     return { jobs: out, truncated };
@@ -461,11 +474,13 @@ export const claim = internalMutation({
 
     if (!job || job.status !== "queued" || (job.readyAt ?? 0) > Date.now()) return null;
     const attempt = job.attempt + 1;
+    const now = Date.now();
     await ctx.db.patch(jobId, {
       status: "running",
       attempt,
+      attemptStartedAt: now,
       pageAttempt: (job.pageAttempt ?? 0) + 1,
-      updatedAt: Date.now(),
+      updatedAt: now,
       error: undefined,
       retryable: undefined,
     });
@@ -777,6 +792,32 @@ export const pinIdentity = internalMutation({
   },
 });
 
+/**
+ * What the "import failed" alert needs to say why: the sanitized provider
+ * message, the stage the job was in, and whether retrying can help. Shared
+ * by every path that ends a job in `failed`/`partial`.
+ */
+function jobFailureProperties(
+  job: Doc<"jobs">,
+  status: "failed" | "partial",
+  error: string,
+  cause: "provider" | "permanent" | "timeout",
+) {
+  return {
+    job_id: job._id,
+    kind: job.kind,
+    origin: job.origin ?? "manual",
+    status,
+    provider: "x.md",
+    stage: job.phase ?? "unknown",
+    attempt: job.attempt,
+    records: job.count,
+    cause,
+    error: sanitizeError(error),
+    duration_ms: Date.now() - job._creationTime,
+  };
+}
+
 /** How long a running job may go without any worker report before it is presumed dead. */
 export const EXPIRE_GRACE_MS = 180_000;
 
@@ -798,10 +839,36 @@ export const expire = internalMutation({
       return;
     }
 
-    await ctx.db.patch(job._id, {
-      status: job.count ? "partial" : "failed",
-      error: "Collection timed out. Only acknowledged captures are recorded; retry to continue.",
-      updatedAt: Date.now(),
+    const status = job.count ? "partial" : "failed";
+
+    const error =
+      "Collection timed out. Only acknowledged captures are recorded; retry to continue.";
+
+    await ctx.db.patch(job._id, { status, error, updatedAt: Date.now() });
+    // A timed-out job is as terminal as one x.md refused; it is reported the
+    // same way so the failure alert and the attempt history cover every way
+    // an import can stop.
+    await capturePostHog(ctx, {
+      distinctId: job.owner,
+      event: "job_attempt_finished",
+      properties: {
+        job_id: job._id,
+        kind: job.kind,
+        origin: job.origin ?? "manual",
+        provider: "x.md",
+        stage: job.phase ?? "unknown",
+        status,
+        attempt: job.attempt,
+        pages: job.pages ?? 0,
+        duration_ms: Date.now() - (job.attemptStartedAt ?? job.updatedAt),
+        records: job.count,
+        error: sanitizeError(error),
+      },
+    });
+    await capturePostHog(ctx, {
+      distinctId: job.owner,
+      event: "job_failed",
+      properties: jobFailureProperties(job, status, error, "timeout"),
     });
   },
 });
@@ -961,34 +1028,40 @@ export const finish = internalMutation({
     }
 
     await ctx.db.patch(job._id, patch);
-    await capturePostHog(ctx, {
-      distinctId: job.owner,
-      event: "job_attempt_finished",
-      properties: {
-        job_id: job._id,
-        kind: job.kind,
-        origin: job.origin ?? "manual",
-        provider: "x.md",
-        stage: job.phase ?? "unknown",
-        status: patch.status ?? "unknown",
-        attempt: args.attempt,
-        duration_ms: Date.now() - job.updatedAt,
-        records: patch.count ?? job.count,
-        error: args.error ? sanitizeError(args.error) : "",
-      },
-    });
+
+    // One event per attempt that ended in an error or ended the job. A bulk
+    // import hops through many pages per job; reporting every hop made this
+    // event four fifths of all traffic and told nobody anything the terminal
+    // event does not.
+    if (args.error || !continueImport)
+      await capturePostHog(ctx, {
+        distinctId: job.owner,
+        event: "job_attempt_finished",
+        properties: {
+          job_id: job._id,
+          kind: job.kind,
+          origin: job.origin ?? "manual",
+          provider: "x.md",
+          stage: job.phase ?? "unknown",
+          status: patch.status ?? "unknown",
+          attempt: args.attempt,
+          pages,
+          duration_ms: Date.now() - (job.attemptStartedAt ?? job.updatedAt),
+          records: patch.count ?? job.count,
+          error: args.error ? sanitizeError(args.error) : "",
+        },
+      });
 
     if (patch.status === "failed" || patch.status === "partial")
       await capturePostHog(ctx, {
         distinctId: job.owner,
         event: "job_failed",
-        properties: {
-          job_id: job._id,
-          kind: job.kind,
-          status: patch.status,
-          provider: "x.md",
-          duration_ms: Date.now() - job._creationTime,
-        },
+        properties: jobFailureProperties(
+          job,
+          patch.status,
+          args.error ?? "",
+          args.retryable === false ? "permanent" : "provider",
+        ),
       });
 
     if (continueImport)

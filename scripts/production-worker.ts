@@ -227,6 +227,11 @@ for (;;) {
                 ? error.retryAfter
                 : undefined
               : TRANSIENT_RETRY_MS,
+          // Same rule as convex/importer.ts: only a provider error that is
+          // not retryable is permanent, and a "configuration" error stays
+          // manually retryable because the operator can fix the deployment.
+          retryable:
+            !(error instanceof ProviderError) || error.retryable || error.code === "configuration",
         });
         log(`Job interrupted: ${describeFailure(error)}`);
       } finally {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { indexingUnavailableMessage } from "../src/integrationStatus";
+import { indexingUnavailableMessage, OPERATOR_SIGN_IN_NOTICE } from "../src/integrationStatus";
 
 describe("indexing availability guidance", () => {
   it("reports an offline worker in outbound mode", () => {
@@ -44,5 +44,13 @@ describe("indexing availability guidance", () => {
         collectorMode: "outbound",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("operator notice", () => {
+  // Tests import the operator build's `operatorBuild.ts` (no public alias).
+  it("does not send someone already on the operator dashboard to it", () => {
+    expect(OPERATOR_SIGN_IN_NOTICE).not.toContain("operator dashboard");
+    expect(OPERATOR_SIGN_IN_NOTICE).toContain("operator token");
   });
 });

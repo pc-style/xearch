@@ -3,6 +3,7 @@ import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
   conversationLabel,
   dedupeJobsByInput,
+  discoveredVia,
   exactClockTime,
   historyWindowLabel,
   historyWindowRange,
@@ -125,10 +126,8 @@ describe("jobKindLabel", () => {
 
 // /tmp/issues.md item 3: several failed "Conversation on @handle's post"
 // rows can otherwise share the exact same label, age, and retained-record
-// summary. `conversationLabel` is the shared helper both src/JobRow.tsx
-// (via `jobKindLabel`) and src/library/QueueTimeline.tsx's own fallback
-// label call, so a post job's identity reads the same distinguishable way
-// in both places.
+// summary. `conversationLabel` is the helper src/JobRow.tsx calls (via
+// `jobKindLabel`), so a post job's identity reads distinguishably.
 describe("conversationLabel / jobPostIdentity", () => {
   it("shortens a long snowflake post id to its last 6 digits", () => {
     expect(jobPostIdentity("https://x.com/theo/status/1839274653482910720")).toEqual({
@@ -205,5 +204,15 @@ describe("dedupeJobsByInput", () => {
     expect(rows[0]!.job).toBe(newest);
     expect(rows[0]!.earlierCount).toBe(2);
     expect(rows[1]!.earlierCount).toBe(0);
+  });
+});
+
+describe("discoveredVia", () => {
+  it("totals every source, not only the three it names", () => {
+    const discoveredFrom = ["a", "b", "c", "d"].map((handle) => ({ handle, interactions: 10 }));
+
+    expect(discoveredVia({ origin: "discovered", discoveredFrom })).toBe(
+      "Discovered via @a, @b, @c (40 interactions)",
+    );
   });
 });

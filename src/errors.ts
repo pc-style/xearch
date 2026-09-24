@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createSignal, type Accessor } from "solid-js";
 import { ConvexError } from "convex/values";
 
 /** Read a Convex mutation/action error the way the app wants to show it.
@@ -35,10 +35,9 @@ export type TaskOptions = {
  * flag, then either say `success` or say what went wrong — and always lower
  * the flag again, including when `fn` throws.
  *
- * This is a plain module-level function on purpose. The `finally` is the only
- * thing that guarantees the flag is cleared on every path, and React Compiler
- * cannot lower a `try`/`finally` written inside a component or hook. Keeping
- * the control flow here, and the state in the components, lets both be true.
+ * A plain module-level function: the `finally` is the one thing that
+ * guarantees the flag is cleared on every path, and keeping the control flow
+ * here and the state in the components means every caller gets it.
  */
 export async function runTask<T>(
   fn: () => Promise<T>,
@@ -61,9 +60,9 @@ export async function runTask<T>(
 
 export type Task = {
   /** True while `run`'s work is in flight. */
-  busy: boolean;
+  busy: Accessor<boolean>;
   /** The success notice or error text from the last run, or "". */
-  message: string;
+  message: Accessor<string>;
   setMessage: (message: string) => void;
   /** A bare string is shorthand for `{ success }`. */
   run: <T>(fn: () => Promise<T>, options?: string | TaskOptions) => Promise<void>;
@@ -133,19 +132,13 @@ export function createTaskRunner(
 
 /**
  * The busy flag and message line `runTask` reports to, owned as component
- * state. Components reach the runner through this hook rather than calling it
- * directly: a handler that closed over its own setters and passed them along
- * would read as a state updater with side effects in it, which is exactly the
- * tangle this replaces.
+ * state. The runner is built once per component, so its in-flight
+ * bookkeeping lives exactly as long as the component does.
  */
 export function useTask(): Task {
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  // Built once, lazily. The two setters are stable for the life of the
-  // component, so the runner captured here stays correct, and its in-flight
-  // bookkeeping survives re-renders — which is the whole point of it living
-  // outside the render body.
-  const [run] = useState(() => createTaskRunner(setBusy, setMessage));
+  const [busy, setBusy] = createSignal(false);
+  const [message, setMessage] = createSignal("");
+  const run = createTaskRunner(setBusy, setMessage);
 
   return { busy, message, setMessage, run };
 }
