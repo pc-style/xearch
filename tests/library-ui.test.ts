@@ -608,6 +608,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
       handle: "theo",
       name: "Theo",
     });
+
     setQuery(api.library.rows, { rows: [targeted], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
@@ -628,6 +629,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
       handle: "theo",
       name: "Theo",
     });
+
     setQuery(api.library.rows, { rows: [other], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
