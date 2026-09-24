@@ -7,7 +7,7 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
-import { postFields, searchStatsFields, sortValidator } from "./schema";
+import schema, { postFields, searchStatsFields, sortValidator } from "./schema";
 import {
   parseQuery,
   assertAuthorizedScope,
@@ -31,9 +31,39 @@ type SearchRequestBody = {
   includeStats?: true;
 };
 
+// The search API's own page size (`limit: 20` below, in `execute`) and
+// `lib/results.ts`'s decode-time `Schema.isMaxLength(20)` both already
+// bound a normal response to this. `complete` enforces it again because it
+// is an internalMutation, not the only caller of which is `execute` — a
+// future caller that skips the decode step must not be able to write an
+// unbounded `rows` array into `sessions` (see convex/_generated/ai/
+// guidelines.md "Do not store unbounded lists...", and the sessions.rows
+// schema comment).
+const MAX_SEARCH_ROWS = 20;
+
+const accountSummaryValidator = v.object({
+  _id: v.id("accounts"),
+  handle: v.string(),
+  name: v.string(),
+  avatar: v.optional(v.string()),
+});
+
+// Public and deliberately unauthenticated and unscoped: the home page's
+// creator ring must render before any session exists (this app's guest
+// sessions are created lazily), and a handle/display-name/avatar is public
+// X data, not private to whoever imported the account — see
+// /tmp/issues.md A2/C2. This is a scope decision, not the bug: the actual
+// fix here is narrowing the returned fields to exactly what's public and
+// needed, so a schema change elsewhere (e.g. adding an internal note field
+// to `accounts`) can never leak through this query by accident.
 export const accounts = query({
   args: {},
-  handler: (ctx) => ctx.db.query("accounts").withIndex("by_handle").take(100),
+  returns: v.array(accountSummaryValidator),
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("accounts").withIndex("by_handle").take(100);
+
+    return rows.map(({ _id, handle, name, avatar }) => ({ _id, handle, name, avatar }));
+  },
 });
 
 export const start = mutation({
@@ -49,6 +79,7 @@ export const start = mutation({
     scope: v.optional(summaryScopeValidator),
     includeStats: v.optional(v.boolean()),
   },
+  returns: v.id("sessions"),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
     parseQuery(args.raw);
@@ -88,6 +119,7 @@ export const start = mutation({
 
 export const results = query({
   args: { sessionId: v.id("sessions") },
+  returns: schema.doc("sessions"),
   handler: async (ctx, { sessionId }) => {
     const owner = await user(ctx);
     const session = await ctx.db.get(sessionId);
@@ -100,6 +132,7 @@ export const results = query({
 
 export const get = internalQuery({
   args: { sessionId: v.id("sessions") },
+  returns: v.union(v.null(), schema.doc("sessions")),
   handler: (ctx, { sessionId }) => ctx.db.get(sessionId),
 });
 
@@ -112,19 +145,42 @@ export const complete = internalMutation({
     stats: v.optional(v.object(searchStatsFields)),
     error: v.optional(v.string()),
   },
+  returns: v.null(),
   handler: async (ctx, { sessionId, ...rest }) => {
     const session = await ctx.db.get(sessionId);
 
-    if (!session || session.status === "failed" || session.status === "complete") return;
+    if (!session || session.status === "failed" || session.status === "complete") return null;
+
+    // Defense in depth: `execute` below already asks the search API for at
+    // most 20 rows and `lib/results.ts`'s decode already enforces the same
+    // cap, but this is an internalMutation and nothing stops a future
+    // caller from reaching it directly with more. Reject rather than
+    // silently slice — a truncated page presented as a full one is the
+    // exact "partial as a total" anti-pattern this codebase avoids
+    // elsewhere (see convex/summary.ts's Count comments).
+    if (rest.rows.length > MAX_SEARCH_ROWS) {
+      await ctx.db.patch(sessionId, {
+        status: "failed",
+        rows: [],
+        warnings: rest.warnings,
+        error: `The search service returned more than ${MAX_SEARCH_ROWS} results for one page.`,
+      });
+
+      return null;
+    }
+
     await ctx.db.patch(sessionId, {
       ...rest,
       status: rest.error ? "failed" : "complete",
     });
+
+    return null;
   },
 });
 
 export const expire = internalMutation({
   args: { sessionId: v.id("sessions") },
+  returns: v.null(),
   handler: async (ctx, { sessionId }) => {
     const session = await ctx.db.get(sessionId);
 
@@ -133,15 +189,18 @@ export const expire = internalMutation({
         status: "failed",
         error: "The search service timed out. Try again.",
       });
+
+    return null;
   },
 });
 
 export const execute = internalAction({
   args: { sessionId: v.id("sessions") },
-  handler: async (ctx, { sessionId }): Promise<void> => {
+  returns: v.null(),
+  handler: async (ctx, { sessionId }): Promise<null> => {
     const session: Doc<"sessions"> | null = await ctx.runQuery(internal.search.get, { sessionId });
 
-    if (!session || session.status !== "queued") return;
+    if (!session || session.status !== "queued") return null;
 
     try {
       const parsed = parseQuery(session.raw);
@@ -191,11 +250,14 @@ export const execute = internalAction({
             : "The search service could not return a valid result page. Try again or check its connection.",
       });
     }
+
+    return null;
   },
 });
 
 export const saved = query({
   args: {},
+  returns: v.array(schema.doc("saved")),
   handler: async (ctx) => {
     const owner = await user(ctx);
 
@@ -209,6 +271,7 @@ export const saved = query({
 
 export const save = mutation({
   args: { raw: v.string(), sort: sortValidator },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
     parseQuery(args.raw);
@@ -220,7 +283,7 @@ export const save = mutation({
       .withIndex("by_owner", (q) => q.eq("owner", owner))
       .take(31);
 
-    if (saved.some((s) => s.query === args.raw.trim() && s.sort === args.sort)) return;
+    if (saved.some((s) => s.query === args.raw.trim() && s.sort === args.sort)) return null;
 
     if (saved.length >= 30) throw new ConvexError("You can save 30 searches. Remove one first.");
     await ctx.db.insert("saved", {
@@ -228,22 +291,28 @@ export const save = mutation({
       query: args.raw.trim(),
       sort: args.sort,
     });
+
+    return null;
   },
 });
 
 export const removeSaved = mutation({
   args: { id: v.id("saved") },
+  returns: v.null(),
   handler: async (ctx, { id }) => {
     const owner = await user(ctx);
     const row = await ctx.db.get(id);
 
     if (row?.owner !== owner) throw new ConvexError("Search not found.");
     await ctx.db.delete(id);
+
+    return null;
   },
 });
 
 export const bookmarks = query({
   args: {},
+  returns: v.array(v.object(postFields)),
   handler: async (ctx) => {
     const owner = await user(ctx);
 
@@ -259,6 +328,7 @@ export const bookmarks = query({
 
 export const bookmark = mutation({
   args: { tweetId: v.string(), sessionId: v.optional(v.id("sessions")) },
+  returns: v.null(),
   handler: async (ctx, { tweetId, sessionId }) => {
     const owner = await user(ctx);
 
@@ -270,7 +340,7 @@ export const bookmark = mutation({
     if (existing) {
       await ctx.db.delete(existing._id);
 
-      return;
+      return null;
     }
 
     const session = sessionId ? await ctx.db.get(sessionId) : null;
@@ -288,5 +358,7 @@ export const bookmark = mutation({
     )
       throw new ConvexError("Remove a bookmark before saving another.");
     await ctx.db.insert("bookmarks", { owner, post });
+
+    return null;
   },
 });

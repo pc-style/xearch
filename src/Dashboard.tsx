@@ -8,7 +8,7 @@ import { indexingUnavailableMessage } from "./integrationStatus";
 import { describeError, useTask } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import Library from "./library/Library";
-import { useDashboardClock } from "./library/clock";
+import { useDashboardClock, useLiveNow } from "./library/clock";
 
 function Job({ job }: { job: Doc<"jobs"> }) {
   const [expanded, setExpanded] = useState(false),
@@ -142,7 +142,15 @@ export default function Dashboard({
   // exists throws into the app's error boundary — which only offers a
   // reload. The dashboard is reachable directly by URL, so that is a normal
   // first load, not an edge case.
-  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
+  //
+  // `useLiveNow`, not `useDashboardClock`: this feeds convex/worker.ts's
+  // tight 45s `isWorkerLive` window (via `config.indexing`/`config.handoff`
+  // below), which a bucketed `now` corrupts in either rounding direction —
+  // see that hook's comment in src/library/clock.ts. `Job`'s own `now`
+  // above is unrelated (a retry-countdown display, not a liveness check)
+  // and can stay on the coarser, shared clock.
+  const liveNow = useLiveNow();
+  const config = useQuery(api.integrations.operator, isAuthenticated ? { now: liveNow } : "skip");
   const [showDismissed, setShowDismissed] = useState(false);
 
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"

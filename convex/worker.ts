@@ -6,7 +6,7 @@ import { internal } from "./_generated/api";
 // function reference at runtime — see convex/publication.ts's header.
 import { anyApi } from "convex/server";
 import { v, ConvexError } from "convex/values";
-import { throttleProviderValidator } from "./schema";
+import schema, { throttleProviderValidator } from "./schema";
 import type { Doc } from "./_generated/dataModel";
 
 function authorize(token: string) {
@@ -18,8 +18,29 @@ function authorize(token: string) {
     throw new ConvexError("Worker authentication failed.");
 }
 
+// How recently `lastSeen` must have moved for the worker to count as live.
+// Mirrors src/integrationStatus.ts's WORKER_LIVE_WINDOW_MS exactly — keep
+// the two in sync if this ever changes.
+export const WORKER_LIVE_WINDOW_MS = 45_000;
+
+// Presence is a caller-visible fact only through this helper, never through
+// a bare `row.online` read: `online` alone cannot tell a worker that shut
+// down cleanly from one that vanished mid-heartbeat and never got to say so.
+// Combining it with freshness answers both — an explicit `online: false`
+// (graceful shutdown, see `heartbeat` below) reads as offline immediately
+// regardless of how recent `lastSeen` is, and a worker that stopped sending
+// heartbeats without saying so decays to offline once `lastSeen` goes stale,
+// with no scheduled write required to make that happen.
+export function isWorkerLive(
+  row: Pick<Doc<"collector">, "online" | "lastSeen"> | null | undefined,
+  now: number,
+): boolean {
+  return !!row?.online && now - row.lastSeen < WORKER_LIVE_WINDOW_MS;
+}
+
 export const heartbeat = internalMutation({
   args: { online: v.boolean() },
+  returns: v.null(),
   handler: async (ctx, { online }) => {
     const existing = await ctx.db
       .query("collector")
@@ -31,27 +52,22 @@ export const heartbeat = internalMutation({
     if (existing) await ctx.db.patch(existing._id, { online, lastSeen });
     else await ctx.db.insert("collector", { name: "desktop", online, lastSeen });
 
-    if (online)
-      await ctx.scheduler.runAfter(45_000, internal.worker.expire, {
-        lastSeen,
-      });
-  },
-});
-
-export const expire = internalMutation({
-  args: { lastSeen: v.number() },
-  handler: async (ctx, { lastSeen }) => {
-    const row = await ctx.db
-      .query("collector")
-      .withIndex("by_name", (q) => q.eq("name", "desktop"))
-      .unique();
-
-    if (row?.lastSeen === lastSeen) await ctx.db.patch(row._id, { online: false });
+    // No scheduled `expire` here on purpose. It used to schedule a write
+    // 45s out on every single heartbeat (every 5-8s in production), so
+    // heartbeats and their own not-yet-fired expirations piled up against
+    // the same single-row `collector` document and fought over it —
+    // `npx convex insights --prod` showed 1000+ OCC retries on
+    // `worker.js:expire` colliding with `worker.js:heartbeat`. Presence now
+    // decays purely by `isWorkerLive` reading `lastSeen` against a caller's
+    // own clock (see convex/integrations.ts), so nothing ever needs to run
+    // just to flip a boolean once time has passed.
+    return null;
   },
 });
 
 export const claimNext = internalMutation({
   args: {},
+  returns: v.union(v.null(), schema.doc("jobs")),
   handler: async (ctx): Promise<Doc<"jobs"> | null> => {
     if (
       await ctx.db
@@ -105,6 +121,7 @@ export const poll = action({
     // the receiver", never "the receiver is fine".
     receiver: v.optional(v.object({ healthy: v.boolean(), error: v.optional(v.string()) })),
   },
+  returns: v.union(v.null(), schema.doc("jobs")),
   handler: async (ctx, args): Promise<Doc<"jobs"> | null> => {
     authorize(args.token);
     await ctx.runMutation(internal.worker.heartbeat, {
@@ -198,7 +215,8 @@ export const report = action({
       }),
     ),
   },
-  handler: async (ctx, args): Promise<void> => {
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
     authorize(args.token);
     const base = { jobId: args.jobId, attempt: args.attempt };
 
@@ -215,7 +233,7 @@ export const report = action({
         throw new ConvexError("A throttle report must include the provider's own throttle facts.");
       await ctx.runMutation(internal.jobs.recordThrottle, { ...base, ...args.throttle });
 
-      return;
+      return null;
     }
 
     if (args.event === "phase")
@@ -249,5 +267,7 @@ export const report = action({
         expectedUserId: args.expectedUserId,
         profile: args.profile,
       });
+
+    return null;
   },
 });

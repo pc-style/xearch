@@ -4,6 +4,7 @@ import firecrawlTest from "@firecrawl/firecrawl-convex/test";
 import schema from "../convex/schema";
 import { EXPIRE_GRACE_MS } from "../convex/jobs";
 import { api, internal } from "../convex/_generated/api";
+import { isWorkerLive, WORKER_LIVE_WINDOW_MS } from "../convex/worker";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -170,10 +171,13 @@ describe("Convex application boundaries", () => {
     vi.stubEnv("COLLECTOR_MODE", "outbound");
     vi.stubEnv("X_MD_API_KEY", "test");
     await t.mutation(internal.worker.heartbeat, { online: false });
-    expect(await a.query(api.integrations.configured, {})).toMatchObject({ indexing: false });
+    const now = Date.now();
+    expect(await a.query(api.integrations.configured, { now })).toMatchObject({
+      indexing: false,
+    });
     // Collector mode and handoff state are operator facts, so they are only
     // on the session-gated query now — never on the public bootstrap.
-    expect(await a.query(api.integrations.operator, {})).toMatchObject({
+    expect(await a.query(api.integrations.operator, { now })).toMatchObject({
       handoff: false,
       indexing: false,
       collectorMode: "outbound",
@@ -182,9 +186,35 @@ describe("Convex application boundaries", () => {
       "worker is offline",
     );
     await t.mutation(internal.worker.heartbeat, { online: true });
-    expect(await a.query(api.integrations.operator, {})).toMatchObject({
+    expect(await a.query(api.integrations.operator, { now: Date.now() })).toMatchObject({
       handoff: true,
       indexing: true,
+    });
+  });
+  it("presence decays purely from `lastSeen`, with no scheduled expire: a worker that stops heartbeating without an explicit shutdown reads offline again once the liveness window passes, and an explicit shutdown reads offline immediately regardless of freshness", async () => {
+    const { t, a } = await setup();
+    vi.stubEnv("COLLECTOR_MODE", "outbound");
+    vi.stubEnv("X_MD_API_KEY", "test");
+    const start = Date.now();
+    await t.mutation(internal.worker.heartbeat, { online: true });
+    expect(await a.query(api.integrations.configured, { now: start })).toMatchObject({
+      indexing: true,
+    });
+    // Fresh: still live just before the 45s window elapses.
+    expect(await a.query(api.integrations.configured, { now: start + 44_000 })).toMatchObject({
+      indexing: true,
+    });
+    // Stale: no new heartbeat arrived, so a caller's own later clock (not a
+    // new write) is what flips this — the exact case a scheduled `expire`
+    // used to exist for, and no longer needs to.
+    expect(await a.query(api.integrations.configured, { now: start + 46_000 })).toMatchObject({
+      indexing: false,
+    });
+    // An explicit shutdown reads offline immediately, even at the same
+    // instant, without waiting out the freshness window.
+    await t.mutation(internal.worker.heartbeat, { online: false });
+    expect(await a.query(api.integrations.configured, { now: Date.now() })).toMatchObject({
+      indexing: false,
     });
   });
   it("blocks public email sending from unverified guest identities", async () => {
@@ -714,5 +744,32 @@ describe("Convex application boundaries", () => {
       "operators",
     );
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("convex/worker.ts's isWorkerLive (the derived-presence helper that replaced the scheduled `expire` mutation)", () => {
+  it("is not live when there is no row at all", () => {
+    expect(isWorkerLive(null, Date.now())).toBe(false);
+    expect(isWorkerLive(undefined, Date.now())).toBe(false);
+  });
+
+  it("is live while `lastSeen` is within the window and `online` is true", () => {
+    const now = Date.now();
+    expect(isWorkerLive({ online: true, lastSeen: now - (WORKER_LIVE_WINDOW_MS - 1) }, now)).toBe(
+      true,
+    );
+  });
+
+  it("goes stale on its own once the window passes, with no new write required", () => {
+    const lastSeen = Date.now();
+    expect(isWorkerLive({ online: true, lastSeen }, lastSeen + WORKER_LIVE_WINDOW_MS - 1)).toBe(
+      true,
+    );
+    expect(isWorkerLive({ online: true, lastSeen }, lastSeen + WORKER_LIVE_WINDOW_MS)).toBe(false);
+  });
+
+  it("reads offline immediately on an explicit `online: false`, regardless of how fresh `lastSeen` is", () => {
+    const now = Date.now();
+    expect(isWorkerLive({ online: false, lastSeen: now }, now)).toBe(false);
   });
 });

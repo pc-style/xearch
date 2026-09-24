@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
 import { useConvexAuth, useQuery } from "convex/react";
 import { Check } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { AccountBadge } from "../auth/AccountBadge";
 import { handoffReady, receiverConnection, type Connection } from "../integrationStatus";
+import { useLiveNow } from "../library/clock";
 
 /**
  * The Connections panel: which services this deployment has been given, and
@@ -21,17 +21,16 @@ export function ConnectionsPanel() {
   // Skipped until a session exists: `integrations.operator` requires one,
   // and asking early throws into the app's error boundary.
   const { isAuthenticated } = useConvexAuth();
-  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
-  // Worker liveness is judged against this clock, not inside the Convex
-  // query — a query re-runs when a document changes, never because time
-  // passed, so a server-decided boolean would stay true after the worker
-  // went quiet. Ticking here lets the row decay on its own.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 5_000);
-
-    return () => clearInterval(id);
-  }, []);
+  // Worker liveness is judged against this clock: convex/integrations.ts's
+  // `operator` takes `now` as a required arg (never reads the wall clock
+  // itself — a query re-runs when a document changes, never because time
+  // passed) and `handoffReady` below re-derives `handoffState.lastSeenAt`
+  // against this same ticking clock, so the reading keeps decaying between
+  // query re-runs instead of freezing at the last write. `useLiveNow`, not
+  // the bucketed dashboard clock — see its comment in src/library/clock.ts
+  // for why a rounded `now` cannot feed this 45s liveness window safely.
+  const now = useLiveNow();
+  const config = useQuery(api.integrations.operator, isAuthenticated ? { now } : "skip");
 
   const connections: Connection[] = [
     {

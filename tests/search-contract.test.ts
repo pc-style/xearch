@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
 
 /**
  * Freezes the application's half of the search boundary against
@@ -296,5 +297,92 @@ describe("authorized collection scope (fails closed)", () => {
     });
 
     expect(await t.run((ctx) => ctx.db.get(sessionId))).not.toHaveProperty("scope");
+  });
+});
+
+describe("search.accounts (home page creator ring)", () => {
+  async function seedAccount(t: ReturnType<typeof convexTest>) {
+    return t.run((ctx) =>
+      ctx.db.insert("accounts", {
+        handle: "theo",
+        userId: "u_theo",
+        name: "Theo",
+        avatar: "https://example.com/theo.jpg",
+      }),
+    );
+  }
+
+  it("is reachable without any session, by design — the home page ring renders before one exists", async () => {
+    const t = convexTest(schema, modules);
+    await seedAccount(t);
+    await expect(t.query(api.search.accounts, {})).resolves.toHaveLength(1);
+  });
+
+  it("returns only the public fields a creator avatar needs, never the internal provider userId", async () => {
+    const t = convexTest(schema, modules);
+    await seedAccount(t);
+    const [row] = await t.query(api.search.accounts, {});
+    expect(row).toEqual({
+      _id: row._id,
+      handle: "theo",
+      name: "Theo",
+      avatar: "https://example.com/theo.jpg",
+    });
+    expect(row).not.toHaveProperty("userId");
+    expect(row).not.toHaveProperty("_creationTime");
+  });
+});
+
+describe("search.complete's rows cap (defense in depth on top of the search API's own limit:20)", () => {
+  async function seedSession(t: ReturnType<typeof convexTest>, owner: Id<"users">) {
+    return t.run((ctx) =>
+      ctx.db.insert("sessions", {
+        owner,
+        raw: "convex",
+        sort: "relevance",
+        status: "running",
+        rows: [],
+        warnings: [],
+      }),
+    );
+  }
+
+  function post(n: number) {
+    return {
+      tweetId: `${n}`,
+      author: "theo",
+      text: "post",
+      url: `https://x.com/theo/status/${n}`,
+      links: [],
+    };
+  }
+
+  it("accepts exactly the search API's page size", async () => {
+    const t = convexTest(schema, modules);
+    const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const sessionId = await seedSession(t, alice);
+    await t.mutation(internal.search.complete, {
+      sessionId,
+      rows: Array.from({ length: 20 }, (_, i) => post(i)),
+      warnings: [],
+    });
+    const session = await t.run((ctx) => ctx.db.get(sessionId));
+    expect(session?.status).toBe("complete");
+    expect(session?.rows).toHaveLength(20);
+  });
+
+  it("rejects a page with more than 20 rows instead of silently storing or truncating it", async () => {
+    const t = convexTest(schema, modules);
+    const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const sessionId = await seedSession(t, alice);
+    await t.mutation(internal.search.complete, {
+      sessionId,
+      rows: Array.from({ length: 21 }, (_, i) => post(i)),
+      warnings: [],
+    });
+    const session = await t.run((ctx) => ctx.db.get(sessionId));
+    expect(session?.status).toBe("failed");
+    expect(session?.rows).toEqual([]);
+    expect(session?.error).toContain("more than 20 results");
   });
 });

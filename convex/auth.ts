@@ -6,6 +6,7 @@ import {
   type GenericActionCtxWithAuthConfig,
 } from "@convex-dev/auth/server";
 import { AgentMail } from "@agentmail/convex";
+import { v } from "convex/values";
 import { components } from "./_generated/api";
 import { query } from "./_generated/server";
 import type { DataModel } from "./_generated/dataModel";
@@ -70,6 +71,20 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
 // is nothing here for an ownership check to guard (see convex/access.ts).
 export const me = query({
   args: {},
+  // Pinned field-by-field rather than a raw `users` doc: this identity is
+  // exposed to the signed-in caller about themselves, but the shape must
+  // stay exactly what the UI needs, not whatever @convex-dev/auth's users
+  // table happens to store. A validator makes that a structural guarantee
+  // instead of "nobody edits this function later and forgets to keep
+  // hand-picking fields."
+  returns: v.union(
+    v.null(),
+    v.object({
+      isAnonymous: v.boolean(),
+      email: v.union(v.string(), v.null()),
+      emailVerified: v.boolean(),
+    }),
+  ),
   handler: async (ctx) => {
     const id = await getAuthUserId(ctx);
 
