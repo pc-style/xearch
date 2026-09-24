@@ -4,6 +4,7 @@ import {
   record,
   string,
   MAX_POSTS_PER_PAGE,
+  MAX_CHAIN_CONCURRENCY,
   type RawObject,
 } from "./xmd";
 import { CAPTURE_MAX_BYTES, jsonBytes, type Capture, type Receipt } from "./handoff";
@@ -67,6 +68,32 @@ export function splitHistoryPage(envelope: RawObject, budget = CAPTURE_BUDGET): 
   }
   if (slice.length) push();
   return parts;
+}
+
+/**
+ * One history page, tried a second time with the provider's maximum chain
+ * concurrency when x.md itself ran out of time on the first. x.md's gateway
+ * answers 504 at about two minutes; in production the huggingface and
+ * lauren_tan pages died there at every page size, so the page size is not
+ * the lever — how fast x.md assembles the page is. This is a single extra
+ * request, never pacing or a budget.
+ */
+async function historyPage(
+  client: XmdClient,
+  input: string,
+  options: Parameters<XmdClient["history"]>[1],
+  onStage?: (phase: string) => Promise<void>,
+): Promise<RawObject> {
+  try {
+    return await client.history(input, options);
+  } catch (error) {
+    const gaveUp =
+      error instanceof ProviderError &&
+      (error.code === "provider_timeout" || error.code === "http_504");
+    if (!gaveUp || options.concurrency !== undefined) throw error;
+    await onStage?.(`x.md ran out of time; asking again with ${MAX_CHAIN_CONCURRENCY} chains`);
+    return client.history(input, { ...options, concurrency: MAX_CHAIN_CONCURRENCY });
+  }
 }
 
 export type CollectionRequest = {
@@ -194,7 +221,7 @@ export async function collectXmd(
         refresh: request.refresh,
       };
       if (request.format !== "ndjson") {
-        const response = await client.history(request.input, options);
+        const response = await historyPage(client, request.input, options, onStage);
         // Preserve the complete provider envelope, including future fields.
         await addHistory(response);
         if (!Array.isArray(response.posts) || !response.meta)
