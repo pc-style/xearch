@@ -4,125 +4,25 @@
 // - Announce query validation errors to screen readers.
 // - Describe configuration without claiming a connection check.
 // - Make statistics accessible after a zero-match search.
-// Rendered with plain renderToStaticMarkup + createElement (no
-// ConvexProvider, no JSX file), matching this repo's no-jsdom test
-// convention (see tests/signed-out-states.test.ts and
-// tests/results-section-copy.test.ts).
 import { describe, expect, it } from "vitest";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { ResultsSection } from "../src/ResultsSection";
-import { ViewMode } from "../src/uiState";
-import { SearchStatus, SearchTrigger, type SearchAttemptSnapshot } from "../src/searchTelemetry";
-import type { Doc, Id } from "../convex/_generated/dataModel";
-import type { ResultPost } from "../convex/lib/results";
-
-const configured = {
-  indexing: true,
-  search: true,
-  firecrawl: true,
-  openai: true,
-  email: true,
-};
-
-const noop = () => {};
-
-function post(overrides: Partial<ResultPost> = {}): ResultPost {
-  return {
-    tweetId: "123",
-    author: "anthropicai",
-    text: "hello world",
-    url: "https://x.com/anthropicai/status/123",
-    links: [],
-    ...overrides,
-  };
-}
-
-function sessionId(id: string) {
-  // SAFETY: `Id<"sessions">` is `string & { __tableName: "sessions" }`, a
-  // subtype of `string`; this fixture helper attaches that brand to a
-  // test-authored id, same pattern as tests/jobText.test.ts's `jobId`/`userId`.
-  return id as Id<"sessions">;
-}
-
-function userId(id: string) {
-  // SAFETY: `Id<"users">` is `string & { __tableName: "users" }`, a subtype
-  // of `string`; this fixture helper attaches that brand to a test-authored
-  // id.
-  return id as Id<"users">;
-}
-
-function session(overrides: Partial<Doc<"sessions">> = {}): Doc<"sessions"> {
-  const base = {
-    _id: sessionId("s1"),
-    _creationTime: 0,
-    owner: userId("user-1"),
-    raw: "zzzqa-no-match-918273",
-    sort: "relevance" as const,
-    status: "complete" as const,
-    rows: [],
-    warnings: [],
-    ...overrides,
-  };
-
-  // SAFETY: `base` covers every required field of `Doc<"sessions">` (the
-  // fixture literal above lists them all); `overrides` only ever narrows
-  // optional or same-shaped fields, so this is a plain upcast to the full
-  // document type, not a lie about its shape.
-  return base as Doc<"sessions">;
-}
-
-const frontendStats: SearchAttemptSnapshot = {
-  attemptId: 1,
-  trigger: SearchTrigger.Submit,
-  submittedAt: 0,
-  mutationStartedAt: 0,
-  sessionAt: 0,
-  sessionId: null,
-  firstResultCommitAt: 0,
-  terminalCommitAt: 0,
-  status: SearchStatus.Complete,
-  terminalStatus: SearchStatus.Complete,
-  terminalRowCount: 0,
-  nextFramePaintAt: 0,
-  actualDurationMs: 1,
-  baseDurationMs: 1,
-  connectionAtSubmit: null,
-  connectionAtSession: null,
-  connectionAtTerminal: null,
-};
-
-function render(props: Partial<Parameters<typeof ResultsSection>[0]> = {}) {
-  return renderToStaticMarkup(
-    createElement(ResultsSection, {
-      view: ViewMode.Search,
-      raw: "zzzqa-no-match-918273",
-      configured,
-      result: undefined,
-      queryError: "",
-      visible: [],
-      bookmarkedIds: new Set<string>(),
-      busy: false,
-      onSearch: noop,
-      onSave: noop,
-      onOpenModal: noop,
-      onRetry: noop,
-      onLiveSearch: noop,
-      onWebContext: noop,
-      onLoadMore: noop,
-      onRead: noop,
-      onBookmark: noop,
-      onThread: noop,
-      isOperator: true,
-      ...props,
-    }),
-  );
-}
+import {
+  frontendStats,
+  configured,
+  post,
+  renderResults as render,
+  session,
+} from "./fixtures/results";
 
 describe("keep the query-driven X import available with zero matches", () => {
   it("shows 'Import from X' alongside 'Import an account' on a zero-match search", () => {
     const html = render({ result: session() });
     expect(html).toContain("Import from X");
+    expect(html).toContain("Import an account");
+  });
+
+  it("offers only 'Import an account' where importing from X can't run (not an operator)", () => {
+    const html = render({ result: session(), isOperator: false });
+    expect(html).not.toContain("Import from X");
     expect(html).toContain("Import an account");
   });
 });
@@ -133,9 +33,9 @@ describe("announce query validation errors to screen readers", () => {
     expect(html).toMatch(/<div class="empty" role="alert">/);
   });
 
-  it("keeps the header status text in a live region", () => {
+  it("keeps the results status text in a live region", () => {
     const html = render({ result: session() });
-    expect(html).toMatch(/<p aria-live="polite">/);
+    expect(html).toMatch(/<section class="results" aria-live="polite">/);
   });
 });
 
@@ -155,10 +55,6 @@ describe("describe configuration without claiming a connection check", () => {
   it("states the configuration requirement without claiming it alone enables search or calling it a connection (2nd CodeRabbit pass)", () => {
     const html = render({ configured: { ...configured, search: false } });
     expect(html).toContain("Search needs the search service to be configured for this site.");
-    // The old copy called the requirement a "connection" and said
-    // configuring it "will enable" search — neither is proven by
-    // `configured.search` alone. The operator-only "View connections" button
-    // is unrelated and stays; check the explanatory paragraph specifically.
     expect(html).not.toMatch(/<p>[^<]*connection[^<]*<\/p>/i);
     expect(html).not.toMatch(/will enable it/i);
   });
@@ -178,12 +74,8 @@ describe("uses singular 'post' for exactly one result loaded (2nd CodeRabbit pas
   });
 
   it("counts the merged rows after 'Load more', not just the latest page (N1)", () => {
-    // `result` is only the most recently landed backend page (App.tsx keeps
-    // it keyed by session/query/sort, not by how many pages have been
-    // appended); `visible` is what App.tsx actually renders after folding
-    // each new page into the accumulated list (`mergeSearchPages`). A
-    // header reading `result.rows.length` would freeze at one page's worth
-    // even once two pages are on screen.
+    // `result` is only the most recently landed backend page; `visible` is
+    // what App.tsx renders after folding each page into the list.
     const firstPage = [post(), post({ tweetId: "456" })];
     const secondPage = [post({ tweetId: "789" })];
 
@@ -199,30 +91,16 @@ describe("uses singular 'post' for exactly one result loaded (2nd CodeRabbit pas
 
 describe("make statistics accessible after a zero-match search", () => {
   it("still renders the stats panel when a completed search has zero matches", () => {
-    const html = render({
-      result: session(),
-      statsForNerds: true,
-      frontendStats,
-    });
+    const html = render({ result: session(), statsForNerds: true, frontendStats });
 
     expect(html).toContain("Stats for nerds —");
   });
 
-  it("still offers the stats toggle when a completed search has zero matches", () => {
-    const html = render({
-      result: session(),
-      onToggleStats: noop,
-    });
-
-    expect(html).toContain(">Stats for nerds<");
-  });
-
-  it("does not show stats controls for a failed search", () => {
+  it("does not show stats for a failed search", () => {
     const html = render({
       result: session({ status: "failed", error: "boom" }),
       statsForNerds: true,
       frontendStats,
-      onToggleStats: noop,
     });
 
     expect(html).not.toContain("Stats for nerds");

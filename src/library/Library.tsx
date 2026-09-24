@@ -1,6 +1,5 @@
-import type { ReactNode } from "react";
 import type { FunctionReturnType } from "convex/server";
-import { useConvexAuth, useConvexConnectionState, useQuery } from "convex/react";
+import { useConvex, useQuery } from "../data/convex";
 import { api } from "../../convex/_generated/api";
 import { summaryQuery, healthQuery } from "./summaryApi";
 import { limitsAllQuery } from "./limitsApi";
@@ -10,6 +9,9 @@ import AccountLibrary from "./AccountLibrary";
 import RecentActivity from "./RecentActivity";
 import "../dashboard.css";
 import { useDashboardClock } from "./clock";
+import { useStableQuery } from "./stableQuery";
+import { Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 
 type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
 
@@ -43,13 +45,7 @@ type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
  * with almost-but-not-quite-equal args. Taking the same values Dashboard.tsx
  * already computed is what makes them the exact same query.
  */
-export default function Library({
-  ensureSession,
-  config,
-  liveNow,
-  onOpenQueue,
-  otherImports,
-}: {
+export default function Library(props: {
   ensureSession: () => Promise<void>;
   config: OperatorConfig | undefined;
   liveNow: number;
@@ -58,55 +54,56 @@ export default function Library({
   // in here rather than rendered as this component's sibling. QA finding 5
   // (/tmp/issues-t3-dashboard-current.md #5) wants current work — the active
   // queue, then other imports — ahead of the potentially 49-card account
-  // library, so the two must interleave in one DOM order instead of sitting
-  // in separate parent components that can't be reordered against each
-  // other.
-  otherImports?: ReactNode;
+  // library, so the two must interleave in one DOM order.
+  otherImports?: JSX.Element;
 }) {
-  const { isAuthenticated } = useConvexAuth();
-  const connected = useConvexConnectionState().isWebSocketConnected;
+  const { isAuthenticated, connection } = useConvex();
+  const connected = () => connection().isWebSocketConnected;
   const now = useDashboardClock();
-  const summary = useQuery(summaryQuery, isAuthenticated ? { now } : "skip");
-  const health = useQuery(healthQuery, isAuthenticated ? { now } : "skip");
-  const limits = useQuery(limitsAllQuery, isAuthenticated ? {} : "skip");
+  // Stable: `now` ticks, and a plain query would blank these on every tick
+  // (src/library/stableQuery.ts).
+  const summary = useStableQuery(summaryQuery, () => (isAuthenticated() ? { now: now() } : "skip"));
+  const health = useStableQuery(healthQuery, () => (isAuthenticated() ? { now: now() } : "skip"));
+  const limits = useQuery(limitsAllQuery, () => (isAuthenticated() ? {} : "skip"));
   // Unfiltered rows for the active-queue strip, independent of whatever
-  // search/status filter is set inside <AccountLibrary>below. Same
+  // search/status filter is set inside <AccountLibrary> below. Same
   // convex/library.ts `rows` query, just a second live subscription with
   // different args — Convex serves each set of args as its own cached query.
-  const allLibrary = useQuery(api.library.rows, isAuthenticated ? {} : "skip");
-  const allRows = allLibrary?.rows;
+  const allLibrary = useQuery(api.library.rows, () => (isAuthenticated() ? {} : "skip"));
+  const allRows = () => allLibrary()?.rows;
 
   return (
-    <div className="library">
-      {!connected && (
-        <p className="library-offline-banner" role="status">
+    <div class="library">
+      <Show when={!connected()}>
+        <p class="library-offline-banner" role="status">
           Reconnecting to Convex — the figures below reflect the last data this page received, not
           necessarily the current state.
         </p>
-      )}
+      </Show>
       <OverviewStats
-        summary={summary}
-        health={health}
-        limits={limits}
-        config={config}
-        liveNow={liveNow}
-        connected={connected}
-        isAuthenticated={isAuthenticated}
+        summary={summary()}
+        health={health()}
+        limits={limits()}
+        config={props.config}
+        liveNow={props.liveNow}
+        connected={connected()}
+        isAuthenticated={isAuthenticated()}
       />
-      {/* QA finding 5: current work first. Active queue, then the
-          integrator's "Other imports" (non-account jobs), then the recent-
-          activity strip, with the potentially-49-row account library last —
-          previously the account library sat above the queue, burying the
-          one section that answers "what's happening right now" below the
-          entire job wall. */}
-      <ActiveQueue rows={allRows} isAuthenticated={isAuthenticated} onOpenQueue={onOpenQueue} />
-      {otherImports}
-      <RecentActivity rows={allRows} isAuthenticated={isAuthenticated} />
+      {/* QA finding 5: current work first. Active queue, then the "Other
+          imports" feed (non-account jobs), then the recent-activity strip,
+          with the potentially-49-row account library last. */}
+      <ActiveQueue
+        rows={allRows()}
+        isAuthenticated={isAuthenticated()}
+        onOpenQueue={props.onOpenQueue}
+      />
+      {props.otherImports}
+      <RecentActivity rows={allRows()} isAuthenticated={isAuthenticated()} />
       <AccountLibrary
-        isAuthenticated={isAuthenticated}
-        connected={connected}
+        isAuthenticated={isAuthenticated()}
+        connected={connected()}
         onConnect={() => {
-          void ensureSession();
+          void props.ensureSession();
         }}
       />
     </div>

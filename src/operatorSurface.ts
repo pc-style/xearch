@@ -1,4 +1,4 @@
-import { lazy, type ComponentType } from "react";
+import { lazy, type Component } from "solid-js";
 import { OPERATOR_BUILD } from "./operatorBuild";
 
 /**
@@ -33,9 +33,9 @@ export type DashboardProps = {
   onOpenQueue: () => void;
 };
 
-export const Dashboard: ComponentType<DashboardProps> | null = lazy(() => import("./Dashboard"));
+export const Dashboard: Component<DashboardProps> | null = lazy(() => import("./Dashboard"));
 
-export const ConnectionsPanel: ComponentType | null = lazy(() => import("./operator/Connections"));
+export const ConnectionsPanel: Component | null = lazy(() => import("./operator/Connections"));
 
 export type QueueTimelineProps = { close: () => void };
 
@@ -45,6 +45,6 @@ export type QueueTimelineProps = { close: () => void };
 // `operatorSurface.public.ts` resolves this to `null` instead, so nothing
 // in that file's module graph (including convex/queue.ts's operator-only
 // wire shapes) is reachable from the public bundle.
-export const QueueTimeline: ComponentType<QueueTimelineProps> | null = lazy(
+export const QueueTimeline: Component<QueueTimelineProps> | null = lazy(
   () => import("./library/QueueTimeline"),
 );

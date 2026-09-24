@@ -1,19 +1,8 @@
-// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi, getFunctionName } from "convex/server";
-import type {
-  ArgsAndOptions,
-  FunctionArgs,
-  FunctionReference,
-  FunctionReference_future,
-  FunctionReturnType,
-} from "convex/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
-import type { MutationOptions, Watch, WatchQueryOptions } from "convex/react";
-import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
+import type { Value } from "convex/values";
+import { fakeConvex, mount, renderHtml, stripMarkers } from "./solid";
 import schema from "../convex/schema";
 import type { Id } from "../convex/_generated/dataModel";
 import type { AccountLibraryRow } from "../convex/lib/contracts";
@@ -29,63 +18,17 @@ import AccountRow from "../src/library/AccountRow";
  * Each case drives the REAL Convex queries (convex/library.ts rows/history,
  * convex/summary.ts summary/health) against a local convex-test in-memory
  * deployment seeded here, then feeds the REAL return value into the REAL UI
- * component (AccountRow / OverviewStats) via react-dom/server, and prints
- * what actually came out. AccountRow calls useQuery/useMutation (convex/
- * react) directly, so it renders here under a REAL `ConvexProvider` backed by
- * `FakeConvexClient` below — a `ConvexReactClient` subclass that never opens
- * a socket (the base class only does that lazily, from its `sync` getter,
- * which the overrides here never touch) and instead answers `watchQuery`
- * from a response this test already fetched from the real backend above;
- * nothing here fabricates data the backend did not actually return. This
+ * component (AccountRow / OverviewStats), rendered into jsdom, and prints
+ * what actually came out. AccountRow reads Convex through src/data/convex,
+ * so it renders under a fake Convex app (tests/solid.ts) that answers each
+ * query from a response this test already fetched from the real backend
+ * above; nothing here fabricates data the backend did not actually return. This
  * does not touch search/ (Rust) or anything Pronsh owns, and does not
  * implement any indexer/watcher/registry. No paid import, no live
  * coordination, nothing merged or deployed.
  */
 
-const mockResponses = new Map<string, unknown>();
-
-/**
- * A faithful, in-memory `ConvexReactClient`: real subclass, so no assertion
- * is needed to hand it to `ConvexProvider`. `watchQuery` and `mutation` are
- * the only methods AccountRow's `useQuery`/`useMutation` calls reach (via
- * convex/react's own `client.ts`), so they're the only ones overridden;
- * every other inherited method still throws through the untouched `sync`
- * getter if anything ever calls it, which nothing here does.
- */
-class FakeConvexClient extends ConvexReactClient {
-  constructor() {
-    super("https://fake.convex.cloud");
-  }
-
-  override watchQuery<Query extends FunctionReference<"query"> | FunctionReference_future<"query">>(
-    query: Query,
-    ..._argsAndOptions: ArgsAndOptions<Query, WatchQueryOptions>
-  ): Watch<FunctionReturnType<Query>> {
-    const name = getFunctionName(query);
-
-    return {
-      onUpdate: () => () => {},
-      localQueryResult: () =>
-        // SAFETY: `mockResponses` is filled per-test with exactly the real
-        // query result convex-test returned for this function name, so this
-        // narrows a same-test round trip rather than trusting foreign input.
-        mockResponses.get(name) as FunctionReturnType<Query>,
-      journal: () => undefined,
-    };
-  }
-
-  override mutation<
-    Mutation extends FunctionReference<"mutation"> | FunctionReference_future<"mutation">,
-  >(
-    _mutation: Mutation,
-    ..._argsAndOptions: ArgsAndOptions<Mutation, MutationOptions<FunctionArgs<Mutation>>>
-  ): Promise<FunctionReturnType<Mutation>> {
-    // SAFETY: every mutation AccountRow calls (retry/start/cancel) is fired
-    // and forgotten in these render-only cases; none of them read the
-    // resolved value, so an empty resolution is a faithful stand-in.
-    return Promise.resolve(undefined as FunctionReturnType<Mutation>);
-  }
-}
+const mockResponses = new Map<string, Value>();
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -98,35 +41,22 @@ const summaryQ = anyApi.summary.summary;
 const healthQ = anyApi.summary.health;
 
 // QA finding 5 (/tmp/issues-t3-dashboard-current.md #5) moved AccountRow's
-// publication notes (failure text, the "still-good corpus" note, the
-// "Download complete" caveat) behind its "Show history"/"Hide history"
-// toggle, collapsed by default. `renderToStaticMarkup` can't click anything,
-// so this mounts with `react-dom/client` instead and clicks the toggle
-// before reading the DOM — the row's default-collapsed state is exercised
-// separately by tests/library-ui.test.ts.
+// publication notes (failure text, the "still-good corpus" note) behind its
+// "Show history" toggle, collapsed by default, so this clicks the toggle
+// before reading the DOM — the collapsed state is exercised separately by
+// tests/library-ui.test.ts.
 function renderRow(row: AccountLibraryRow): string {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
+  // `mockResponses` is filled per test with exactly the real query result
+  // convex-test returned for each function name.
+  const mounted = mount(
+    AccountRow,
+    { row },
+    fakeConvex({ query: (name) => mockResponses.get(name) }),
+  );
 
-  act(() => {
-    root.render(
-      createElement(
-        ConvexProvider,
-        { client: new FakeConvexClient() },
-        createElement(AccountRow, { row }),
-      ),
-    );
-  });
-
-  const toggle = container.querySelector<HTMLButtonElement>(".library-row-toggle");
-
-  if (toggle) act(() => toggle.click());
-
-  const html = container.innerHTML;
-
-  act(() => root.unmount());
-  container.remove();
+  mounted.container.querySelector<HTMLButtonElement>(".library-row-toggle")?.click();
+  const html = stripMarkers(mounted.html());
+  mounted.unmount();
 
   return html;
 }
@@ -191,9 +121,9 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(html).toContain("340 records retained");
     // The stale leftover `phase` field is legitimate as raw diagnostic
     // context ("Last phase: Saving raw capture" inside the expanded run's
-    // own raw-diagnostics <details>, unchanged by this row's compaction) —
-    // what must never happen is it standing alone as if it were the actual
-    // outcome, which is what a bare tag-content match rules out.
+    // own raw-diagnostics <details>) — what must never happen is it standing
+    // alone as if it were the actual outcome, which a bare tag-content match
+    // rules out.
     expect(html).not.toContain(">Saving raw capture<");
     expect(html).toContain(">Retry<");
   });
@@ -254,10 +184,9 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(html).not.toContain("library-row-failure");
     // /tmp/issues.md item 2: "Download complete" must never stand alone as
     // if it meant the account's entire X history was retrieved. QA finding 5
-    // (/tmp/issues-t3-dashboard-current.md #5) moved the caveat that makes
-    // that explicit out of this per-row component and into a single
-    // section-level note in AccountLibrary.tsx (see tests/library-ui.test.ts
-    // "dedupe" coverage) — it no longer renders from AccountRow itself.
+    // moved the caveat that makes that explicit out of this per-row
+    // component and into a single section-level note in AccountLibrary.tsx
+    // (see tests/library-ui.test.ts) — it no longer renders from AccountRow.
     expect(html).toContain("Download complete");
   });
 
@@ -403,17 +332,15 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(receiver).toMatchObject({ kind: "known", healthy: false, stale: false });
     expect(search).toEqual({ service: "search", kind: "unknown" });
 
-    const html = renderToStaticMarkup(
-      createElement(OverviewStats, {
-        summary: undefined,
-        health,
-        limits: undefined,
-        config: undefined,
-        liveNow: Date.now(),
-        connected: false,
-        isAuthenticated: true,
-      }),
-    );
+    const html = renderHtml(OverviewStats, {
+      summary: undefined,
+      health,
+      limits: undefined,
+      config: undefined,
+      liveNow: Date.now(),
+      connected: false,
+      isAuthenticated: true,
+    });
 
     console.log(
       "CASE5 UI shows stale caution text for indexer (not plain 'Healthy'):",

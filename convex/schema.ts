@@ -502,6 +502,11 @@ export default defineSchema({
     query: v.string(),
     sort: sortValidator,
   }).index("by_owner", ["owner"]),
+  // The home page's "popular posts" wall: a small, periodically refreshed
+  // copy of each imported account's most-liked posts (convex/wall.ts). Kept
+  // as its own bounded table, not derived per visit, so rendering the home
+  // page never costs a search-service round trip.
+  wallPosts: defineTable({ ...postFields, rank: v.number() }).index("by_rank", ["rank"]),
   bookmarks: defineTable({ owner: v.id("users"), post: v.object(postFields) })
     .index("by_owner", ["owner"])
     .index("by_post", ["owner", "post.tweetId"]),

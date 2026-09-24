@@ -1,9 +1,10 @@
-import { useConvexAuth, useQuery } from "convex/react";
-import { Check } from "lucide-react";
+import { For, Show } from "solid-js";
+import { useConvex, useQuery } from "../data/convex";
 import { api } from "../../convex/_generated/api";
 import { AccountBadge } from "../auth/AccountBadge";
 import { handoffReady, receiverConnection, type Connection } from "../integrationStatus";
 import { useLiveNow } from "../library/clock";
+import { Icon } from "../icons";
 
 /**
  * The Connections panel: which services this deployment has been given, and
@@ -20,7 +21,7 @@ import { useLiveNow } from "../library/clock";
 export function ConnectionsPanel() {
   // Skipped until a session exists: `integrations.operator` requires one,
   // and asking early throws into the app's error boundary.
-  const { isAuthenticated } = useConvexAuth();
+  const { isAuthenticated } = useConvex();
   // Worker liveness is judged against this clock: convex/integrations.ts's
   // `operator` takes `now` as a required arg (never reads the wall clock
   // itself — a query re-runs when a document changes, never because time
@@ -30,67 +31,77 @@ export function ConnectionsPanel() {
   // the bucketed dashboard clock — see its comment in src/library/clock.ts
   // for why a rounded `now` cannot feed this 45s liveness window safely.
   const now = useLiveNow();
-  const config = useQuery(api.integrations.operator, isAuthenticated ? { now } : "skip");
 
-  const connections: Connection[] = [
+  const config = useQuery(api.integrations.operator, () =>
+    isAuthenticated() ? { now: now() } : "skip",
+  );
+
+  const connections = (): Connection[] => [
     {
       name: "Search service",
-      ready: config?.search,
+      ready: config()?.search,
       purpose: "Finds posts in your library",
     },
-    receiverConnection(config?.collectorMode, handoffReady(config?.handoffState, now)),
+    receiverConnection(config()?.collectorMode, handoffReady(config()?.handoffState, now())),
     {
       name: "x.md",
-      ready: config?.xmd,
+      ready: config()?.xmd,
       purpose: "Account histories, live search, conversations",
     },
     {
       name: "Firecrawl",
-      ready: config?.firecrawl,
+      ready: config()?.firecrawl,
       purpose: "Reads pages linked in posts",
     },
     {
       name: "OpenAI",
-      ready: config?.openai,
+      ready: config()?.openai,
       purpose: "Turns a question into a clearer search",
     },
     {
       name: "AgentMail",
-      ready: config?.email,
+      ready: config()?.email,
       purpose: "Emails search results",
     },
   ];
 
+  const status = (c: Connection) =>
+    c.ready
+      ? c.proves === "live"
+        ? "Connected"
+        : "Configured"
+      : c.proves === "live"
+        ? "Not connected"
+        : "Not configured";
+
   return (
     <>
-      {connections.map((c) => (
-        <div className="connection-row" key={c.name}>
-          <div>
-            <strong>{c.name}</strong>
-            <p>{c.purpose}</p>
-            <small>
-              {!isAuthenticated ? (
-                "Sign in to view"
-              ) : config === undefined ? (
-                "Checking…"
-              ) : (
-                <>
-                  {c.ready ? <Check size={12} /> : <span className="status-dot" />}{" "}
-                  {c.ready
-                    ? c.proves === "live"
-                      ? "Connected"
-                      : "Configured"
-                    : c.proves === "live"
-                      ? "Not connected"
-                      : "Not configured"}
-                </>
-              )}
-            </small>
-            {c.note && <small>{c.note}</small>}
+      <For each={connections()}>
+        {(c) => (
+          <div class="connection-row">
+            <div>
+              <strong>{c.name}</strong>
+              <p>{c.purpose}</p>
+              <small>
+                <Show when={isAuthenticated()} fallback={"Sign in to view"}>
+                  <Show when={config()} fallback={"Checking…"}>
+                    <Show when={c.ready} fallback={<span class="status-dot" />}>
+                      <Icon name="check" size={12} />
+                    </Show>{" "}
+                    {status(c)}
+                  </Show>
+                </Show>
+              </small>
+              <Show when={c.note}>
+                <small>{c.note}</small>
+              </Show>
+            </div>
           </div>
-        </div>
-      ))}
-      {config?.collectorMode === "outbound" && <AccountBadge />}
+        )}
+      </For>
+      <Show when={config()?.collectorMode === "outbound"}>
+        <AccountBadge />
+      </Show>
     </>
   );
 }

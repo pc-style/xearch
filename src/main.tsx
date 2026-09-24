@@ -1,52 +1,63 @@
-import { createRoot } from "react-dom/client";
-import { ConvexReactClient } from "convex/react";
-import { ConvexAuthProvider } from "@convex-dev/auth/react";
-import { Component, StrictMode, type ReactNode } from "react";
+import { render } from "@solidjs/web";
+import { Errored } from "solid-js";
+import { BaseConvexClient } from "convex/browser";
 import App from "./App";
+import { ConvexContext, createConvexApp } from "./data/convex";
+import { createAuthClient } from "./data/auth";
+import { describeError } from "./errors";
 import { captureError, initPostHog } from "./posthog";
 import "./style.css";
 
-initPostHog();
+function Connected(props: { url: string }) {
+  const sync = new BaseConvexClient(props.url, () => {});
+  const auth = createAuthClient({ address: props.url, sync });
 
-class Boundary extends Component<{ children: ReactNode }, { error: boolean }> {
-  override state = { error: false };
-  static getDerivedStateFromError() {
-    return { error: true };
-  }
-  override componentDidCatch(error: Error) {
-    captureError(error, "react_boundary");
-  }
-  override render() {
-    return this.state.error ? (
-      <main className="setup">
-        <h1>Couldn't connect to Xearch.</h1>
-        <p>Check that the backend is running, then reload.</p>
-        <button onClick={() => location.reload()}>Reload</button>
-      </main>
-    ) : (
-      this.props.children
-    );
-  }
+  return (
+    <ConvexContext value={createConvexApp(sync, auth, auth)}>
+      <App />
+    </ConvexContext>
+  );
 }
+
+initPostHog();
 
 const url = import.meta.env.VITE_CONVEX_URL;
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    {url ? (
-      <Boundary>
-        <ConvexAuthProvider client={new ConvexReactClient(url)}>
-          <App />
-        </ConvexAuthProvider>
-      </Boundary>
+render(
+  () =>
+    url ? (
+      <Errored
+        fallback={(error) => {
+          const cause = error();
+          captureError(
+            cause instanceof Error ? cause : new Error(describeError(cause)),
+            "boundary",
+          );
+
+          // Not a connectivity message: this boundary also catches a query
+          // the backend answered with an error, and App's own banner already
+          // reports a lost connection.
+          return (
+            <main class="setup">
+              <h1>Something went wrong.</h1>
+              <p>{describeError(cause)}</p>
+              <button type="button" class="imp" onClick={() => location.reload()}>
+                Reload
+              </button>
+            </main>
+          );
+        }}
+      >
+        <Connected url={url} />
+      </Errored>
     ) : (
-      <main className="setup">
+      <main class="setup">
         <h1>Xearch</h1>
         <p>
           Start the backend with <code>bun run backend</code>, then restart the frontend. The local
           setup creates VITE_CONVEX_URL automatically.
         </p>
       </main>
-    )}
-  </StrictMode>,
+    ),
+  document.getElementById("root")!,
 );

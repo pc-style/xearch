@@ -1,6 +1,7 @@
-import { useConvexAuth, useConvexConnectionState, useMutation } from "convex/react";
+import { For, Show } from "solid-js";
 import { api } from "../../convex/_generated/api";
 import type { Timeline, TimelineEntry, WaitReason } from "../../convex/queue";
+import { useConvex, useMutation } from "../data/convex";
 import { queueTimelineQuery } from "./queueApi";
 import { useDashboardClock } from "./clock";
 import { useStableQuery } from "./stableQuery";
@@ -15,6 +16,7 @@ import {
 } from "../jobText";
 import { acquisitionStatusTone } from "./format";
 import { Badge } from "./format.tsx";
+import { Avatar } from "../Avatar";
 import "../dashboard.css";
 
 /**
@@ -132,180 +134,179 @@ function groupEntries(entries: TimelineEntry[]): Group[] {
   return groups;
 }
 
-function QueueIdentity({ entry }: { entry: TimelineEntry }) {
+function QueueIdentity(props: { entry: TimelineEntry }) {
   // `entry.input` is a handle for every kind except "post" (a status URL)
   // and "live" (a free-text search) — showing it as "@..." for those two
   // rendered "@https://x.com/…/status/…" and "@some search query", neither
   // of which is a handle. Only fall back to it when the job's own input
   // actually is one.
-  const handle =
-    entry.account?.handle ??
-    (entry.kind === "post" || entry.kind === "live" ? undefined : entry.input);
+  const handle = () =>
+    props.entry.account?.handle ??
+    (props.entry.kind === "post" || props.entry.kind === "live" ? undefined : props.entry.input);
 
-  const initial = (handle ?? fallbackLabel(entry)).slice(0, 1).toUpperCase();
-
-  // /tmp/issues.md item 2: a deep-history backfill window job now resolves
-  // to its real account (convex/lib/accounts.ts `resolveJobAccount` reads
+  // /tmp/issues.md item 2: a deep-history backfill window job resolves to
+  // its real account (convex/lib/accounts.ts `resolveJobAccount` reads
   // `historyFor`), so it renders under that account's own name/handle same
   // as its base import — but "@theo" alone doesn't say WHICH run this is.
   // This is the same "older history YYYY-MM → YYYY-MM" wording the account
   // library and the "Other imports" feed already use for the same job kind
-  // (src/jobText.ts `historyWindowRange`), so it reads as one consistent
-  // fact across every surface instead of a page-specific rewording.
-  const windowRange =
-    entry.origin === "history" && entry.since !== undefined && entry.until !== undefined
-      ? historyWindowRange(entry.since, entry.until)
+  // (src/jobText.ts `historyWindowRange`).
+  const windowRange = () => {
+    const { origin, since, until } = props.entry;
+
+    return origin === "history" && since !== undefined && until !== undefined
+      ? historyWindowRange(since, until)
       : undefined;
+  };
 
   return (
-    <div className="library-identity">
-      {entry.account?.avatar ? (
-        <img className="library-avatar" src={entry.account.avatar} alt="" />
-      ) : (
-        <span className="library-avatar-fallback" aria-hidden="true">
-          {initial}
-        </span>
-      )}
-      <div className="library-identity-text">
-        <h3>{entry.account?.name ?? fallbackLabel(entry)}</h3>
-        {handle !== undefined && <span>@{handle}</span>}
-        {windowRange && <span className="library-muted">{windowRange}</span>}
+    <div class="library-identity">
+      <Avatar
+        name={handle() ?? fallbackLabel(props.entry)}
+        url={props.entry.account?.avatar}
+        class="library-avatar"
+        fallbackClass="library-avatar-fallback"
+        letters={1}
+      />
+      <div class="library-identity-text">
+        <h3>{props.entry.account?.name ?? fallbackLabel(props.entry)}</h3>
+        <Show when={handle() !== undefined}>
+          <span>@{handle()}</span>
+        </Show>
+        <Show when={windowRange()}>
+          <span class="library-muted">{windowRange()}</span>
+        </Show>
       </div>
     </div>
   );
 }
 
+type RowActions = {
+  onRetry: (jobId: TimelineEntry["jobId"]) => Promise<void>;
+  onShowInDashboard: (accountId: string) => void;
+};
+
 // /tmp/issues.md item 3: the timeline told a retryable job "if retried now:
 // starts ≈ …" with nothing on the page that could actually retry it or take
-// a person to the matching row elsewhere — the only links on the whole page
-// were "Xearch home" and "Back to dashboard". `onRetry` calls the exact same
+// a person to the matching row elsewhere. `onRetry` calls the exact same
 // `api.jobs.retry` mutation src/library/AccountRow.tsx and src/JobRow.tsx
 // already use (same args shape, same `useTask` busy/error pattern); a
 // history-window job's retry is rejected server-side with its own honest
 // reason (convex/jobs.ts `retry`: "not retried on its own"), which is why
 // `retryable` below never offers the button for one in the first place.
 // `onShowInDashboard` sets a plain `#account-<id>` hash; the scroll itself
-// is done by src/library/AccountRow.tsx's own mount-time ref (CodeRabbit:
-// the browser's native hash-scroll fires before that row exists — App.tsx
-// mounts QueueTimeline and Dashboard from separate branches — and never
-// retries once it mounts, so this can't rely on that native behavior).
-function QueueTimelineRow({
-  entry,
-  showIdentity,
-  onRetry,
-  onShowInDashboard,
-}: {
-  entry: TimelineEntry;
-  showIdentity: boolean;
-  onRetry: (jobId: TimelineEntry["jobId"]) => Promise<void>;
-  onShowInDashboard: (accountId: string) => void;
-}) {
+// is done by src/library/AccountRow.tsx once that row mounts (the browser's
+// native hash-scroll fires before the row exists and never retries).
+function QueueTimelineRow(props: RowActions & { entry: TimelineEntry; showIdentity: boolean }) {
   const { busy, message, run } = useTask();
+
   // Never true for a history-window job — see `etaText`'s own comment: the
   // server rejects retrying one outright, so no Retry button is offered for
   // it here either.
-  const retryable = entry.waitReason.kind === "needsRetry" && entry.origin !== "history";
-  // A local const, not `entry.account` inline: TypeScript narrows a
-  // property access away by the time a closure below (the button's
-  // `onClick`) reads it, so this is what lets that closure see it as
-  // defined without a non-null assertion.
-  const account = entry.account;
+  const retryable = () =>
+    props.entry.waitReason.kind === "needsRetry" && props.entry.origin !== "history";
+
+  const throttled = () => {
+    const entry = props.entry;
+
+    return isThrottled(entry) ? entry : undefined;
+  };
 
   return (
-    <div className={`queue-timeline-row${isThrottled(entry) ? " is-throttled" : ""}`}>
-      {showIdentity && <QueueIdentity entry={entry} />}
-      <div className="queue-timeline-row-detail">
-        <Badge tone={acquisitionStatusTone(entry.status)}>
-          {acquisitionStatusLabel(entry.status)}
+    <div class={["queue-timeline-row", { "is-throttled": throttled() !== undefined }]}>
+      <Show when={props.showIdentity}>
+        <QueueIdentity entry={props.entry} />
+      </Show>
+      <div class="queue-timeline-row-detail">
+        <Badge tone={acquisitionStatusTone(props.entry.status)}>
+          {acquisitionStatusLabel(props.entry.status)}
         </Badge>
-        <span className="library-muted">
-          {entry.postsReceived !== undefined
-            ? `${entry.postsReceived.toLocaleString()} posts so far`
+        <span class="library-muted">
+          {props.entry.postsReceived !== undefined
+            ? `${props.entry.postsReceived.toLocaleString()} posts so far`
             : "No posts downloaded yet"}
         </span>
-        <span>{waitReasonText(entry)}</span>
-        <span className="library-muted">{etaText(entry)}</span>
+        <span>{waitReasonText(props.entry)}</span>
+        <span class="library-muted">{etaText(props.entry)}</span>
         {/* Only for "post" kind, matching src/JobRow.tsx's own choice: every
             other kind's identity (a handle, a search string) is already
             distinct without it, and several failed conversations otherwise
             share the same rounded age with nothing else to tell them apart. */}
-        {entry.kind === "post" && (
-          <span className="library-muted">started {formatClock(entry.createdAt)}</span>
-        )}
-        {isThrottled(entry) && (
-          // The shaded "throttle window" band: a full-width strip on every
-          // row this observed x.md throttle is currently holding back, with
-          // the provider's own reset time — never a guessed one.
-          <span className="queue-throttle-band" role="status">
-            x.md throttled until {formatClock(entry.waitReason.resetAt)}
+        <Show when={props.entry.kind === "post"}>
+          <span class="library-muted">started {formatClock(props.entry.createdAt)}</span>
+        </Show>
+        <Show when={throttled()}>
+          {(entry) => (
+            // The shaded "throttle window" band: a full-width strip on every
+            // row this observed x.md throttle is currently holding back, with
+            // the provider's own reset time — never a guessed one.
+            <span class="queue-throttle-band" role="status">
+              x.md throttled until {formatClock(entry().waitReason.resetAt)}
+            </span>
+          )}
+        </Show>
+        <Show when={props.entry.error}>
+          <span role="alert" class="library-row-failure">
+            {props.entry.error}
           </span>
-        )}
-        {entry.error && (
-          <span role="alert" className="library-row-failure">
-            {entry.error}
-          </span>
-        )}
-        {retryable && (
-          <div className="queue-timeline-row-actions">
+        </Show>
+        <Show when={retryable()}>
+          <div class="queue-timeline-row-actions">
             <button
               type="button"
-              disabled={busy}
-              onClick={() => void run(() => onRetry(entry.jobId))}
+              disabled={busy()}
+              onClick={() => {
+                void run(() => props.onRetry(props.entry.jobId));
+              }}
             >
-              {busy ? "Retrying…" : "Retry"}
+              {busy() ? "Retrying…" : "Retry"}
             </button>
-            {account && (
-              <button type="button" onClick={() => onShowInDashboard(account.accountId)}>
-                Show in dashboard
-              </button>
-            )}
+            <Show when={props.entry.account}>
+              {(account) => (
+                <button type="button" onClick={() => props.onShowInDashboard(account().accountId)}>
+                  Show in dashboard
+                </button>
+              )}
+            </Show>
           </div>
-        )}
-        {message && (
-          <span role="alert" className="library-row-failure">
-            {message}
+        </Show>
+        <Show when={message()}>
+          <span role="alert" class="library-row-failure">
+            {message()}
           </span>
-        )}
+        </Show>
       </div>
     </div>
   );
 }
 
-function QueueTimelineGroup({
-  group,
-  onRetry,
-  onShowInDashboard,
-}: {
-  group: Group;
-  onRetry: (jobId: TimelineEntry["jobId"]) => Promise<void>;
-  onShowInDashboard: (accountId: string) => void;
-}) {
-  const grouped = group.entries.length > 1;
-  const first = group.entries[0];
-  const accountFinish = first.estimate.accountFinish;
+function QueueTimelineGroup(props: RowActions & { group: Group }) {
+  const grouped = () => props.group.entries.length > 1;
+  const first = () => props.group.entries[0];
 
   return (
     <section
-      className={`queue-timeline-group${grouped ? " is-grouped" : ""}`}
-      aria-label={first.account?.handle ?? first.input}
+      class={["queue-timeline-group", { "is-grouped": grouped() }]}
+      aria-label={first().account?.handle ?? first().input}
     >
-      {grouped && (
-        <div className="queue-timeline-group-head">
-          <QueueIdentity entry={first} />
-          {accountFinish !== undefined && (
-            <span className="library-muted">download done ≈ {formatClock(accountFinish)}</span>
-          )}
+      <Show when={grouped()}>
+        <div class="queue-timeline-group-head">
+          <QueueIdentity entry={first()} />
+          <Show when={first().estimate.accountFinish}>
+            {(finish) => <span class="library-muted">download done ≈ {formatClock(finish())}</span>}
+          </Show>
         </div>
-      )}
-      {group.entries.map((entry) => (
-        <QueueTimelineRow
-          key={entry.jobId}
-          entry={entry}
-          showIdentity={!grouped}
-          onRetry={onRetry}
-          onShowInDashboard={onShowInDashboard}
-        />
-      ))}
+      </Show>
+      <For each={props.group.entries} keyed={(entry) => entry.jobId}>
+        {(entry) => (
+          <QueueTimelineRow
+            entry={entry()}
+            showIdentity={!grouped()}
+            onRetry={props.onRetry}
+            onShowInDashboard={props.onShowInDashboard}
+          />
+        )}
+      </For>
     </section>
   );
 }
@@ -322,55 +323,50 @@ function estimateInputsText(estimateInputs: Timeline["estimateInputs"]): string 
   return `Estimates based on ${estimateInputs.sampleSize} recent import${estimateInputs.sampleSize === 1 ? "" : "s"} (≈${perPage}s/page, ≈${perAccount} pages/account).`;
 }
 
-function QueueTimelineBody({
-  timeline,
-  onRetry,
-  onShowInDashboard,
-}: {
-  timeline: Timeline;
-  onRetry: (jobId: TimelineEntry["jobId"]) => Promise<void>;
-  onShowInDashboard: (accountId: string) => void;
-}) {
-  const { entries, estimateInputs, workerBusy, truncated } = timeline;
-  const throttled = entries.find(isThrottled);
-  const groups = groupEntries(entries);
+function QueueTimelineBody(props: RowActions & { timeline: Timeline }) {
+  const entries = () => props.timeline.entries;
+  const throttled = () => entries().find(isThrottled);
 
   return (
-    <div className="queue-timeline">
-      <div className="queue-timeline-summary">
+    <div class="queue-timeline">
+      <div class="queue-timeline-summary">
         <p>
-          {entries.length} job{entries.length === 1 ? "" : "s"} · worker{" "}
-          {workerBusy ? "busy" : "idle"}
-          {throttled ? ` · x.md throttled until ${formatClock(throttled.waitReason.resetAt)}` : ""}
+          {entries().length} job{entries().length === 1 ? "" : "s"} · worker{" "}
+          {props.timeline.workerBusy ? "busy" : "idle"}
+          {throttled()
+            ? ` · x.md throttled until ${formatClock(throttled()!.waitReason.resetAt)}`
+            : ""}
         </p>
-        <p className="library-muted">{estimateInputsText(estimateInputs)}</p>
-        {truncated && (
-          <p role="status" className="config-warning">
+        <p class="library-muted">{estimateInputsText(props.timeline.estimateInputs)}</p>
+        <Show when={props.timeline.truncated}>
+          <p role="status" class="config-warning">
             Some older jobs may be missing: the scan stopped at its limit.
           </p>
-        )}
+        </Show>
       </div>
-      {entries.length === 0 ? (
-        <p className="library-muted">Nothing queued.</p>
-      ) : (
-        <div className="queue-timeline-list">
-          {groups.map((group) => (
-            <QueueTimelineGroup
-              key={group.accountId ?? group.entries[0].jobId}
-              group={group}
-              onRetry={onRetry}
-              onShowInDashboard={onShowInDashboard}
-            />
-          ))}
+      <Show when={entries().length} fallback={<p class="library-muted">Nothing queued.</p>}>
+        <div class="queue-timeline-list">
+          <For
+            each={groupEntries(entries())}
+            keyed={(group) => group.accountId ?? group.entries[0].jobId}
+          >
+            {(group) => (
+              <QueueTimelineGroup
+                group={group()}
+                onRetry={props.onRetry}
+                onShowInDashboard={props.onShowInDashboard}
+              />
+            )}
+          </For>
         </div>
-      )}
+      </Show>
     </div>
   );
 }
 
-export default function QueueTimeline({ close }: { close: () => void }) {
-  const { isAuthenticated } = useConvexAuth();
-  const connected = useConvexConnectionState().isWebSocketConnected;
+export default function QueueTimeline(props: { close: () => void }) {
+  const { isAuthenticated, connection } = useConvex();
+  const connected = () => connection().isWebSocketConnected;
   const now = useDashboardClock();
   const retry = useMutation(api.jobs.retry);
 
@@ -378,69 +374,70 @@ export default function QueueTimeline({ close }: { close: () => void }) {
     retry({ jobId, ...operatorArgs() }).then(() => undefined);
 
   // A plain in-page anchor, not a route/state change: leaving the Queue page
-  // (`close()`) puts the dashboard back on screen. Setting the hash here
-  // still matters even though the target row doesn't exist yet at this
-  // exact instant — src/library/AccountRow.tsx's own mount-time ref reads
-  // this same `location.hash` once it mounts and scrolls itself into view
-  // then, rather than relying on the browser's native (one-shot, too-early)
-  // hash-scroll attempt.
+  // (`close()`) puts the dashboard back on screen, and
+  // src/library/AccountRow.tsx scrolls itself into view once it mounts and
+  // finds its own id in `location.hash`.
   const onShowInDashboard = (accountId: string) => {
-    close();
-
-    if (typeof window !== "undefined") window.location.hash = `account-${accountId}`;
+    props.close();
+    window.location.hash = `account-${accountId}`;
   };
 
-  // `useStableQuery`, not `useQuery`: `now` ticks on `useDashboardClock`'s own
-  // interval, and a bare `useQuery` reports `undefined` on every argument
-  // change until the new result lands — see src/library/stableQuery.ts.
-  // `operatorArgs()` because `convex/queue.ts` `timeline` is operator-gated,
-  // like every other paid-action-adjacent read this app makes.
-  const timeline = useStableQuery(
-    queueTimelineQuery,
-    isAuthenticated ? { now, ...operatorArgs() } : "skip",
+  // `useStableQuery`: `now` ticks on `useDashboardClock`'s own interval, and
+  // a plain query reads `undefined` on every argument change until the new
+  // result lands — see src/library/stableQuery.ts. `operatorArgs()` because
+  // `convex/queue.ts` `timeline` is operator-gated.
+  const timeline = useStableQuery(queueTimelineQuery, () =>
+    isAuthenticated() ? { now: now(), ...operatorArgs() } : "skip",
   );
 
   const route = useLocation();
-  // This component only ever mounts in the operator build (it is
-  // module-swapped out of the public one — see operatorSurface.ts), where
-  // src/App.tsx's own `dashboard` is `!route.search && !route.raw`, not the
-  // public build's literal `?dashboard=1` — the operator site opens at the
-  // dashboard by default (docs/production.md). src/App.tsx's `close` clears
-  // only the `queue` flag, leaving `search`/`raw` as they were, so this is
-  // exactly what decides whether "back" lands on the dashboard or on search.
-  const cameFromDashboard = !route.search && !route.raw;
+  // This component only ever mounts in the operator build, where
+  // src/App.tsx's own `dashboard` is `!route.search && !route.raw` — the
+  // operator site opens at the dashboard by default (docs/production.md).
+  // App's `close` clears only the `queue` flag, leaving `search`/`raw` as
+  // they were, so this is exactly what decides whether "back" lands on the
+  // dashboard or on search.
+  const cameFromDashboard = () => !route().search && !route().raw;
 
   return (
-    <main className="control-room">
-      <header className="topbar">
-        <button type="button" className="wordmark" onClick={close} aria-label="Xearch home">
-          xearch<span className="wordmark-dot">.</span>
+    <main class="control-room">
+      <header class="top">
+        <button
+          type="button"
+          class="logo press"
+          onClick={() => props.close()}
+          aria-label="Xearch home"
+        >
+          xearch <i>.</i>
         </button>
       </header>
-      <header className="control-header">
+      <header class="control-header">
         <div>
-          <button onClick={close}>
-            {cameFromDashboard ? "Back to dashboard" : "Back to search"}
+          <button type="button" onClick={() => props.close()}>
+            {cameFromDashboard() ? "Back to dashboard" : "Back to search"}
           </button>
           <h1>Queue timeline</h1>
           <p>What the worker is going to do next, and when.</p>
         </div>
-        <span className={connected ? "control-online" : "control-error"}>
-          {connected ? "Live connection" : "Reconnecting…"}
+        <span class={connected() ? "control-online" : "control-error"}>
+          {connected() ? "Live connection" : "Reconnecting…"}
         </span>
       </header>
-      <div className="control-main">
-        {!isAuthenticated ? (
-          <p className="library-muted">Start a session to view the queue.</p>
-        ) : !timeline ? (
-          <p className="library-loading">Loading queue timeline…</p>
-        ) : (
-          <QueueTimelineBody
-            timeline={timeline}
-            onRetry={onRetry}
-            onShowInDashboard={onShowInDashboard}
-          />
-        )}
+      <div class="control-main">
+        <Show
+          when={isAuthenticated()}
+          fallback={<p class="library-muted">Start a session to view the queue.</p>}
+        >
+          <Show when={timeline()} fallback={<p class="library-loading">Loading queue timeline…</p>}>
+            {(loaded) => (
+              <QueueTimelineBody
+                timeline={loaded()}
+                onRetry={onRetry}
+                onShowInDashboard={onShowInDashboard}
+              />
+            )}
+          </Show>
+        </Show>
       </div>
     </main>
   );

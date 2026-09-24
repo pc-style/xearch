@@ -1,3 +1,4 @@
+import { For, Show } from "solid-js";
 import type { AccountLibraryRow } from "../../convex/lib/contracts";
 import { DOWNLOAD_COMPLETE_CAVEAT, acquisitionStatusLabel } from "../jobText";
 import { acquisitionStatusTone, countWithUnit, formatRelative } from "./format";
@@ -25,67 +26,65 @@ type RowWithJob = AccountLibraryRow & {
  * reads — so it needs no new query and cannot show anything beyond what the
  * account library itself already received.
  */
-export default function RecentActivity({
-  rows,
-  isAuthenticated,
-}: {
+export default function RecentActivity(props: {
   rows: AccountLibraryRow[] | undefined;
   isAuthenticated: boolean;
 }) {
-  if (!rows)
-    return (
-      <section className="library-section" aria-label="Recent run history">
-        <h2>Recent run history</h2>
-        {/* Skipped-because-signed-out and still-loading both arrive as
-            `undefined`; they are different states and get different words. */}
-        {isAuthenticated ? (
-          <p className="library-loading">Loading recent activity…</p>
-        ) : (
-          <p className="library-muted">Connect to see your recent runs.</p>
-        )}
-      </section>
-    );
-
-  const recent: RowWithJob[] = rows
-    .filter((r): r is RowWithJob => r.latestJob !== undefined)
-    .sort((a, b) => b.latestJob.updatedAt - a.latestJob.updatedAt)
-    .slice(0, RECENT_LIMIT);
+  const recent = () =>
+    (props.rows ?? [])
+      .filter((r): r is RowWithJob => r.latestJob !== undefined)
+      .sort((a, b) => b.latestJob.updatedAt - a.latestJob.updatedAt)
+      .slice(0, RECENT_LIMIT);
 
   return (
-    <section className="library-section" aria-label="Recent run history">
-      <div className="library-section-head">
-        <h2>Recent run history</h2>
-        <p className="library-muted">
-          The most recent runs across your library. Expand an account in the library below for its
-          full history and receipts. {DOWNLOAD_COMPLETE_CAVEAT}
-        </p>
-      </div>
-      {recent.length === 0 ? (
-        <p className="library-muted">No runs recorded yet.</p>
-      ) : (
-        // Reuses <ActiveQueue>'s row styling (.library-queue-*) on purpose:
-        // same visual shape (identity + status badge + timestamp), just a
-        // different, broader set of rows — not worth a parallel CSS block.
-        <div className="library-queue-list">
-          {recent.map((row) => (
-            <div className="library-queue-row" key={row.accountId}>
-              <span className="library-queue-identity">
-                {row.name} <span className="library-muted">@{row.handle}</span>
-              </span>
-              <Badge tone={acquisitionStatusTone(row.latestJob.status)}>
-                {acquisitionStatusLabel(row.latestJob.status)}
-              </Badge>
-              {/* /tmp/issues.md item 2: a bare "Download complete" reads as
-                  a complete archive. What is actually known and library-wide
-                  honest at this point — without inventing a number the
-                  contract does not expose here — is how many of this
-                  account's posts are confirmed searchable right now. */}
-              <span className="library-muted">{countWithUnit(row.searchablePostCount)}</span>
-              <span className="library-muted">{formatRelative(row.latestJob.updatedAt)}</span>
-            </div>
-          ))}
+    <Show
+      when={props.rows}
+      fallback={
+        <section class="library-section" aria-label="Recent run history">
+          <h2>Recent run history</h2>
+          {/* Skipped-because-signed-out and still-loading both arrive as
+              `undefined`; they are different states and get different words. */}
+          <Show
+            when={props.isAuthenticated}
+            fallback={<p class="library-muted">Connect to see your recent runs.</p>}
+          >
+            <p class="library-loading">Loading recent activity…</p>
+          </Show>
+        </section>
+      }
+    >
+      <section class="library-section" aria-label="Recent run history">
+        <div class="library-section-head">
+          <h2>Recent run history</h2>
+          <p class="library-muted">
+            The most recent runs across your library. Expand an account in the library below for its
+            full history and receipts. {DOWNLOAD_COMPLETE_CAVEAT}
+          </p>
         </div>
-      )}
-    </section>
+        <Show when={recent().length} fallback={<p class="library-muted">No runs recorded yet.</p>}>
+          {/* Reuses <ActiveQueue>'s row styling on purpose: same shape, a
+              broader set of rows. */}
+          <div class="library-queue-list">
+            <For each={recent()} keyed={(row) => row.accountId}>
+              {(row) => (
+                <div class="library-queue-row">
+                  <span class="library-queue-identity">
+                    {row().name} <span class="library-muted">@{row().handle}</span>
+                  </span>
+                  <Badge tone={acquisitionStatusTone(row().latestJob.status)}>
+                    {acquisitionStatusLabel(row().latestJob.status)}
+                  </Badge>
+                  {/* /tmp/issues.md item 2: a bare "Download complete" reads
+                      as a complete archive; what is known is how many of
+                      this account's posts are confirmed searchable. */}
+                  <span class="library-muted">{countWithUnit(row().searchablePostCount)}</span>
+                  <span class="library-muted">{formatRelative(row().latestJob.updatedAt)}</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+      </section>
+    </Show>
   );
 }

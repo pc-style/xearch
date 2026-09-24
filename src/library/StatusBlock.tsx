@@ -1,3 +1,4 @@
+import { For, Show } from "solid-js";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import type { ServiceStatus } from "../../convex/summary";
@@ -9,7 +10,7 @@ import {
   receiverConnection,
   handoffReady,
 } from "../integrationStatus";
-import { formatRelative } from "./format";
+import { formatRelative, type Tone } from "./format";
 import { Badge } from "./format.tsx";
 import ProviderLimits from "./ProviderLimits";
 
@@ -24,112 +25,109 @@ type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
  * provider limits only ever appear when a provider has actually reported
  * being throttled, never as a permanent "all clear" row nobody asked for.
  */
-export default function StatusBlock({
-  config,
-  health,
-  limits,
-  liveNow,
-  isAuthenticated,
-}: {
+export default function StatusBlock(props: {
   config: OperatorConfig | undefined;
   health: ServiceStatus[] | undefined;
   limits: ProviderLimit[] | undefined;
-  // The SAME exact, unbucketed clock `config` was fetched with (a prop, not
-  // its own `useDashboardClock()`/`useLiveNow()` call): convex/integrations.ts's
-  // `operator` requires `now` to compute `config.handoff` against
-  // convex/worker.ts's tight 45s `isWorkerLive` window, and `handoffReady`
-  // below re-derives that same liveness fact against a ticking clock so the
-  // reading keeps decaying between query re-runs — see src/library/clock.ts's
-  // `useLiveNow` comment for why a bucketed `now` cannot feed either of those
-  // safely, and src/operator/Connections.tsx for the same one-clock pattern.
+  // The SAME exact, unbucketed clock `config` was fetched with: `operator`
+  // computes `config.handoff` against convex/worker.ts's tight 45s window,
+  // and `handoffReady` below re-derives that liveness against a ticking
+  // clock — see src/library/clock.ts's `useLiveNow` for why a bucketed
+  // `now` can feed neither safely.
   liveNow: number;
   isAuthenticated: boolean;
 }) {
-  const connections: Connection[] = [
-    { name: "x.md", ready: config?.xmd, purpose: "Account histories, live search, conversations" },
-    receiverConnection(config?.collectorMode, handoffReady(config?.handoffState, liveNow)),
-    { name: "Search backend", ready: config?.search, purpose: "Finds posts in the library" },
-    { name: "Firecrawl", ready: config?.firecrawl, purpose: "Reads pages linked in posts" },
-    { name: "OpenAI", ready: config?.openai, purpose: "Turns a question into a clearer search" },
-    { name: "AgentMail", ready: config?.email, purpose: "Emails search results" },
+  const connections = (): Connection[] => [
+    {
+      name: "x.md",
+      ready: props.config?.xmd,
+      purpose: "Account histories, live search, conversations",
+    },
+    receiverConnection(
+      props.config?.collectorMode,
+      handoffReady(props.config?.handoffState, props.liveNow),
+    ),
+    { name: "Search backend", ready: props.config?.search, purpose: "Finds posts in the library" },
+    { name: "Firecrawl", ready: props.config?.firecrawl, purpose: "Reads pages linked in posts" },
+    {
+      name: "OpenAI",
+      ready: props.config?.openai,
+      purpose: "Turns a question into a clearer search",
+    },
+    { name: "AgentMail", ready: props.config?.email, purpose: "Emails search results" },
   ];
 
-  // The download worker's row (`proves: "live"`) is a liveness fact — a
-  // heartbeat observed or not — never a configuration fact, so it must
-  // never share the word "Configured"/"Not configured" with the rows that
-  // really are env-var presence checks.
-  //
-  // CodeRabbit (PR #48): `workerLastSeenAt` is the last heartbeat this app
-  // ever received, not the moment the worker went offline — those are
-  // different claims, and "Offline since {x}" reads as the latter. Split
-  // the row into a stable status word (`word`, in a polite live region) and
-  // a separately-rendered "last seen" detail: correct wording, and the
-  // still-ticking relative-time text no longer sits inside the announced
-  // region, so `useDashboardClock`'s periodic refresh does not re-announce
-  // the same unchanged status every tick.
-  const workerLastSeenAt =
-    config?.handoffState?.kind === "live" ? config.handoffState.lastSeenAt : undefined;
+  // `lastSeenAt` is the last heartbeat ever received, not the moment the
+  // worker went offline — so it is a separate "last seen" detail, kept out
+  // of the live region so a clock tick never re-announces an unchanged status.
+  const workerLastSeenAt = () =>
+    props.config?.handoffState?.kind === "live" ? props.config.handoffState.lastSeenAt : undefined;
+
+  const tone = (status: ServiceStatus): Tone =>
+    status.kind === "unknown"
+      ? "neutral"
+      : status.stale
+        ? "warning"
+        : status.healthy
+          ? "positive"
+          : "danger";
 
   return (
-    <div className="library-status">
-      <h3 className="library-subhead">Status</h3>
-      <div className="library-status-connections">
-        {connections.map((c) => {
-          const { word, detail } = connectionStatus(c, config, isAuthenticated, workerLastSeenAt);
+    <div class="library-status">
+      <h3 class="library-subhead">Status</h3>
+      <div class="library-status-connections">
+        <For each={connections()}>
+          {(c) => {
+            const state = () =>
+              connectionStatus(c, props.config, props.isAuthenticated, workerLastSeenAt());
 
-          return (
-            <div className="library-status-row" key={c.name}>
-              <span>{c.name}</span>
-              <span className="library-muted">
-                {/* Only `word` is inside the live region: it changes when
-                    the connection's actual state changes, never on its own
-                    just because the clock ticked. */}
-                <span aria-live="polite">{word}</span>
-                {detail && ` · last seen ${formatRelative(detail, liveNow)}`}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <div className="library-health-row">
-        {!health
-          ? (["indexer", "receiver", "search"] as const).map((service) => (
-              <Badge key={service} tone="neutral">
-                <span aria-live="polite">
-                  {SERVICE_DISPLAY_NAME[service]}:{" "}
-                  {isAuthenticated ? "loading…" : "connect to view"}
+            return (
+              <div class="library-status-row">
+                <span>{c.name}</span>
+                <span class="library-muted">
+                  <span aria-live="polite">{state().word}</span>
+                  <Show when={state().detail}>
+                    {(detail) => ` · last seen ${formatRelative(detail(), props.liveNow)}`}
+                  </Show>
                 </span>
-              </Badge>
-            ))
-          : health.map((status) => {
-              const tone =
-                status.kind === "unknown"
-                  ? "neutral"
-                  : status.stale
-                    ? "warning"
-                    : status.healthy
-                      ? "positive"
-                      : "danger";
-
-              return (
-                <Badge key={status.service} tone={tone}>
-                  {/* CodeRabbit (PR #48): only the service's actual result
-                      sits in the live region — the still-ticking "last
-                      success Xm ago" text (recomputed on every `liveNow`
-                      re-render, whether or not health changed) stays
-                      outside it, or it would get announced as a new status
-                      on every re-render. */}
-                  <span aria-live="polite">
-                    {SERVICE_DISPLAY_NAME[status.service]}: {serviceHealthLabel(status)}
-                  </span>
-                  {status.kind === "known" && status.lastSuccessAt !== undefined
-                    ? ` (last success ${formatRelative(status.lastSuccessAt)})`
-                    : ""}
-                </Badge>
-              );
-            })}
+              </div>
+            );
+          }}
+        </For>
       </div>
-      <ProviderLimits limits={limits} isAuthenticated={isAuthenticated} />
+      <div class="library-health-row">
+        <Show
+          when={props.health}
+          fallback={
+            <For each={["indexer", "receiver", "search"] as const}>
+              {(service) => (
+                <Badge tone="neutral">
+                  <span aria-live="polite">
+                    {SERVICE_DISPLAY_NAME[service]}:{" "}
+                    {props.isAuthenticated ? "loading…" : "connect to view"}
+                  </span>
+                </Badge>
+              )}
+            </For>
+          }
+        >
+          <For each={props.health!}>
+            {(status) => (
+              <Badge tone={tone(status)}>
+                {/* Only the result sits in the live region; the ticking
+                    "last success" text stays outside it. */}
+                <span aria-live="polite">
+                  {SERVICE_DISPLAY_NAME[status.service]}: {serviceHealthLabel(status)}
+                </span>
+                {status.kind === "known" && status.lastSuccessAt !== undefined
+                  ? ` (last success ${formatRelative(status.lastSuccessAt)})`
+                  : ""}
+              </Badge>
+            )}
+          </For>
+        </Show>
+      </div>
+      <ProviderLimits limits={props.limits} isAuthenticated={props.isAuthenticated} />
     </div>
   );
 }
@@ -142,12 +140,16 @@ export default function StatusBlock({
  * from render, so a screen reader's live region only ever receives `word`
  * — the fact that actually changed — never the ticking relative-time text.
  */
+/** A connection's one-word state, and when there is one, the last heartbeat
+ * time the ticking detail line is rendered from. */
+type ConnectionStatus = { word: string; detail?: number };
+
 function connectionStatus(
   c: Connection,
   config: OperatorConfig | undefined,
   isAuthenticated: boolean,
   workerLastSeenAt: number | null | undefined,
-) {
+): ConnectionStatus {
   if (!isAuthenticated) return { word: "Sign in to view" };
 
   if (!config) return { word: "Checking…" };
@@ -155,18 +157,9 @@ function connectionStatus(
   if (c.proves === "live") {
     if (c.ready) return { word: "Online" };
 
-    // CodeRabbit (PR #48): a real fix for "never observed" vs. "observed
-    // offline" needs `convex/integrations.ts` to stop collapsing "no
-    // worker record has ever existed" into the same `lastSeenAt: null` it
-    // uses for "observed, and not currently online" (still true as of #44 —
-    // that PR reworked worker-liveness plumbing but kept this exact
-    // collapse) — out of scope here, since convex/ is owned by other work.
-    // This still reports the honest, weaker claim available from what the
-    // backend sends today: a real last-heartbeat time when there is one,
-    // "Offline" with no invented time when there isn't. A domain check
-    // (nullish, not `typeof`) is enough: `workerLastSeenAt` is already
-    // `number | null | undefined` at its one source (`config.handoffState`,
-    // parsed at that boundary), never an unparsed representation.
+    // "Never observed" and "observed, now offline" both arrive as a null
+    // `lastSeenAt` today (convex/integrations.ts); report the honest,
+    // weaker claim: a real last-heartbeat time when there is one.
     return workerLastSeenAt === undefined || workerLastSeenAt === null
       ? { word: "Offline" }
       : { word: "Offline", detail: workerLastSeenAt };

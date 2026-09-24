@@ -1,19 +1,8 @@
-// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import { getFunctionName } from "convex/server";
-import type { FunctionReturnType, UserIdentityAttributes } from "convex/server";
-import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
-import type { ConvexReactClientOptions } from "convex/react";
 import type { Value } from "convex/values";
-import type {
-  AuthTokenFetcher,
-  ConnectionState,
-  MutationOptions,
-  QueryJournal,
-  QueryToken,
-} from "convex/browser";
+import type { JSX } from "@solidjs/web";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contracts";
@@ -22,28 +11,20 @@ import { summaryQuery, healthQuery } from "../src/library/summaryApi";
 import { limitsAllQuery } from "../src/library/limitsApi";
 import type { ProviderLimit } from "../convex/limits";
 import Library from "../src/library/Library";
+import { CONNECTED, fakeConvex, mount, stripMarkers } from "./solid";
 
 /**
  * A rendered-DOM smoke test for src/library/*.tsx (to-do.md P0 "Replace the
  * job wall with an account library"). Previous verifier passes on this unit
  * found tsc/lint-level evidence only and no proof the component tree
  * actually renders its claimed states — this fills that gap by rendering
- * <Library> against a *real* `ConvexReactClient` and asserting on the
- * actual rendered DOM, not on the source text.
+ * <Library> and asserting on the actual rendered DOM, not on the source text.
  *
- * No module mocking: `convex/react`'s hooks (`useQuery`, `useMutation`,
- * `useConvexAuth`, `useConvexConnectionState`) all run for real. What's
- * faked is only the transport underneath them — a `BaseConvexClientInterface`
- * implementation (see `node_modules/convex/src/browser/sync/client.ts`) that
- * answers `localQueryResult`/`connectionState`/`mutation` from this file's
- * own per-function fixture map, keyed by `getFunctionName` exactly the way
- * `ConvexReactClient.watchQuery` itself keys queries (see
- * `node_modules/convex/src/react/client.ts`). `useConvexAuth` needs a real
- * `ConvexProviderWithAuth` (`node_modules/convex/src/react/ConvexAuthState.tsx`)
- * above the tree, which resolves auth via a `useEffect` — so this renders
- * with `react-dom/client`'s `createRoot` inside `act()` (jsdom environment)
- * rather than `renderToStaticMarkup`, so that effect gets to flush before
- * each assertion.
+ * No module mocking: the components' Convex reads (src/data/convex.ts
+ * `useQuery`, `useMutation`, connection and auth state) all run for real.
+ * What's faked is only the Convex app underneath them (tests/solid.ts),
+ * which answers each query from this file's own per-function fixture map,
+ * keyed by `getFunctionName` exactly the way the real bindings key them.
  */
 
 type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
@@ -55,7 +36,7 @@ type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
 interface MockState {
   isAuthenticated: boolean;
   connected: boolean;
-  responses: Map<string, unknown>;
+  responses: Map<string, Value>;
   // CodeRabbit (PR #48): <Library> no longer queries `api.integrations.operator`
   // itself — the integrator (src/Dashboard.tsx) passes its own `config`/
   // `liveNow` down as props instead, so this fixture feeds those directly
@@ -67,116 +48,10 @@ interface MockState {
 const mockState: MockState = {
   isAuthenticated: true,
   connected: true,
-  responses: new Map<string, unknown>(),
+  responses: new Map<string, Value>(),
   config: undefined,
   liveNow: Date.now(),
 };
-
-/**
- * Mirrors `BaseConvexClientInterface`
- * (`node_modules/convex/src/browser/sync/client.ts`) — the surface
- * `ConvexReactClient` calls on whatever it's given as `options.baseClient`.
- * That interface itself is `@internal` and stripped from this package's
- * published `.d.ts`, so it can't be imported; every member here is typed
- * against the same public types (`Value`, `ConnectionState`, `QueryToken`,
- * ...) the real interface uses, so a shape drift between this and the
- * installed `convex` version still fails at the `ConvexReactClientOptions`
- * cast below or at a call site's argument types.
- */
-interface FakeBaseConvexClient {
-  readonly url: string;
-  // `fn` is stored for `PaginatedQueryClient`'s constructor to hold onto but
-  // this fake never calls it (no usePaginatedQuery in this component tree,
-  // and no live transitions to deliver) — `never` says exactly that: a
-  // callback this fake guarantees it will not invoke, as opposed to
-  // `unknown`'s "accepts anything, unparsed".
-  addOnTransitionHandler(fn: (transition: never) => void): () => void;
-  setAuth(
-    fetchToken: AuthTokenFetcher,
-    onChange: (isAuthenticated: boolean) => void,
-    onRefreshChange?: (isRefreshing: boolean) => void,
-  ): void;
-  setAdminAuth(value: string, fakeUserIdentity?: UserIdentityAttributes): void;
-  clearAuth(): void;
-  subscribe(
-    name: string,
-    args?: Record<string, Value>,
-  ): { queryToken: QueryToken; unsubscribe: () => void };
-  localQueryResult(udfPath: string, args?: Record<string, Value>): Value | undefined;
-  localQueryResultByToken(queryToken: QueryToken): Value | undefined;
-  hasLocalQueryResultByToken(queryToken: QueryToken): boolean;
-  localQueryLogs(udfPath: string, args?: Record<string, Value>): string[] | undefined;
-  queryJournal(name: string, args?: Record<string, Value>): QueryJournal | undefined;
-  connectionState(): ConnectionState;
-  subscribeToConnectionState(cb: (connectionState: ConnectionState) => void): () => void;
-  mutation(
-    name: string,
-    args?: Record<string, Value>,
-    options?: MutationOptions,
-  ): Promise<Value | undefined>;
-  action(name: string, args?: Record<string, Value>): Promise<Value | undefined>;
-  close(): Promise<void>;
-}
-
-function makeFakeBaseClient(): FakeBaseConvexClient {
-  return {
-    url: "https://library-ui-test.convex.cloud",
-    addOnTransitionHandler: () => () => {},
-    setAuth: (_fetchToken, onChange) => {
-      // Real clients confirm the token with the server asynchronously; this
-      // fake has no server, so it reports the fixture's authenticated state
-      // back synchronously, which is what drives `useConvexAuth()`'s result
-      // through `ConvexProviderWithAuth`'s own `useEffect`.
-      onChange(mockState.isAuthenticated);
-    },
-    setAdminAuth: () => {},
-    clearAuth: () => {},
-    subscribe: (name) => ({
-      // SAFETY: `QueryToken` is `string & { __queryToken: true }`. This fake
-      // never needs collision-proof tokens (there's no real dedupe to do),
-      // only a stable per-query-name key for the caller's own bookkeeping.
-      queryToken: name as QueryToken,
-      unsubscribe: () => {},
-    }),
-    localQueryResult: (udfPath) =>
-      // SAFETY: every fixture reaches this map via `setQuery`, which only
-      // ever stores the real return value of a Convex query (a
-      // `DashboardSummary`, `ServiceStatus[]`, `ProviderLimit[]`, or a
-      // `library.rows` page) — by construction already a legal Convex
-      // `Value`. This just recovers that type past the map's `unknown` slot.
-      mockState.responses.get(udfPath) as Value | undefined,
-    localQueryResultByToken: () => undefined,
-    hasLocalQueryResultByToken: () => false,
-    localQueryLogs: () => undefined,
-    queryJournal: () => undefined,
-    connectionState: (): ConnectionState => ({
-      hasInflightRequests: false,
-      isWebSocketConnected: mockState.connected,
-      timeOfOldestInflightRequest: null,
-      hasEverConnected: true,
-      connectionCount: 1,
-      connectionRetries: 0,
-      inflightMutations: 0,
-      inflightActions: 0,
-    }),
-    subscribeToConnectionState: () => () => {},
-    mutation: () => Promise.resolve(undefined),
-    action: () => Promise.resolve(undefined),
-    close: () => Promise.resolve(),
-  };
-}
-
-// SAFETY: `options.baseClient` is a real, working constructor option (see
-// `ConvexReactClient`'s `sync` getter in
-// `node_modules/convex/src/react/client.ts`, which uses it in place of
-// constructing a real `BaseConvexClient`) — it's marked `@internal` and so
-// is missing from the published `ConvexReactClientOptions` type, not from
-// the runtime. This cast bridges that published-types gap the same way
-// `src/library/summaryApi.tsx`'s `anyApi.summary.summary as FunctionReference<...>`
-// bridges codegen not having caught up yet.
-const convexClient = new ConvexReactClient("https://library-ui-test.convex.cloud", {
-  baseClient: makeFakeBaseClient(),
-} as ConvexReactClientOptions);
 
 function accountId(id: string) {
   // SAFETY: `Id<"accounts">` is `string & { __tableName: "accounts" }`; the
@@ -241,76 +116,73 @@ function reset() {
   mockState.responses = new Map();
   mockState.config = undefined;
   mockState.liveNow = Date.now();
-  // AccountRow's own mount-time scroll ref reads `location.hash` — clear it
-  // between tests so one test's `#account-<id>` target can never leak into
-  // the next and change whether its rows try to scroll.
+  // AccountRow scrolls itself into view when `location.hash` names it —
+  // clear it between tests so one test's `#account-<id>` target can never
+  // leak into the next.
   window.history.replaceState(null, "", "/");
 }
 
-function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
+function setQuery(ref: Parameters<typeof getFunctionName>[0], value: Value) {
   mockState.responses.set(getFunctionName(ref), value);
 }
 
 function renderLibrary(): string {
-  const { container, unmount } = renderLibraryToContainer();
-  const html = container.innerHTML;
+  const { html, unmount } = renderLibraryToContainer();
+  const markup = html();
 
   unmount();
 
-  return html;
+  return markup;
 }
 
 /**
- * Same render as `renderLibrary`, but keeps the container mounted (and
- * attached to `document.body`, which real click dispatch needs) so a test
- * can interact with it — e.g. clicking a row's "Show history" toggle, which
- * now also reveals the publication notes AccountRow.tsx moved behind it
- * (QA finding 5, /tmp/issues-t3-dashboard-current.md #5's row-compaction
- * fix).
+ * Same render as `renderLibrary`, but keeps the container mounted (attached
+ * to `document.body`, which real click dispatch needs) so a test can
+ * interact with it — e.g. clicking a row's "Show history" toggle, which also
+ * reveals the publication notes AccountRow.tsx keeps behind it (QA finding 5,
+ * /tmp/issues-t3-dashboard-current.md #5's row-compaction fix).
  */
-function renderLibraryToContainer(otherImports?: ReturnType<typeof createElement>) {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
-  act(() => {
-    root.render(
-      createElement(
-        ConvexProviderWithAuth,
-        {
-          client: convexClient,
-          useAuth: () => ({
-            isLoading: false,
-            isAuthenticated: mockState.isAuthenticated,
-            fetchAccessToken: () => Promise.resolve(null),
-          }),
-        },
-        createElement(Library, {
-          ensureSession: () => Promise.resolve(),
-          config: mockState.config,
-          liveNow: mockState.liveNow,
-          onOpenQueue: () => {},
-          otherImports,
-        }),
-      ),
-    );
+function renderLibraryToContainer(otherImports?: JSX.Element) {
+  const convex = fakeConvex({
+    query: (name) => mockState.responses.get(name),
+    isAuthenticated: mockState.isAuthenticated,
+    connection: { ...CONNECTED, isWebSocketConnected: mockState.connected },
   });
 
-  return {
-    container,
-    unmount: () => {
-      act(() => root.unmount());
-      container.remove();
+  const mounted = mount(
+    Library,
+    {
+      ensureSession: () => Promise.resolve(),
+      config: mockState.config,
+      liveNow: mockState.liveNow,
+      onOpenQueue: () => {},
+      otherImports,
     },
+    convex,
+  );
+
+  return {
+    container: mounted.container,
+    html: () => stripMarkers(mounted.html()),
+    unmount: () => mounted.unmount(),
   };
 }
 
 // Clicks every ".library-row-toggle" button found (there is one per
 // <AccountRow>), so a test with a single fixture row can expand it without
-// needing to know its position in the (now paginated) list.
+// needing to know its position in the (paginated) list.
 function expandAllRows(container: HTMLElement) {
-  const toggles = container.querySelectorAll<HTMLButtonElement>(".library-row-toggle");
+  for (const toggle of container.querySelectorAll<HTMLButtonElement>(".library-row-toggle"))
+    toggle.click();
+}
 
-  for (const toggle of toggles) act(() => toggle.click());
+// Stands in for Dashboard.tsx's "Other imports" section.
+function otherImportsSection() {
+  const section = document.createElement("section");
+  section.setAttribute("aria-label", "Other imports");
+  section.innerHTML = "<h2>Other imports</h2>";
+
+  return section;
 }
 
 describe("Library (src/library/Library.tsx) rendered output", () => {
@@ -381,16 +253,16 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [failedButIndexed], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const { container, unmount } = renderLibraryToContainer();
+    const { container, html: current, unmount } = renderLibraryToContainer();
     // The failed badge and the searchable count stay in the row's default
     // one-line view; the "still-good corpus" note and the raw publication
     // error are publication notes, so QA finding 5's row compaction moved
     // them behind "Show history" — expand it to reach them.
-    expect(container.innerHTML).toContain("Publication failed");
-    expect(container.innerHTML).toContain("2,500 posts");
-    expect(container.innerHTML).not.toContain("The previously confirmed index still has");
+    expect(current()).toContain("Publication failed");
+    expect(current()).toContain("2,500 posts");
+    expect(current()).not.toContain("The previously confirmed index still has");
     expandAllRows(container);
-    const html = container.innerHTML;
+    const html = current();
     expect(html).toContain("The previously confirmed index still has");
     expect(html).toContain("2,500 posts");
     expect(html).toContain("publish rejected: schema mismatch");
@@ -424,7 +296,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     // "Show history" along with the rest of a row's publication notes.
     const runningRender = renderLibraryToContainer();
     expandAllRows(runningRender.container);
-    expect(runningRender.container.innerHTML).toContain(
+    expect(runningRender.html()).toContain(
       "Older history: 12,340 posts downloaded so far · downloading back to 2019-03-01 (joined 2011-06-01)",
     );
     runningRender.unmount();
@@ -443,7 +315,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(healthQuery, makeHealth());
     const completeRender = renderLibraryToContainer();
     expandAllRows(completeRender.container);
-    expect(completeRender.container.innerHTML).toContain(
+    expect(completeRender.html()).toContain(
       "Older history download complete: 61,208 posts downloaded; search publication is separate",
     );
     completeRender.unmount();
@@ -467,7 +339,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(healthQuery, makeHealth());
     const stoppedRender = renderLibraryToContainer();
     expandAllRows(stoppedRender.container);
-    expect(stoppedRender.container.innerHTML).toContain(
+    expect(stoppedRender.html()).toContain(
       "Older history stopped: x.md could not finish this request (500).",
     );
     stoppedRender.unmount();
@@ -861,15 +733,8 @@ describe("Library section order, row compaction, and library pagination (QA find
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
 
-    const { container, unmount } = renderLibraryToContainer(
-      createElement(
-        "section",
-        { "aria-label": "Other imports" },
-        createElement("h2", null, "Other imports"),
-      ),
-    );
-
-    const html = container.innerHTML;
+    const rendered = renderLibraryToContainer(otherImportsSection());
+    const html = rendered.html();
     const queueAt = html.indexOf("Active queue");
     const otherImportsAt = html.indexOf("Other imports");
     const recentAt = html.indexOf("Recent run history");
@@ -885,7 +750,7 @@ describe("Library section order, row compaction, and library pagination (QA find
     expect(queueAt).toBeLessThan(otherImportsAt);
     expect(otherImportsAt).toBeLessThan(recentAt);
     expect(recentAt).toBeLessThan(libraryAt);
-    unmount();
+    rendered.unmount();
   });
 
   it("renders an account row as one compact line by default, with details behind 'Show history'", () => {
@@ -907,8 +772,8 @@ describe("Library section order, row compaction, and library pagination (QA find
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
 
-    const { container, unmount } = renderLibraryToContainer();
-    const collapsedHtml = container.innerHTML;
+    const { container, html, unmount } = renderLibraryToContainer();
+    const collapsedHtml = html();
 
     // Always visible: identity, status badges, searchable count.
     expect(collapsedHtml).toContain("@compact");
@@ -921,7 +786,7 @@ describe("Library section order, row compaction, and library pagination (QA find
     expect(collapsedHtml).toContain("Show history");
 
     expandAllRows(container);
-    const expandedHtml = container.innerHTML;
+    const expandedHtml = html();
 
     expect(expandedHtml).toContain("Last published");
     expect(expandedHtml).toContain("publish rejected: timeout");
@@ -982,15 +847,16 @@ describe("Library section order, row compaction, and library pagination (QA find
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
 
-    const { container, unmount } = renderLibraryToContainer();
+    const { container, html, unmount } = renderLibraryToContainer();
     expect(container.querySelectorAll(".library-row").length).toBe(20);
     const showMore = container.querySelector<HTMLButtonElement>(".library-show-more");
 
     expect(showMore).not.toBeNull();
     expect(showMore!.textContent).toContain("5 more");
 
-    act(() => showMore!.click());
+    showMore!.click();
 
+    html();
     expect(container.querySelectorAll(".library-row").length).toBe(25);
     expect(container.querySelector(".library-show-more")).toBeNull();
     unmount();

@@ -1,10 +1,10 @@
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useQuery } from "convex/react";
+import { Match, Switch } from "solid-js";
+import { useConvex, useQuery } from "../data/convex";
 import { api } from "../../convex/_generated/api";
 
 export type AccountBadgeProps = {
   /** Applied to the root element; the integrator owns the visual styling. */
-  className?: string;
+  class?: string;
 };
 
 /**
@@ -13,31 +13,29 @@ export type AccountBadgeProps = {
  * sign-out action. Renders nothing while `me` is loading or the visitor has
  * no session at all.
  *
- * Wired into the app in src/App.tsx's Connections panel - see
- * EmailSignIn.tsx's doc comment.
+ * Wired into the app in src/operator/Connections.tsx.
  */
-export function AccountBadge({ className }: AccountBadgeProps) {
-  const me = useQuery(api.auth.me);
-  const { signOut } = useAuthActions();
-
-  if (me === undefined || me === null) return null;
-
-  if (!me.emailVerified || !me.email) {
-    return (
-      <p className={className}>
-        {me.isAnonymous ? "Guest session" : "Sign-in not verified"}
-        {me.email ? ` (${me.email})` : ""}
-      </p>
-    );
-  }
+export function AccountBadge(props: AccountBadgeProps) {
+  const me = useQuery(api.auth.me, () => ({}));
+  const { actions } = useConvex();
 
   return (
-    <p className={className}>
-      Signed in as {me.email}{" "}
-      <button type="button" onClick={() => void signOut()}>
-        Sign out
-      </button>
-    </p>
+    <Switch>
+      <Match when={me() && (!me()!.emailVerified || !me()!.email)}>
+        <p class={props.class}>
+          {me()!.isAnonymous ? "Guest session" : "Sign-in not verified"}
+          {me()!.email ? ` (${me()!.email})` : ""}
+        </p>
+      </Match>
+      <Match when={me()}>
+        <p class={props.class}>
+          Signed in as {me()!.email}{" "}
+          <button type="button" onClick={() => void actions.signOut()}>
+            Sign out
+          </button>
+        </p>
+      </Match>
+    </Switch>
   );
 }
 

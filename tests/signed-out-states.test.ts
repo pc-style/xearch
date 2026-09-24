@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderHtml } from "./solid";
 import OverviewStats from "../src/library/OverviewStats";
 import ActiveQueue from "../src/library/ActiveQueue";
 import ProviderLimits from "../src/library/ProviderLimits";
@@ -23,17 +22,15 @@ const signedIn = { isAuthenticated: true } as const;
 
 describe("signed-out panels never impersonate a loading state", () => {
   it("Overview asks the visitor to connect instead of loading forever", () => {
-    const html = renderToStaticMarkup(
-      createElement(OverviewStats, {
-        summary: undefined,
-        health: undefined,
-        limits: undefined,
-        config: undefined,
-        liveNow: Date.now(),
-        connected: true,
-        ...signedOut,
-      }),
-    );
+    const html = renderHtml(OverviewStats, {
+      summary: undefined,
+      health: undefined,
+      limits: undefined,
+      config: undefined,
+      liveNow: Date.now(),
+      connected: true,
+      ...signedOut,
+    });
 
     expect(html).not.toMatch(/Loading overview/);
     expect(html).not.toMatch(/loading…/);
@@ -42,9 +39,7 @@ describe("signed-out panels never impersonate a loading state", () => {
 
   it("Active queue and recent history say connect, not load", () => {
     for (const component of [ActiveQueue, RecentActivity]) {
-      const html = renderToStaticMarkup(
-        createElement(component, { rows: undefined, ...signedOut }),
-      );
+      const html = renderHtml(component, { rows: undefined, ...signedOut });
 
       expect(html).not.toMatch(/Loading/);
       expect(html).toMatch(/Connect to see/);
@@ -52,23 +47,17 @@ describe("signed-out panels never impersonate a loading state", () => {
   });
 
   it("Provider limits render nothing at all while signed out — there is nothing to report yet, not a loading state (B2)", () => {
-    const html = renderToStaticMarkup(
-      createElement(ProviderLimits, { limits: undefined, ...signedOut }),
-    );
+    const html = renderHtml(ProviderLimits, { limits: undefined, ...signedOut });
 
     expect(html).toBe("");
   });
 
   it("still shows a real loading state to a signed-in caller whose query is in flight", () => {
-    const queue = renderToStaticMarkup(
-      createElement(ActiveQueue, { rows: undefined, ...signedIn }),
-    );
+    const queue = renderHtml(ActiveQueue, { rows: undefined, ...signedIn });
 
     expect(queue).toMatch(/Loading queue/);
 
-    const history = renderToStaticMarkup(
-      createElement(RecentActivity, { rows: undefined, ...signedIn }),
-    );
+    const history = renderHtml(RecentActivity, { rows: undefined, ...signedIn });
 
     expect(history).toMatch(/Loading recent activity/);
   });

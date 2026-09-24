@@ -15,23 +15,10 @@
 // to reach the network anyway.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { convexTest, type TestConvex } from "convex-test";
-import { getFunctionName } from "convex/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { AgentMail, type OutboundId } from "@agentmail/convex";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
-// @convex-dev/auth/react does not export `ConvexAuthActionsContext` from its
-// public "./react" entry point (only `useAuthActions`, which reads it) - it
-// is only reachable from the underlying file, so it is imported directly by
-// path here (bypassing the package's "exports" map, not module-mocking it)
-// to build a real `ConvexAuthActionsContext.Provider` for the render smoke
-// tests below. This is the exact same module the package's own
-// `useAuthActions` reads from (Node/Vite resolve both specifiers to the same
-// file, so the context instance is shared), not a stand-in for it.
-import { ConvexAuthActionsContext } from "../node_modules/@convex-dev/auth/dist/react/client.js";
 
 type T = TestConvex<typeof schema>;
 
@@ -65,70 +52,12 @@ const sendMessage = vi.spyOn(AgentMail.prototype, "sendMessage").mockImplementat
     "outbound_test_id" as OutboundId,
 );
 
-// For the src/auth/*.tsx render smoke tests below only: EmailSignIn and
-// AccountBadge are rendered inside a real `ConvexProvider` (from
-// "convex/react") backed by a fake client that only implements the one
-// method `useQuery` needs synchronously during static rendering
-// (`watchQuery(...).localQueryResult()` - see convex/src/react/use_queries.ts),
-// and a real `ConvexAuthActionsContext.Provider` (imported above) supplying
-// fixture `signIn`/`signOut`. No jsdom/@testing-library/react dependency is
-// installed (see the "component rendering" describe block's leading comment
-// for why this is static-markup-only), and no module is mocked - both
-// hooks read their real context/module exactly as they do in the app.
-const authUiResponses = new Map<string, unknown>();
-
-const authUiActions = { signIn: vi.fn(), signOut: vi.fn() };
-
-// SAFETY: a real `ConvexReactClient` instance (via `Object.create` on its own
-// prototype, so `instanceof`/internal checks still pass) with only
-// `watchQuery` overridden - the one method `useQuery` calls synchronously
-// during static rendering (see the comment above). Every other member is
-// intentionally left unimplemented; nothing in this test's render path calls
-// them, and `Object.create`'s `any` return means no assertion is needed to
-// treat it as a `ConvexReactClient`.
-const fakeConvexClient: ConvexReactClient = Object.create(ConvexReactClient.prototype);
-
-fakeConvexClient.watchQuery = (
-  query: Parameters<typeof getFunctionName>[0],
-  ...rest: unknown[]
-) => {
-  void rest; // args/options: unused - every query fixture here takes none
-
-  return {
-    localQueryResult: () => authUiResponses.get(getFunctionName(query)),
-    // Never invoked: static-markup rendering never runs the passive effect
-    // that would call this (see the comment above), so this test never
-    // needs it to do anything beyond satisfying `Watch`'s shape.
-    onUpdate: () => () => {},
-    journal: () => undefined,
-  };
-};
-
-/** Render `node` as static markup under real `ConvexProvider` +
- * `ConvexAuthActionsContext.Provider` seams (see the comment above). */
-function renderAuthed(node: ReturnType<typeof createElement>) {
-  return renderToStaticMarkup(
-    createElement(
-      ConvexProvider,
-      { client: fakeConvexClient },
-      createElement(ConvexAuthActionsContext.Provider, { value: authUiActions }, node),
-    ),
-  );
-}
-
 const modules = import.meta.glob("../convex/**/*.ts");
-
-const { EmailSignIn } = await import("../src/auth/EmailSignIn");
-
-const { AccountBadge } = await import("../src/auth/AccountBadge");
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   sendMessage.mockClear();
-  authUiResponses.clear();
-  authUiActions.signIn.mockClear();
-  authUiActions.signOut.mockClear();
 });
 
 function setup(opts: { stubRequireVerifiedEmail?: boolean } = {}): T {
@@ -457,51 +386,5 @@ describe("an anonymous-only session can never pass the verified-email send gate"
       identity.mutation(api.email.send, { sessionId, recipient: "reader@example.com" }),
     ).rejects.toThrow("verified email");
     expect(sendMessage).not.toHaveBeenCalled();
-  });
-});
-
-describe("component rendering (src/auth/*.tsx)", () => {
-  // No jsdom or @testing-library/react dependency is installed in this repo
-  // (checked: package.json has neither, and vitest.config.ts sets no
-  // `test.environment`) and adding one would touch package.json, which is
-  // outside this change's owned files - so these are static-markup render
-  // checks (react-dom/server, same no-new-dependency technique
-  // tests/library-ui.test.ts already uses for src/library/Library.tsx), not
-  // interactive/clicked-through DOM tests. They prove the two components
-  // render their documented states correctly in isolation; they do not
-  // exercise src/App.tsx's own mounting of them (the modal/Connections-panel
-  // wiring). No test in this repo renders src/App.tsx itself (only src/
-  // main.tsx does, at runtime) - that wiring is unverified by an automated
-  // test today.
-  it("EmailSignIn renders the request-code step by default", () => {
-    const markup = renderAuthed(createElement(EmailSignIn, {}));
-    expect(markup).toContain("Email address");
-    expect(markup).toContain("Send sign-in code");
-    expect(markup).not.toContain("Sign-in code");
-  });
-
-  it("AccountBadge renders nothing while identity is loading or absent", () => {
-    authUiResponses.set(getFunctionName(api.auth.me), undefined);
-    expect(renderAuthed(createElement(AccountBadge, {}))).toBe("");
-    authUiResponses.set(getFunctionName(api.auth.me), null);
-    expect(renderAuthed(createElement(AccountBadge, {}))).toBe("");
-  });
-
-  it("AccountBadge shows guest state for an anonymous session and signed-in state for a verified one", () => {
-    authUiResponses.set(getFunctionName(api.auth.me), {
-      isAnonymous: true,
-      email: null,
-      emailVerified: false,
-    });
-    expect(renderAuthed(createElement(AccountBadge, {}))).toContain("Guest session");
-
-    authUiResponses.set(getFunctionName(api.auth.me), {
-      isAnonymous: false,
-      email: "reader@example.com",
-      emailVerified: true,
-    });
-    const markup = renderAuthed(createElement(AccountBadge, {}));
-    expect(markup).toContain("Signed in as reader@example.com");
-    expect(markup).toContain("Sign out");
   });
 });

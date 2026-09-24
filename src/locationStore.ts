@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from "react";
+import type { Accessor } from "solid-js";
+import { fromStore } from "./data/external";
 import type { Sort } from "../convex/lib/search";
 import { ViewMode } from "./uiState";
 
@@ -255,6 +256,6 @@ export function replaceLocation(patch: LocationPatch): void {
   navigate("replaceState", patch);
 }
 
-export function useLocation(): LocationSnapshot {
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+export function useLocation(): Accessor<LocationSnapshot> {
+  return fromStore(subscribe, getSnapshot);
 }

@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderHtml } from "./solid";
 import schema from "../convex/schema";
 import type { Id } from "../convex/_generated/dataModel";
 import type { ProviderLimit } from "../convex/limits";
@@ -17,7 +16,7 @@ import ProviderLimits from "../src/library/ProviderLimits";
  * Drives the REAL backend query (convex/limits.ts, against a convex-test
  * in-memory local deployment seeded from the real schema) and feeds its
  * REAL return value into the REAL UI component (src/library/ProviderLimits)
- * via react-dom/server, then prints what came out. Nothing under search/
+ * into jsdom, then prints what came out. Nothing under search/
  * (Rust) is touched. No paid import, no live coordination, nothing merged
  * or deployed. Written to the scratchpad per task instructions, not into
  * product code.
@@ -36,7 +35,7 @@ async function withUser(t: ReturnType<typeof convexTest>) {
 }
 
 function renderPanel(limits: ProviderLimit[] | undefined): string {
-  return renderToStaticMarkup(createElement(ProviderLimits, { limits, isAuthenticated: true }));
+  return renderHtml(ProviderLimits, { limits, isAuthenticated: true });
 }
 
 describe("scenario: provider throttling — real reason/retry, unknown allowance, no historical leakage", () => {

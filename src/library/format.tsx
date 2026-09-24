@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import type { JSX } from "@solidjs/web";
 import type { Tone } from "./format";
 
-export function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return <span className={`library-badge tone-${tone}`}>{children}</span>;
+export function Badge(props: { tone: Tone; children: JSX.Element }) {
+  return <span class={["library-badge", `tone-${props.tone}`]}>{props.children}</span>;
 }

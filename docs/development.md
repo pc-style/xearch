@@ -104,10 +104,7 @@ bunx vite build --outDir "$(mktemp -d /tmp/xearch-build.XXXXXX)"
 Build verification uses a temporary directory so it cannot overwrite the live VM frontend in `dist/`.
 
 Oxlint runs with the Effect presets; `prepare` patches Oxlint and tsgolint on
-install. `bun run lint` is Oxlint alone. React Doctor is a separate, advisory
-GitHub Actions check scoped to `src/` (`.github/workflows/react-doctor.yml`,
-`blocking: none`) and runs locally as `bun run react-doctor`; its findings do
-not gate `Check`. Search-service responses are decoded with Effect Schema
+install. `bun run lint` is Oxlint alone. Search-service responses are decoded with Effect Schema
 in `convex/lib/results.ts`; other validators still use Zod.
 
 Tests cover raw payload preservation, JSON backfill pagination, split oversized history pages, safe unordered-stream behavior, stream completion, partial capture, identity pinning and handle reassignment, origin selection, retry timing, durable receipts, shared-corpus visibility across owners, provider-throttle writes, job dismissal, worker liveness, and the Firecrawl component response shape. Provider calls are mocked in tests. No email is sent and no provider credits are consumed by the suite. Selected ideas and remaining work from the supplied local-first spec are tracked in [spec adoption](spec-adoption.md).

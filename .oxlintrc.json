@@ -6,7 +6,7 @@
     "./node_modules/@effect/tsgo/oxlint-presets/effect-native.json",
     "./node_modules/@effect/tsgo/oxlint-presets/style.json"
   ],
-  "plugins": ["eslint", "oxc", "react", "unicorn", "typescript"],
+  "plugins": ["eslint", "oxc", "unicorn", "typescript"],
   "categories": {
     "correctness": "warn",
     "suspicious": "warn",
@@ -37,8 +37,6 @@
     "unicorn/no-array-sort": "off",
     "unicorn/consistent-function-scoping": "off",
     "oxc/no-map-spread": "off",
-    "react-in-jsx-scope": "off",
-    "react-hooks/exhaustive-deps": "off",
     "eslint/no-shadow": "off",
     "eslint/no-await-in-loop": "off",
     "eslint/no-underscore-dangle": "off",

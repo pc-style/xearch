@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import solid from "@solidjs/vite-plugin";
 import posthog from "@posthog/rollup-plugin";
 
 // Which of the two sites this build produces. The public one — the default,
@@ -27,9 +27,7 @@ export function relativeModule(name: string): RegExp {
 
 export default defineConfig({
   plugins: [
-    react({
-      compiler: { target: "19" },
-    }),
+    solid(),
     ...(process.env.POSTHOG_CLI_API_KEY &&
     process.env.POSTHOG_CLI_PROJECT_ID &&
     process.env.POSTHOG_CLI_HOST

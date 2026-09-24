@@ -1,132 +1,49 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import { getFunctionName } from "convex/server";
-import type { UserIdentityAttributes } from "convex/server";
-import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
-import type { ConvexReactClientOptions } from "convex/react";
 import type { Value } from "convex/values";
-import type {
-  AuthTokenFetcher,
-  ConnectionState,
-  MutationOptions,
-  QueryJournal,
-  QueryToken,
-} from "convex/browser";
 import type { Id } from "../convex/_generated/dataModel";
 import type { Timeline } from "../convex/queue";
 import { queueTimelineQuery } from "../src/library/queueApi";
 import QueueTimeline from "../src/library/QueueTimeline";
+import { CONNECTED, fakeConvex, mount, renderHtml } from "./solid";
 
 /**
  * A rendered-DOM smoke test for src/library/QueueTimeline.tsx, following
- * tests/library-ui.test.ts's exact fake-`BaseConvexClient` pattern (see that
- * file's header comment for the full rationale): no module mocking,
- * `convex/react`'s real hooks running against a real `ConvexReactClient`
- * whose transport is faked from this file's own per-function fixture map.
+ * tests/library-ui.test.ts's pattern: no module mocking, the component's
+ * real Convex bindings running against a fake Convex app (tests/solid.ts)
+ * that answers each query from this file's own per-function fixture map.
  */
 interface MockState {
   isAuthenticated: boolean;
   connected: boolean;
-  responses: Map<string, unknown>;
+  responses: Map<string, Value>;
   // Every mutation the rendered component actually called — asserted by the
   // Retry-button test below (src/library/QueueTimeline.tsx `onRetry` calls
   // `api.jobs.retry` directly; there is no prop to intercept it through, so
   // this fake transport is the only place that call is observable).
-  mutationCalls: { name: string; args: Record<string, Value> | undefined }[];
+  mutationCalls: { name: string; args: Record<string, Value> }[];
 }
 
 const mockState: MockState = {
   isAuthenticated: true,
   connected: true,
-  responses: new Map<string, unknown>(),
+  responses: new Map<string, Value>(),
   mutationCalls: [],
 };
 
-interface FakeBaseConvexClient {
-  readonly url: string;
-  addOnTransitionHandler(fn: (transition: never) => void): () => void;
-  setAuth(
-    fetchToken: AuthTokenFetcher,
-    onChange: (isAuthenticated: boolean) => void,
-    onRefreshChange?: (isRefreshing: boolean) => void,
-  ): void;
-  setAdminAuth(value: string, fakeUserIdentity?: UserIdentityAttributes): void;
-  clearAuth(): void;
-  subscribe(
-    name: string,
-    args?: Record<string, Value>,
-  ): { queryToken: QueryToken; unsubscribe: () => void };
-  localQueryResult(udfPath: string, args?: Record<string, Value>): Value | undefined;
-  localQueryResultByToken(queryToken: QueryToken): Value | undefined;
-  hasLocalQueryResultByToken(queryToken: QueryToken): boolean;
-  localQueryLogs(udfPath: string, args?: Record<string, Value>): string[] | undefined;
-  queryJournal(name: string, args?: Record<string, Value>): QueryJournal | undefined;
-  connectionState(): ConnectionState;
-  subscribeToConnectionState(cb: (connectionState: ConnectionState) => void): () => void;
-  mutation(
-    name: string,
-    args?: Record<string, Value>,
-    options?: MutationOptions,
-  ): Promise<Value | undefined>;
-  action(name: string, args?: Record<string, Value>): Promise<Value | undefined>;
-  close(): Promise<void>;
-}
-
-function makeFakeBaseClient(): FakeBaseConvexClient {
-  return {
-    url: "https://queue-timeline-ui-test.convex.cloud",
-    addOnTransitionHandler: () => () => {},
-    setAuth: (_fetchToken, onChange) => {
-      onChange(mockState.isAuthenticated);
-    },
-    setAdminAuth: () => {},
-    clearAuth: () => {},
-    subscribe: (name) => ({
-      // SAFETY: `QueryToken` is `string & { __queryToken: true }` — this
-      // fake needs only a stable per-query-name key, never collision-proof
-      // tokens (there's no real dedupe to do here).
-      queryToken: name as QueryToken,
-      unsubscribe: () => {},
-    }),
-    localQueryResult: (udfPath) =>
-      // SAFETY: every fixture reaches this map via `setQuery`, which only
-      // ever stores a real Convex query return value (a `Timeline`) — by
-      // construction already a legal Convex `Value`.
-      mockState.responses.get(udfPath) as Value | undefined,
-    localQueryResultByToken: () => undefined,
-    hasLocalQueryResultByToken: () => false,
-    localQueryLogs: () => undefined,
-    queryJournal: () => undefined,
-    connectionState: (): ConnectionState => ({
-      hasInflightRequests: false,
-      isWebSocketConnected: mockState.connected,
-      timeOfOldestInflightRequest: null,
-      hasEverConnected: true,
-      connectionCount: 1,
-      connectionRetries: 0,
-      inflightMutations: 0,
-      inflightActions: 0,
-    }),
-    subscribeToConnectionState: () => () => {},
+function convex() {
+  return fakeConvex({
+    query: (name) => mockState.responses.get(name),
+    isAuthenticated: mockState.isAuthenticated,
+    connection: { ...CONNECTED, isWebSocketConnected: mockState.connected },
     mutation: (name, args) => {
       mockState.mutationCalls.push({ name, args });
 
-      return Promise.resolve(undefined);
+      return Promise.resolve(null);
     },
-    action: () => Promise.resolve(undefined),
-    close: () => Promise.resolve(),
-  };
+  });
 }
-
-// SAFETY: `options.baseClient` is a real, working constructor option (see
-// tests/library-ui.test.ts's identical use of it for the same rationale) —
-// marked `@internal` and missing from the published `ConvexReactClientOptions`
-// type, not from the runtime.
-const convexClient = new ConvexReactClient("https://queue-timeline-ui-test.convex.cloud", {
-  baseClient: makeFakeBaseClient(),
-} as ConvexReactClientOptions);
 
 function jobId(id: string) {
   // SAFETY: `Id<"jobs">` is `string & { __tableName: "jobs" }`, a subtype of
@@ -147,7 +64,7 @@ function reset() {
   mockState.mutationCalls = [];
 }
 
-function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
+function setQuery(ref: Parameters<typeof getFunctionName>[0], value: Value) {
   mockState.responses.set(getFunctionName(ref), value);
 }
 
@@ -162,62 +79,16 @@ function makeTimeline(overrides: Partial<Timeline> = {}): Timeline {
 }
 
 function renderQueueTimeline(): string {
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  act(() => {
-    root.render(
-      createElement(
-        ConvexProviderWithAuth,
-        {
-          client: convexClient,
-          useAuth: () => ({
-            isLoading: false,
-            isAuthenticated: mockState.isAuthenticated,
-            fetchAccessToken: () => Promise.resolve(null),
-          }),
-        },
-        createElement(QueueTimeline, { close: () => {} }),
-      ),
-    );
-  });
-  const html = container.innerHTML;
-
-  act(() => {
-    root.unmount();
-  });
-
-  return html;
+  return renderHtml(QueueTimeline, { close: () => {} }, convex());
 }
 
 // Interactive variant of `renderQueueTimeline` that keeps the container
-// mounted (and hands back `close`'s own call count) so a test can dispatch a
-// real click and observe both the mutation call (`mockState.mutationCalls`)
-// and any resulting DOM change, the same "render, don't mock the component's
-// own hooks" approach `renderQueueTimeline` already uses — following
-// tests/jobRow-ui.test.ts's real-`MouseEvent`-dispatch pattern for its own
-// Retry/Cancel/Dismiss buttons.
+// mounted so a test can dispatch a real click and observe both the mutation
+// call (`mockState.mutationCalls`) and any resulting DOM change.
 function renderQueueTimelineInteractive(onClose: () => void = () => {}) {
-  const container = document.createElement("div");
-  const root = createRoot(container);
+  const mounted = mount(QueueTimeline, { close: onClose }, convex());
 
-  act(() => {
-    root.render(
-      createElement(
-        ConvexProviderWithAuth,
-        {
-          client: convexClient,
-          useAuth: () => ({
-            isLoading: false,
-            isAuthenticated: mockState.isAuthenticated,
-            fetchAccessToken: () => Promise.resolve(null),
-          }),
-        },
-        createElement(QueueTimeline, { close: onClose }),
-      ),
-    );
-  });
-
-  return { container, unmount: () => act(() => root.unmount()) };
+  return { container: mounted.container, unmount: mounted.unmount };
 }
 
 describe("QueueTimeline (src/library/QueueTimeline.tsx) rendered output", () => {
@@ -425,12 +296,12 @@ describe("QueueTimeline (src/library/QueueTimeline.tsx) rendered output", () => 
     expect(retryButton).toBeDefined();
     expect(showInDashboardButton).toBeDefined();
 
-    act(() => retryButton!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    retryButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(mockState.mutationCalls).toEqual([
       expect.objectContaining({ args: expect.objectContaining({ jobId: "job-to-retry" }) }),
     ]);
 
-    act(() => showInDashboardButton!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    showInDashboardButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     // Leaves the Queue page (closes it) and sets the anchor hash the
     // dashboard's own AccountRow renders an id for — the browser's own hash
     // navigation does the scrolling once back there.

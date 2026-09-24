@@ -1,60 +1,16 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import type {
-  ArgsAndOptions,
-  FunctionArgs,
-  FunctionReference,
-  FunctionReference_future,
-  FunctionReturnType,
-} from "convex/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
-import type { MutationOptions, Watch, WatchQueryOptions } from "convex/react";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { fakeConvex, renderHtml } from "./solid";
 import schema from "../convex/schema";
 import { PUBLICATION_STATE_META } from "../src/library/format";
 import type { AccountLibraryRow, PublicationUpdateEnvelope } from "../convex/lib/contracts";
 import AccountRow from "../src/library/AccountRow";
 
-/**
- * AccountRow calls useQuery/useMutation (convex/react) directly, so it needs
- * a real ConvexProvider above it in the tree. This test never expands the
- * row or fires its buttons, so the queries/mutations it wires up are never
- * actually resolved or invoked — this fake client only has to give
- * useQuery/useMutation a real ConvexReactClient to read from (watchQuery,
- * for the "no data yet" case every hook here hits) and to build a mutation
- * function around (mutation, never called). Anything beyond that stays the
- * unimplemented `ConvexReactClient` behavior, which is fine because nothing
- * here reaches it.
- */
-class FakeConvexReactClient extends ConvexReactClient {
-  constructor() {
-    super("https://fake.convex.cloud");
-  }
-
-  override watchQuery<Query extends FunctionReference<"query"> | FunctionReference_future<"query">>(
-    query: Query,
-    ..._argsAndOptions: ArgsAndOptions<Query, WatchQueryOptions>
-  ): Watch<FunctionReturnType<Query>> {
-    return {
-      onUpdate: () => () => {},
-      localQueryResult: () => undefined,
-      journal: () => undefined,
-    };
-  }
-
-  override mutation<
-    Mutation extends FunctionReference<"mutation"> | FunctionReference_future<"mutation">,
-  >(
-    _mutation: Mutation,
-    ..._argsAndOptions: ArgsAndOptions<Mutation, MutationOptions<FunctionArgs<Mutation>>>
-  ): Promise<FunctionReturnType<Mutation>> {
-    return Promise.resolve(undefined);
-  }
-}
-
-const fakeConvexClient = new FakeConvexReactClient();
+// AccountRow reads Convex through src/data/convex; this test never expands
+// the row or fires its buttons, so a fake app whose queries all read as "no
+// data yet" is all it needs.
+const fakeConvexClient = fakeConvex();
 
 /**
  * Workflow-run scenario evidence for to-do.md's acceptance check:
@@ -96,9 +52,7 @@ function envelope(overrides: Partial<PublicationUpdateEnvelope> = {}): Publicati
 }
 
 function renderedLabel(row: AccountLibraryRow): string {
-  const html = renderToStaticMarkup(
-    createElement(ConvexProvider, { client: fakeConvexClient }, createElement(AccountRow, { row })),
-  );
+  const html = renderHtml(AccountRow, { row }, fakeConvexClient);
 
   return html;
 }

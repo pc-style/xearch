@@ -1,14 +1,14 @@
 # Xearch
 
 Search X posts, import account histories through x.md, and read the pages behind
-the links. React is the frontend; Convex owns application state and integrations.
+the links. SolidJS is the frontend; Convex owns application state and integrations.
 Pronsh owns the separate search and indexing implementation.
 
 ## Repository map
 
 | Path              | Purpose                                                         |
 | ----------------- | --------------------------------------------------------------- |
-| `src/`            | React application and styles                                    |
+| `src/`            | SolidJS application and styles                                  |
 | `convex/`         | Application backend, ownership, jobs, and provider integrations |
 | `search/`         | Pronsh's Rust search and indexing workspace                     |
 | `tests/`          | Application tests; Rust tests stay with their crates            |

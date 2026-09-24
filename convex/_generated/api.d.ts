@@ -35,6 +35,7 @@ import type * as publication from "../publication.js";
 import type * as queue from "../queue.js";
 import type * as search from "../search.js";
 import type * as summary from "../summary.js";
+import type * as wall from "../wall.js";
 import type * as worker from "../worker.js";
 
 import type {
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   queue: typeof queue;
   search: typeof search;
   summary: typeof summary;
+  wall: typeof wall;
   worker: typeof worker;
 }>;
 

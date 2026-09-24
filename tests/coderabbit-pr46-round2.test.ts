@@ -7,8 +7,7 @@
 // matching this repo's no-jsdom test convention (see
 // tests/signed-out-states.test.ts, which renders the same component).
 import { describe, expect, it } from "vitest";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderHtml } from "./solid";
 import OverviewStats from "../src/library/OverviewStats";
 import type { DashboardSummary } from "../convex/lib/contracts";
 
@@ -48,17 +47,15 @@ const summary: DashboardSummary = {
 
 describe("OverviewStats labels the searchable-account count accurately", () => {
   it("says 'Searchable accounts', not 'Imported accounts'", () => {
-    const html = renderToStaticMarkup(
-      createElement(OverviewStats, {
-        summary,
-        health: undefined,
-        limits: undefined,
-        config: undefined,
-        liveNow: Date.now(),
-        connected: true,
-        isAuthenticated: true,
-      }),
-    );
+    const html = renderHtml(OverviewStats, {
+      summary,
+      health: undefined,
+      limits: undefined,
+      config: undefined,
+      liveNow: Date.now(),
+      connected: true,
+      isAuthenticated: true,
+    });
 
     expect(html).toContain("Searchable accounts");
     expect(html).not.toContain("Imported accounts");

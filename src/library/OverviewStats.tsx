@@ -1,3 +1,4 @@
+import { Show } from "solid-js";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import type { DashboardSummary } from "../../convex/lib/contracts";
@@ -28,15 +29,7 @@ function scopeLabel(scope: DashboardSummary["scope"]): string {
   return scope.kind === "global" ? "shared across every signed-in user" : "one account";
 }
 
-export default function OverviewStats({
-  summary,
-  health,
-  limits,
-  config,
-  liveNow,
-  connected,
-  isAuthenticated,
-}: {
+export default function OverviewStats(props: {
   summary: DashboardSummary | undefined;
   health: ServiceStatus[] | undefined;
   limits: ProviderLimit[] | undefined;
@@ -55,106 +48,94 @@ export default function OverviewStats({
   // the two must not share a label (to-do.md P0: configuration, connectivity,
   // download completion and publication are distinct states).
   return (
-    <section className="library-section" aria-label="Overview">
-      <div className="library-section-head">
+    <section class="library-section" aria-label="Overview">
+      <div class="library-section-head">
         <h2>Overview</h2>
-        {summary && (
-          <p className="library-muted">
-            As of {formatRelative(summary.observedAt)} · {scopeLabel(summary.scope)}
-            {!connected && " · reconnecting — figures reflect the last data received"}
-          </p>
-        )}
+        <Show when={props.summary}>
+          {(summary) => (
+            <p class="library-muted">
+              As of {formatRelative(summary().observedAt)} · {scopeLabel(summary().scope)}
+              {!props.connected && " · reconnecting — figures reflect the last data received"}
+            </p>
+          )}
+        </Show>
       </div>
-      {!isAuthenticated ? (
-        <p className="library-muted">Connect to see your indexed posts, people and queue.</p>
-      ) : !summary ? (
-        <p className="library-loading">Loading overview…</p>
-      ) : (
-        <div className="library-stats-grid">
-          <Stat label="Indexed posts" count={summary.indexedPosts} />
-          {/* `summary.indexedAccounts` (convex/summary.ts) counts only
-              accounts whose publication state is "searchable" — an account
-              that's downloaded but not yet published isn't in this number,
-              even though it is imported. "Imported accounts" overclaimed
-              that; "Searchable accounts" says exactly what's counted
-              (CodeRabbit finding on PR #46). It's still a real link to the
-              full account library below, which does list every imported
-              account regardless of publication state — the count and the
-              list it links to cover different sets on purpose. */}
-          <Stat
-            label="Searchable accounts"
-            count={summary.indexedAccounts}
-            href="#account-library"
-          />
-          <Stat label="Waiting downloads" count={summary.queue.waitingDownloads} />
-          <Stat label="Active downloads" count={summary.queue.activeDownloads} />
-          <Stat
-            label="Saved captures awaiting indexing"
-            count={summary.queue.savedCapturesAwaitingIndexing}
-          />
-          {/* The indexer's own backlog for the shared accounts, one tile per unit
-              it can report in (convex/lib/contracts.ts
-              providerQueuedWorkValidator). Never added together: a capture
-              is a file and a job is a run, and neither is a post. The indexer
-              has never sent `pendingWork` in practice, so these three stay
-              "unknown" indefinitely today — rather than show that as a
-              permanent, unexplained "unknown" tile (A4), each one renders
-              nothing until the indexer actually reports a unit, and reappears
-              on its own the moment it does. */}
-          {summary.providerQueuedWork.posts.kind === "known" && (
-            <Stat label="Queued posts" count={summary.providerQueuedWork.posts} />
+      <Show
+        when={props.isAuthenticated}
+        fallback={<p class="library-muted">Connect to see your indexed posts, people and queue.</p>}
+      >
+        <Show when={props.summary} fallback={<p class="library-loading">Loading overview…</p>}>
+          {(summary) => (
+            <div class="library-stats-grid">
+              <Stat label="Indexed posts" count={summary().indexedPosts} />
+              {/* `indexedAccounts` counts only accounts whose publication
+                  state is "searchable" — hence "Searchable accounts", not
+                  "Imported accounts" (CodeRabbit finding on PR #46). It still
+                  links to the full account library below, which lists every
+                  imported account regardless of publication state. */}
+              <Stat
+                label="Searchable accounts"
+                count={summary().indexedAccounts}
+                href="#account-library"
+              />
+              <Stat label="Waiting downloads" count={summary().queue.waitingDownloads} />
+              <Stat label="Active downloads" count={summary().queue.activeDownloads} />
+              <Stat
+                label="Saved captures awaiting indexing"
+                count={summary().queue.savedCapturesAwaitingIndexing}
+              />
+              {/* The indexer's own backlog, one tile per unit it reports in,
+                  never added together. Each renders nothing until the indexer
+                  actually reports that unit (A4). */}
+              <Show when={summary().providerQueuedWork.posts.kind === "known"}>
+                <Stat label="Queued posts" count={summary().providerQueuedWork.posts} />
+              </Show>
+              <Show when={summary().providerQueuedWork.captures.kind === "known"}>
+                <Stat label="Queued captures" count={summary().providerQueuedWork.captures} />
+              </Show>
+              <Show when={summary().providerQueuedWork.jobs.kind === "known"}>
+                <Stat label="Queued indexer jobs" count={summary().providerQueuedWork.jobs} />
+              </Show>
+              <Stat label="Failed & retryable" count={summary().queue.failedRetryable} />
+            </div>
           )}
-          {summary.providerQueuedWork.captures.kind === "known" && (
-            <Stat label="Queued captures" count={summary.providerQueuedWork.captures} />
-          )}
-          {summary.providerQueuedWork.jobs.kind === "known" && (
-            <Stat label="Queued indexer jobs" count={summary.providerQueuedWork.jobs} />
-          )}
-          <Stat label="Failed & retryable" count={summary.queue.failedRetryable} />
-        </div>
-      )}
+        </Show>
+      </Show>
       <StatusBlock
-        config={config}
-        health={health}
-        limits={limits}
-        liveNow={liveNow}
-        isAuthenticated={isAuthenticated}
+        config={props.config}
+        health={props.health}
+        limits={props.limits}
+        liveNow={props.liveNow}
+        isAuthenticated={props.isAuthenticated}
       />
     </section>
   );
 }
 
-function Stat({
-  label,
-  count,
-  href,
-}: {
+function Stat(props: {
   label: string;
   count: DashboardSummary["indexedPosts"];
   /** When set, the whole tile becomes a real link (an `<a>`, not a JS-only
    * click handler) to that in-page section — e.g. the account library. */
   href?: string;
 }) {
-  const unknown = count.kind === "unknown";
-
-  // A3: the tile used to repeat its own number on a second line ("9,006 /
-  // INDEXED POSTS / 9,006 posts"). The label already says what unit this is,
-  // so the value alone is the whole tile now — nothing invented to replace
-  // the redundant line with.
-  const body = (
+  // A3: the value alone is the whole tile — the label already says the unit.
+  const body = () => (
     <>
-      <span className={`value${unknown ? " unknown" : ""}`}>{countValue(count)}</span>
-      <span className="label">{label}</span>
+      <span class={["value", { unknown: props.count.kind === "unknown" }]}>
+        {countValue(props.count)}
+      </span>
+      <span class="label">{props.label}</span>
     </>
   );
 
-  if (href) {
-    return (
-      <a className="library-stat library-stat-link" href={href}>
-        {body}
-      </a>
-    );
-  }
-
-  return <div className="library-stat">{body}</div>;
+  return (
+    <Show when={props.href} fallback={<div class="library-stat">{body()}</div>}>
+      {(href) => (
+        <a class="library-stat library-stat-link" href={href()}>
+          {body()}
+        </a>
+      )}
+    </Show>
+  );
 }
