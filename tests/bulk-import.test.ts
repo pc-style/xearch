@@ -9,7 +9,12 @@ import {
   type ProviderThrottle,
   type RawObject,
 } from "../convex/lib/xmd";
-import { collectXmd, splitHistoryPage, type CollectionRequest } from "../convex/lib/collect";
+import {
+  collectXmd,
+  splitHistoryPage,
+  TIMEOUT_FLOOR_POSTS,
+  type CollectionRequest,
+} from "../convex/lib/collect";
 import { CAPTURE_MAX_BYTES, deliverCapture, type Capture } from "../convex/lib/handoff";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
@@ -513,5 +518,66 @@ describe("only a refusal caused by a limit counts as throttling", () => {
       Response.json({ code: "rate_limited", retry_after: 423 }, { status: 429 }),
     );
     expect(header?.retryAfterMs).toBe(body?.retryAfterMs);
+  });
+});
+
+// x.md needs more than the request timeout to assemble a 5000-post page for a
+// media-heavy account. The huggingface import failed seven times in
+// production: the elapsed timeout escaped as a plain TimeoutError, the worker
+// reported "Download interrupted", and every retry asked for the same page.
+describe("a history page the provider cannot deliver in time", () => {
+  const timeout = () =>
+    new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  function upstream(deliverAt: number | null) {
+    const asked: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(requestUrl(input));
+      if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
+      const maxPosts = Number(url.searchParams.get("max_posts"));
+      asked.push(String(maxPosts));
+      if (deliverAt === null || maxPosts > deliverAt) throw timeout();
+      return Response.json(page(3));
+    });
+    return { asked, fetcher };
+  }
+  async function collect(fetcher: typeof fetch) {
+    const store = receiver();
+    const phases: string[] = [];
+    const result = await collectXmd(
+      new XmdClient("test-key", fetcher),
+      request,
+      (capture) =>
+        deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
+      async () => {},
+      () => NOW,
+      undefined,
+      async (phase) => {
+        phases.push(phase);
+      },
+    );
+    return { result, phases };
+  }
+  it("is reported as a retryable provider timeout, not a generic interruption", async () => {
+    const xmd = new XmdClient("test-key", async () => {
+      throw timeout();
+    });
+    const failure = await xmd.history("theo", { maxPosts: 5000 }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProviderError);
+    expect((failure as ProviderError).code).toBe("provider_timeout");
+    expect((failure as ProviderError).retryable).toBe(true);
+    expect((failure as ProviderError).message).toContain("120 seconds");
+  });
+  it("asks for a smaller page instead of the same page again", async () => {
+    const { asked, fetcher } = upstream(2500);
+    const { result, phases } = await collect(fetcher);
+    expect(asked).toEqual(["5000", "2500"]);
+    expect(result.postsReceived).toBe(3);
+    expect(phases).toContain("x.md timed out; asking for 2500 posts per page");
+  });
+  it("stops shrinking at the floor and hands the timeout up", async () => {
+    const { asked, fetcher } = upstream(null);
+    const failure = await collect(fetcher).catch((error: unknown) => error);
+    expect((failure as ProviderError).code).toBe("provider_timeout");
+    expect(asked).toEqual(["5000", "2500", "1250", "625", String(TIMEOUT_FLOOR_POSTS)]);
   });
 });

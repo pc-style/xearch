@@ -10,6 +10,26 @@ const token = (await readFile(".local-captures/worker-token", "utf8")).trim();
 const captureToken = (await readFile(".local-captures/token", "utf8")).trim();
 const client = new ConvexHttpClient("https://utmost-kudu-321.convex.cloud");
 let stopping = false;
+/** Delay before a job interrupted by something other than the provider is retried. */
+const TRANSIENT_RETRY_MS = 30_000;
+// Timestamped so a failure can be lined up against the indexer's journal and
+// Convex's job timestamps; the old bare lines could not be dated at all.
+function log(message: string) {
+  console.log(`${new Date().toISOString()} ${message}`);
+}
+// Name and message only — never a stack (it can carry request URLs) — with the
+// provider key redacted in case a transport error echoes a request. Before
+// this, every non-provider failure was logged as the same "Job interrupted"
+// line, which hid a client-side timeout for seven consecutive retries.
+function describeFailure(error: unknown): string {
+  const text =
+    error instanceof ProviderError
+      ? `${error.code}: ${error.message}`
+      : error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
+  return text.replaceAll(env.X_MD_API_KEY!, "[redacted]");
+}
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     stopping = true;
@@ -35,7 +55,7 @@ async function receiverHealth(): Promise<{ healthy: boolean; error?: string }> {
     };
   }
 }
-console.log(
+log(
   "Production download worker started. Connections are outbound only; raw posts stay on this machine.",
 );
 // `stopping` is flipped by the SIGINT/SIGTERM handlers above; the break keeps
@@ -50,7 +70,7 @@ for (;;) {
       receiver,
     });
     if (job) {
-      console.log(`Downloading ${job.kind} for ${job.input}`);
+      log(`Downloading ${job.kind} for ${job.input} (attempt ${job.attempt})`);
       const report = (args: Record<string, unknown>) =>
         client.action("worker:report" as any, {
           token,
@@ -126,7 +146,7 @@ for (;;) {
                 }
               : undefined,
         });
-        console.log("Batch saved; production progress updated.");
+        log("Batch saved; production progress updated.");
       } catch (error) {
         // This worker is the only thing that talks to x.md in production, so
         // it is the only place a provider's "slow down" is ever observed.
@@ -155,16 +175,24 @@ for (;;) {
             error instanceof ProviderError
               ? error.message
               : "Download interrupted. Saved batches are safe. Retry to continue.",
+          // A generic interruption (Convex unreachable for a moment, the
+          // receiver restarting) is transient by nature, so it is reported
+          // as retryable too: an import runs to the end of the account's
+          // history on its own, and nobody has to click "Retry" for a blip.
           retryAfter:
-            error instanceof ProviderError && error.retryable ? error.retryAfter : undefined,
+            error instanceof ProviderError
+              ? error.retryable
+                ? error.retryAfter
+                : undefined
+              : TRANSIENT_RETRY_MS,
         });
-        console.log("Job interrupted; see its production status for details.");
+        log(`Job interrupted: ${describeFailure(error)}`);
       } finally {
         clearInterval(heartbeat);
       }
     }
-  } catch {
-    console.log("Worker connection unavailable. Retrying shortly; credentials are not logged.");
+  } catch (error) {
+    log(`Worker connection unavailable (${describeFailure(error)}). Retrying shortly.`);
   }
   if (!stopping) await new Promise((resolve) => setTimeout(resolve, 5000));
 }
