@@ -337,6 +337,20 @@ export async function collectXmd(
       await add(response);
       metadata = response;
 
+      // `XmdClient.read` only checks for a JSON object. A page without a
+      // `posts` array is malformed, not empty: recording 0 here would let the
+      // older-history backfill (convex/jobs.ts `onHistoryWindowFinished`)
+      // treat a broken window as one it has already covered. The capture is
+      // already retained above for review, the same as the history path.
+      if (!Array.isArray(response.posts))
+        throw new ProviderError("invalid_search", "x.md search page is missing its posts.");
+
+      // Count this page's posts the same way the history path does: the
+      // backfill reads it to know whether a dated window came back empty,
+      // and the job row reports it. Without this every search-backed window
+      // read as empty no matter what it fetched.
+      postsReceived = response.posts.length;
+
       if (response.degraded)
         warnings.push(
           "x.md returned web-indexed search results because live search was unavailable.",
