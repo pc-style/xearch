@@ -6,6 +6,7 @@ import {
   Link2,
   Mail,
   MessageCircle,
+  MoreHorizontal,
   Plus,
   Repeat2,
   Search,
@@ -267,6 +268,9 @@ export function ResultsSection({
   frontendStats,
   searchPending,
   emailNeedsSignIn,
+  alreadySaved,
+  statsForNerds,
+  onToggleStats,
 }: {
   view: ViewMode;
   raw: string;
@@ -293,6 +297,9 @@ export function ResultsSection({
   frontendStats?: SearchAttemptSnapshot | null;
   searchPending?: boolean;
   emailNeedsSignIn?: boolean;
+  alreadySaved?: boolean;
+  statsForNerds?: boolean;
+  onToggleStats?: () => void;
 }) {
   // Effect-free focus/scroll: callback ref runs at commit time, no useEffect.
   function resultsTitleRef(node: HTMLHeadingElement | null) {
@@ -303,6 +310,20 @@ export function ResultsSection({
 
   const deferredVisible = useDeferredValue(visible);
 
+  // Web context / Email / Find on X all act on the current result set, so
+  // they're meaningless once there's nothing to act on (QA reports A7, B4):
+  // an invalid query, a failed search, or zero matches. Save search stays
+  // out of this gate — saving the query itself doesn't need results.
+  const hasUsableResults =
+    view === ViewMode.Search && !queryError && result?.status !== "failed" && visible.length > 0;
+
+  // Stats belong to the search *attempt*, not to having matches — a
+  // completed zero-match search still ran, and the frontend/backend timing
+  // it produced is exactly what "stats for nerds" is for. Gating this on
+  // `visible.length` (inside the has-results branch below) hid it whenever
+  // a search legitimately came back empty.
+  const showStats = view === ViewMode.Search && !queryError && result?.status === "complete";
+
   return (
     <section className="results">
       <header className="results-header">
@@ -310,19 +331,19 @@ export function ResultsSection({
           <h1 ref={resultsTitleRef} tabIndex={-1}>
             {view === ViewMode.Bookmarks ? "Bookmarks" : raw}
           </h1>
-          <p>
+          <p aria-live="polite">
             {view === ViewMode.Bookmarks
               ? `${bookmarkedIds.size} saved ${bookmarkedIds.size === 1 ? "post" : "posts"} in this browser's session`
               : queryError
                 ? "Fix the search above to see results"
                 : configured === undefined
-                  ? "Checking your search service connection"
+                  ? "Checking configuration…"
                   : !configured.search
-                    ? "Waiting for the search service connection"
+                    ? "Search isn't configured on this site"
                     : result?.status === "complete"
-                      ? `${result.rows.length} posts on this page`
+                      ? `${result.rows.length} ${result.rows.length === 1 ? "post" : "posts"} on this page`
                       : result?.status === "failed"
-                        ? "Search could not complete"
+                        ? "See what went wrong below"
                         : "Finding matching posts…"}
           </p>
         </div>
@@ -331,40 +352,54 @@ export function ResultsSection({
             <button
               type="button"
               title="Save search"
-              disabled={busy || !!queryError}
+              disabled={busy || !!queryError || alreadySaved}
               onClick={onSave}
             >
-              <Bookmark size={15} />
-              Save search
+              <Bookmark size={15} fill={alreadySaved ? "currentColor" : "none"} />
+              {alreadySaved ? "Saved" : "Save search"}
             </button>
-            <button
-              type="button"
-              disabled={busy || !!queryError || !configured?.firecrawl}
-              onClick={onWebContext}
-            >
-              <Link2 size={15} />
-              Web context
-            </button>
-            <button
-              type="button"
-              title={emailNeedsSignIn ? "Sign in to email results" : "Email top results"}
-              disabled={!!queryError || !visible.length || !configured?.email}
-              onClick={() => onOpenModal(ModalKind.Email)}
-            >
-              <Mail size={15} />
-              {emailNeedsSignIn ? "Email · sign in" : "Email"}
-            </button>
-            {/* This starts a real x.md fetch against X, not a preview — the
-                label says so, and the status line below tracks the job
-                instead of only surfacing it in the Recent imports modal. */}
-            <button
-              type="button"
-              disabled={busy || !!queryError || !configured?.indexing}
-              onClick={onLiveSearch}
-            >
-              <Search size={15} />
-              Import from X
-            </button>
+            {hasUsableResults && (
+              <details className="result-menu">
+                <summary aria-label="More actions" title="More actions">
+                  <MoreHorizontal size={15} />
+                </summary>
+                <div className="result-menu-items">
+                  <button
+                    type="button"
+                    disabled={busy || !configured?.firecrawl}
+                    onClick={onWebContext}
+                  >
+                    <Link2 size={15} />
+                    Web context (fetches page)
+                  </button>
+                  <div className="result-menu-item">
+                    <button
+                      type="button"
+                      disabled={!configured?.email}
+                      onClick={() => onOpenModal(ModalKind.Email)}
+                    >
+                      <Mail size={15} />
+                      {emailNeedsSignIn ? "Email · sign in" : "Email"}
+                    </button>
+                    {!configured?.email && (
+                      <p className="result-menu-reason">Email isn't set up on this deployment.</p>
+                    )}
+                  </div>
+                  {/* This starts a real x.md fetch against X, not a preview —
+                      the label says so, and the status line below tracks the
+                      job instead of only surfacing it in the Recent imports
+                      modal. */}
+                  <button
+                    type="button"
+                    disabled={busy || !configured?.indexing}
+                    onClick={onLiveSearch}
+                  >
+                    <Search size={15} />
+                    Import from X
+                  </button>
+                </div>
+              </details>
+            )}
           </div>
         )}
       </header>
@@ -374,19 +409,24 @@ export function ResultsSection({
         </p>
       )}
       {queryError ? (
-        <div className="empty">
+        <div className="empty" role="alert">
           <h2>Adjust your search</h2>
           <p>{queryError}</p>
         </div>
       ) : view === ViewMode.Search && configured === undefined ? (
+        // `configured` is a one-time read of which env vars are set, not a
+        // live connectivity probe — this is "we haven't asked yet", not
+        // "checking the connection" (QA report: configuration, connectivity,
+        // download completion and search publication are four distinct
+        // states, and copy must say which one it means).
         <div className="empty" role="status">
-          Checking your connections…
+          Checking configuration…
         </div>
       ) : view === ViewMode.Search && configured?.search === false ? (
         <div className="empty">
           <Search size={30} />
-          <h2>Search is not available on this site.</h2>
-          <p>The interface is ready. Your data service supplies the corpus and search results.</p>
+          <h2>Search isn't configured on this site.</h2>
+          <p>Search needs the search service to be configured for this site.</p>
           {OPERATOR_BUILD && (
             <button type="button" onClick={() => onOpenModal(ModalKind.Setup)}>
               View connections
@@ -419,10 +459,25 @@ export function ResultsSection({
               : "Import an account's history, try fewer keywords, or find more posts on X."}
           </p>
           {view === ViewMode.Search && (
-            <button type="button" onClick={() => onOpenModal(ModalKind.Imports)}>
-              <Plus size={15} />
-              Import an account
-            </button>
+            <div className="empty-actions">
+              {/* `onLiveSearch` fetches from X using the *current query*, not
+                  an account — it stays available even with zero matches
+                  (the overflow menu's equivalent action is gated on having
+                  results to act on, which doesn't apply here since this is
+                  the one place actually meant to go get more). */}
+              <button
+                type="button"
+                disabled={busy || !!queryError || !configured?.indexing}
+                onClick={onLiveSearch}
+              >
+                <Search size={15} />
+                Import from X
+              </button>
+              <button type="button" onClick={() => onOpenModal(ModalKind.Imports)}>
+                <Plus size={15} />
+                Import an account
+              </button>
+            </div>
           )}
         </div>
       ) : (
@@ -430,11 +485,8 @@ export function ResultsSection({
           <p className="scope-note">
             {view === ViewMode.Bookmarks
               ? "Bookmarks are stored in this browser's session until you remove them."
-              : "Results and ordering come from your search service. Engagement reflects the source snapshot."}
+              : "Engagement counts were captured when each post was indexed, not live."}
           </p>
-          {(result?.stats || frontendStats) && (
-            <NerdStatsPanel frontend={frontendStats ?? null} result={result} />
-          )}
           {searchPending && (
             <p className="scope-note" role="status">
               Updating results…
@@ -459,6 +511,29 @@ export function ResultsSection({
             <button type="button" className="load-more" disabled={busy} onClick={onLoadMore}>
               Load more
             </button>
+          )}
+        </>
+      )}
+      {/* Rendered for any completed search, matches or not — a zero-match
+          search still ran and still has stats worth inspecting (QA: stats
+          used to be nested inside the has-results branch above, so a
+          zero-match search hid both the panel and its toggle). */}
+      {showStats && (
+        <>
+          {/* Gated on the caller's own includeStats choice, not on whether
+              client telemetry happens to exist — frontendStats is always
+              populated the moment a search runs, so gating on it alone made
+              this panel render even with the checkbox off (QA report P2). */}
+          {statsForNerds && (result?.stats || frontendStats) && (
+            <NerdStatsPanel frontend={frontendStats ?? null} result={result} />
+          )}
+          {onToggleStats && (
+            <p className="scope-note">
+              <button type="button" className="text-button" onClick={onToggleStats}>
+                {statsForNerds ? "Stats for nerds: on" : "Stats for nerds"}
+              </button>{" "}
+              <span className="stats-hint">(or press ? / ⌘⇧S)</span>
+            </p>
           )}
         </>
       )}

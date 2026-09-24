@@ -89,6 +89,16 @@ p {
   display: flex;
   flex-direction: column;
 }
+.app.not-found {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 20px;
+}
+.app.not-found a {
+  color: var(--accent);
+}
 .topbar {
   height: 92px;
   padding: 0 5%;
@@ -127,7 +137,13 @@ p {
   padding: 10px 14px;
 }
 .topbar nav small {
-  color: var(--accent);
+  color: #1a110b;
+  background: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 999px;
 }
 main {
   flex: 1;
@@ -361,7 +377,7 @@ main {
   display: flex;
   justify-content: space-between;
   gap: 20px;
-  align-items: center;
+  align-items: flex-start;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--line);
 }
@@ -371,6 +387,12 @@ main {
   letter-spacing: -0.6px;
   margin-bottom: 7px;
   overflow-wrap: anywhere;
+  /* A long query (up to 300 chars) used to render as a six-line heading with
+     the action buttons floating beside its middle. Clamp to two lines. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .results-header h1:focus {
   outline: 3px solid var(--accent);
@@ -390,6 +412,62 @@ main {
 .result-tools button {
   font-size: 11px;
   padding: 8px 10px;
+}
+.result-menu {
+  position: relative;
+}
+.result-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+  list-style: none;
+}
+.result-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.result-menu > summary:hover {
+  background: #1a1816;
+  border-color: #55504b;
+}
+.result-menu[open] > summary {
+  background: #1a1816;
+  border-color: #55504b;
+}
+.result-menu-items {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  padding: 8px;
+  background: #14110d;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.5);
+}
+.result-menu-items > button,
+.result-menu-item > button {
+  width: 100%;
+  justify-content: flex-start;
+  border-color: transparent;
+  font-size: 12px;
+}
+.result-menu-reason {
+  margin: 2px 0 0;
+  padding: 0 10px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.stats-hint {
+  color: #55524d;
 }
 .scope-note {
   font-size: 11px;
@@ -550,6 +628,16 @@ mark {
 }
 .empty button {
   margin-top: 10px;
+}
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.empty-actions button {
+  margin-top: 0;
 }
 .empty.small {
   padding: 24px 10px;
@@ -729,6 +817,34 @@ dialog::backdrop {
   color: #e3a99e;
   background: #33231f;
 }
+.orbit-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+  width: 46px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbbdab;
+  background: #24211d;
+}
+.account-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.account-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  justify-content: flex-start;
+  padding: 8px 0;
+  font-size: 13px;
+}
 .saved-row {
   display: flex;
   justify-content: space-between;
@@ -853,6 +969,10 @@ code {
     width: 36px;
     height: 36px;
   }
+  .orbit-more {
+    width: 36px;
+    height: 36px;
+  }
 }
 @media (max-width: 700px) {
   .topbar {
@@ -903,12 +1023,18 @@ code {
     font-size: 13px;
   }
   .search-help {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
     font-size: 11px;
     line-height: 1.7;
   }
+  .query-wrap input {
+    font-size: 14px;
+  }
   .ai {
-    margin-top: 10px;
+    margin-top: 0;
   }
   .orbit {
     display: none;

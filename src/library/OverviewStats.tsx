@@ -9,7 +9,7 @@ import StatusBlock from "./StatusBlock";
 type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
 
 /**
- * "Indexed posts", "Indexed people", the queue breakdown, and service
+ * "Indexed posts", "Searchable accounts", the queue breakdown, and service
  * health — the P0 "simple, trustworthy stats" section. Every number here is
  * exactly what `convex/summary.ts` computed (a `Count` or a `ServiceStatus`)
  * with nothing re-derived client-side, so it can never drift from the
@@ -72,11 +72,20 @@ export default function OverviewStats({
       ) : (
         <div className="library-stats-grid">
           <Stat label="Indexed posts" count={summary.indexedPosts} />
-          {/* Links to the account library below. Both are now built from the
-              same shared account set (convex/summary.ts), so this
-              number is genuinely the length of the list it points at — it is
-              a real link, not a navigation gesture past a mismatch. */}
-          <Stat label="Indexed people" count={summary.indexedAccounts} href="#account-library" />
+          {/* `summary.indexedAccounts` (convex/summary.ts) counts only
+              accounts whose publication state is "searchable" — an account
+              that's downloaded but not yet published isn't in this number,
+              even though it is imported. "Imported accounts" overclaimed
+              that; "Searchable accounts" says exactly what's counted
+              (CodeRabbit finding on PR #46). It's still a real link to the
+              full account library below, which does list every imported
+              account regardless of publication state — the count and the
+              list it links to cover different sets on purpose. */}
+          <Stat
+            label="Searchable accounts"
+            count={summary.indexedAccounts}
+            href="#account-library"
+          />
           <Stat label="Waiting downloads" count={summary.queue.waitingDownloads} />
           <Stat label="Active downloads" count={summary.queue.activeDownloads} />
           <Stat

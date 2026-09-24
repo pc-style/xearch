@@ -8,6 +8,7 @@ export enum ModalKind {
   Saved = "saved",
   Email = "email",
   Setup = "setup",
+  AllAccounts = "all-accounts",
 }
 
 export enum NerdSection {
