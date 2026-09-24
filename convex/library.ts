@@ -69,12 +69,15 @@ function latestOf(jobs: Doc<"jobs">[]): Doc<"jobs"> {
 // for the next page or the next retry — convex/jobs.ts `finish` requeues a
 // job with more to fetch (bulk history via `nextUntil`, every other kind via
 // `nextCursor`) and backs off and requeues a transient failure on its own.
-// A "queued" job with a future `readyAt` is either of those in flight, which
-// is exactly what "wait" reports.
+// A "queued" job with a `readyAt` is either of those in flight, which is
+// exactly what "wait" reports. Whether that time has already passed is the
+// client's call against its own clock: a query only re-runs when a document
+// it read changes, never because wall-clock time moved, so comparing here
+// would leave a row saying "retrying at 10:05" long after 10:05.
 function nextActionFor(job: Doc<"jobs">): NextAction {
   if (job.status === "failed" || job.status === "partial" || job.status === "cancelled")
     return { kind: "retry", jobId: job._id };
-  if (job.status === "queued" && job.readyAt !== undefined && job.readyAt > Date.now())
+  if (job.status === "queued" && job.readyAt !== undefined)
     return { kind: "wait", jobId: job._id, readyAt: job.readyAt };
   return { kind: "none" };
 }

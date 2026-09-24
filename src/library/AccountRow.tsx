@@ -14,6 +14,7 @@ import {
   isStalledRun,
 } from "./format";
 import { Badge } from "./format.tsx";
+import { useDashboardClock } from "./clock";
 
 /**
  * One account library row: identity, the four states the "dashboard"
@@ -159,6 +160,9 @@ function NextActionControl({
   busy: boolean;
   onRetry: (jobId: Id<"jobs">) => void;
 }) {
+  // The query reports the scheduled time; whether it has passed is decided
+  // here against the dashboard's ticking clock (see convex/library.ts).
+  const now = useDashboardClock();
   if (action.kind === "retry")
     return (
       <button disabled={busy} onClick={() => onRetry(action.jobId)}>
@@ -168,7 +172,9 @@ function NextActionControl({
   if (action.kind === "wait")
     return (
       <span className="library-muted">
-        Retrying automatically at {new Date(action.readyAt).toLocaleTimeString()}
+        {action.readyAt > now
+          ? `Retrying automatically at ${new Date(action.readyAt).toLocaleTimeString()}`
+          : "Retrying automatically…"}
       </span>
     );
   return null;
