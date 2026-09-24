@@ -256,15 +256,15 @@ export const OPS_PATH = "/ops";
 
 /**
  * What to do with a page load at `path`: `OPS_PATH` becomes "/" (keeping
- * the rest of the URL), and in the operator build also clears whatever
- * would ask for the search view instead, so the dashboard opens — the same
- * URL the header's Dashboard button produces. The public build has no
+ * the rest of the URL), and in the operator build also clears every param
+ * App.tsx's view Switch reads ahead of the dashboard (`queue`, `search`,
+ * `q`), so the dashboard always opens. The public build has no
  * dashboard, so there `/ops` is just the home page. Anything else: null.
  */
 export function opsEntryPatch(path: string, operator: boolean): LocationPatch | null {
   if (path !== OPS_PATH) return null;
 
-  return operator ? { path: "/", search: false, raw: "" } : { path: "/" };
+  return operator ? { path: "/", queue: false, search: false, raw: "" } : { path: "/" };
 }
 
 export function pushLocation(patch: LocationPatch): void {

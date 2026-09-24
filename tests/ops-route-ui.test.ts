@@ -48,6 +48,32 @@ describe("/ops", () => {
     expect(app.html()).not.toContain("Page not found");
   });
 
+  it("opens the dashboard, not the Queue page, for /ops?queue=1", async () => {
+    const app = await mountAppAt("/ops?queue=1");
+
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
+    await rendered(app, "main.control-room");
+  });
+
+  it("replaces the /ops entry in place, so Back leaves without a rewrite loop", async () => {
+    window.history.replaceState(null, "", "/?search=1&q=before");
+    window.history.pushState(null, "", "/ops");
+    const entries = window.history.length;
+    const app = await mountAppAt("/ops");
+
+    await rendered(app, "main.control-room");
+    expect(window.location.pathname).toBe("/");
+    expect(window.history.length).toBe(entries);
+
+    window.history.back();
+    await rendered(app, "#query");
+
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/?search=1&q=before");
+    expect(window.history.length).toBe(entries);
+    expect(app.container.querySelector("main.control-room")).toBeNull();
+  });
+
   it("closing the dashboard opened at /ops lands on the search home at /", async () => {
     const app = await mountAppAt("/ops");
     const close = await rendered(app, "main.control-room .logo");

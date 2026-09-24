@@ -104,7 +104,7 @@ describe("opsEntryPatch", () => {
     const patch = opsEntryPatch("/ops", true);
 
     expect(patch).not.toBeNull();
-    expect(previewPatch("https://xearch.invalid/ops?search=1&q=theo", patch!)).toBe("/");
+    expect(previewPatch("https://xearch.invalid/ops?search=1&q=theo&queue=1", patch!)).toBe("/");
   });
 
   it("sends /ops to the plain home page at / in the public build, keeping the query", () => {
