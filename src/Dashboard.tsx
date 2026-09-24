@@ -10,6 +10,7 @@ import { JobRow } from "./JobRow";
 import Library from "./library/Library";
 import { useDashboardClock, useLiveNow } from "./library/clock";
 import { operatorArgs } from "./operatorToken";
+import { useStableQuery } from "./library/stableQuery";
 
 // Exported so tests/dashboard-job-ui.test.ts can render this row in
 // isolation (the fake-Convex-client harness pattern tests/library-ui.test.ts
@@ -125,7 +126,12 @@ export default function Dashboard({
   // above is unrelated (a retry-countdown display, not a liveness check)
   // and can stay on the coarser, shared clock.
   const liveNow = useLiveNow();
-  const config = useQuery(api.integrations.operator, isAuthenticated ? { now: liveNow } : "skip");
+  // `useStableQuery`: `liveNow` ticks every 5s and a bare `useQuery` would
+  // hand every consumer `undefined` on each tick (see src/library/stableQuery.ts).
+  const config = useStableQuery(
+    api.integrations.operator,
+    isAuthenticated ? { now: liveNow } : "skip",
+  );
   const [showDismissed, setShowDismissed] = useState(false);
 
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
