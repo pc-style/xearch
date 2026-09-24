@@ -69,45 +69,6 @@ export function splitHistoryPage(envelope: RawObject, budget = CAPTURE_BUDGET): 
   return parts;
 }
 
-/**
- * Smallest page worth asking for once the provider has timed out on a larger
- * one. Below this a page that still times out is the provider's problem, not
- * the page size's, and the retryable `provider_timeout` is handed up as-is.
- */
-export const TIMEOUT_FLOOR_POSTS = 500;
-
-/**
- * One history page, shrinking the page on `provider_timeout`. A 5000-post page
- * of a media-heavy account can take x.md longer than the request timeout; the
- * huggingface import failed seven times in production re-asking for the same
- * page. Halving down to TIMEOUT_FLOOR_POSTS costs a few extra requests and
- * loses nothing: `nextUntil` continues from whatever the smaller page ended at.
- * This is not pacing or a budget — it asks for less only after the provider
- * has demonstrably failed to deliver more.
- */
-async function historyPage(
-  client: XmdClient,
-  input: string,
-  options: Parameters<XmdClient["history"]>[1],
-  onStage?: (phase: string) => Promise<void>,
-): Promise<RawObject> {
-  let maxPosts = options.maxPosts;
-  for (;;) {
-    try {
-      return await client.history(input, { ...options, maxPosts });
-    } catch (error) {
-      if (
-        !(error instanceof ProviderError) ||
-        error.code !== "provider_timeout" ||
-        maxPosts <= TIMEOUT_FLOOR_POSTS
-      )
-        throw error;
-      maxPosts = Math.max(TIMEOUT_FLOOR_POSTS, Math.floor(maxPosts / 2));
-      await onStage?.(`x.md timed out; asking for ${maxPosts} posts per page`);
-    }
-  }
-}
-
 export type CollectionRequest = {
   runId: string;
   attempt: number;
@@ -233,7 +194,7 @@ export async function collectXmd(
         refresh: request.refresh,
       };
       if (request.format !== "ndjson") {
-        const response = await historyPage(client, request.input, options, onStage);
+        const response = await client.history(request.input, options);
         // Preserve the complete provider envelope, including future fields.
         await addHistory(response);
         if (!Array.isArray(response.posts) || !response.meta)

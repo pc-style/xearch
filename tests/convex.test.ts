@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import firecrawlTest from "@firecrawl/firecrawl-convex/test";
 import schema from "../convex/schema";
+import { EXPIRE_GRACE_MS } from "../convex/jobs";
 import { api, internal } from "../convex/_generated/api";
 const modules = import.meta.glob("../convex/**/*.ts");
 afterEach(() => {
@@ -508,6 +509,13 @@ describe("Convex application boundaries", () => {
     await expect(t.mutation(internal.jobs.ack, { ...ack, attempt: 2 })).rejects.toThrow(
       "no longer active",
     );
+    // Still being reported on: expire re-arms instead of presuming it dead.
+    await t.mutation(internal.jobs.expire, { jobId, attempt: 1 });
+    expect(await t.run(async (ctx) => (await ctx.db.get(jobId))!.status)).toBe("running");
+    // Nothing has touched it for longer than the grace period: presumed dead.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(jobId, { updatedAt: Date.now() - EXPIRE_GRACE_MS - 1 });
+    });
     await t.mutation(internal.jobs.expire, { jobId, attempt: 1 });
     expect(await t.run(async (ctx) => (await ctx.db.get(jobId))!.status)).toBe("partial");
   });
