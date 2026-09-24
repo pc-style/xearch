@@ -417,6 +417,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
+
     const baseConfig = {
       indexing: true,
       search: true,
@@ -461,6 +462,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     const workerRowMatch = offline.match(
       /Download worker<\/span><span class="library-muted">(.*?)<\/span><\/div>/,
     );
+
     expect(workerRowMatch).not.toBeNull();
     const workerRowHtml = workerRowMatch![1];
     expect(workerRowHtml).toContain('<span aria-live="polite">Offline</span>');

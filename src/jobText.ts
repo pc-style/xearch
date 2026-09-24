@@ -106,7 +106,7 @@ export function acquisitionStatusLabel(status: JobStatus): string {
  * way everywhere it appears.
  */
 export const DOWNLOAD_COMPLETE_CAVEAT =
-  "\"Download complete\" means x.md finished handing over what it had for this run — not that every post on X was retrieved.";
+  '"Download complete" means x.md finished handing over what it had for this run — not that every post on X was retrieved.';
 
 /**
  * One coherent sentence describing a single acquisition run's outcome: the

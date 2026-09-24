@@ -29,7 +29,9 @@ export default function ProviderLimits({
   const throttled = limits?.filter(
     (l): l is Extract<ProviderLimit, { kind: "throttled" }> => l.kind === "throttled",
   );
+
   if (!throttled || throttled.length === 0) return null;
+
   return (
     <div>
       <h3 className="library-subhead">Provider limits</h3>

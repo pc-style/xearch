@@ -37,6 +37,7 @@ export default function StatusBlock({
   isAuthenticated: boolean;
 }) {
   const now = useDashboardClock();
+
   const connections: Connection[] = [
     { name: "x.md", ready: config?.xmd, purpose: "Account histories, live search, conversations" },
     receiverConnection(config?.collectorMode, handoffReady(config?.handoffState, now)),
@@ -45,6 +46,7 @@ export default function StatusBlock({
     { name: "OpenAI", ready: config?.openai, purpose: "Turns a question into a clearer search" },
     { name: "AgentMail", ready: config?.email, purpose: "Emails search results" },
   ];
+
   // The download worker's row (`proves: "live"`) is a liveness fact — a
   // heartbeat observed or not — never a configuration fact, so it must
   // never share the word "Configured"/"Not configured" with the rows that
@@ -67,6 +69,7 @@ export default function StatusBlock({
       <div className="library-status-connections">
         {connections.map((c) => {
           const { word, detail } = connectionStatus(c, config, isAuthenticated, workerLastSeenAt);
+
           return (
             <div className="library-status-row" key={c.name}>
               <span>{c.name}</span>
@@ -97,6 +100,7 @@ export default function StatusBlock({
                     : status.healthy
                       ? "positive"
                       : "danger";
+
               return (
                 <Badge key={status.service} tone={tone}>
                   {SERVICE_DISPLAY_NAME[status.service]}: {serviceHealthLabel(status)}
@@ -125,11 +129,14 @@ function connectionStatus(
   config: OperatorConfig | undefined,
   isAuthenticated: boolean,
   workerLastSeenAt: number | null | undefined,
-): { word: string; detail?: number } {
+) {
   if (!isAuthenticated) return { word: "Sign in to view" };
+
   if (!config) return { word: "Checking…" };
+
   if (c.proves === "live") {
     if (c.ready) return { word: "Online" };
+
     // CodeRabbit (PR #48): a real fix for "never observed" vs. "observed
     // offline" needs `convex/integrations.ts` to stop collapsing "no
     // worker record has ever existed" into the same `lastSeenAt: null` it
@@ -137,10 +144,14 @@ function connectionStatus(
     // (convex/ is owned by other work landing separately; see PR #44). This
     // still reports the honest, weaker claim available from what the
     // backend sends today: a real last-heartbeat time when there is one,
-    // "Offline" with no invented time when there isn't.
-    return typeof workerLastSeenAt === "number"
-      ? { word: "Offline", detail: workerLastSeenAt }
-      : { word: "Offline" };
+    // "Offline" with no invented time when there isn't. A domain check
+    // (nullish, not `typeof`) is enough: `workerLastSeenAt` is already
+    // `number | null | undefined` at its one source (`config.handoffState`,
+    // parsed at that boundary), never an unparsed representation.
+    return workerLastSeenAt === undefined || workerLastSeenAt === null
+      ? { word: "Offline" }
+      : { word: "Offline", detail: workerLastSeenAt };
   }
+
   return { word: c.ready ? "Configured" : "Not configured" };
 }

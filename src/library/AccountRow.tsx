@@ -102,9 +102,7 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           what it had for that one run. The row already states the real,
           current searchable count above (never invented here), so this only
           adds the one clarifying line — not a second number. */}
-      {job?.status === "complete" && (
-        <p className="library-muted">{DOWNLOAD_COMPLETE_CAVEAT}</p>
-      )}
+      {job?.status === "complete" && <p className="library-muted">{DOWNLOAD_COMPLETE_CAVEAT}</p>}
       {row.publicationState === "failed" && hasGoodCorpus && (
         <p className="library-row-note">
           The previously confirmed index still has {countWithUnit(row.searchablePostCount)}{" "}

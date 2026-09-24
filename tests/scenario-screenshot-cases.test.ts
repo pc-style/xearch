@@ -374,6 +374,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         summary: undefined,
         health,
         limits: undefined,
+        config: undefined,
         connected: false,
         isAuthenticated: true,
       }),

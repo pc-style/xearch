@@ -120,6 +120,7 @@ function Stat({
   href?: string;
 }) {
   const unknown = count.kind === "unknown";
+
   // A3: the tile used to repeat its own number on a second line ("9,006 /
   // INDEXED POSTS / 9,006 posts"). The label already says what unit this is,
   // so the value alone is the whole tile now — nothing invented to replace

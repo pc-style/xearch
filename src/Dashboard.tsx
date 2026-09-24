@@ -176,6 +176,7 @@ export default function Dashboard({
     api.jobs.list,
     isAuthenticated && !showDismissed ? { includeDismissed: true, scope: "other" } : "skip",
   );
+
   const everRan = showDismissed ? (jobs?.length ?? 0) > 0 : (everJobs?.length ?? 0) > 0;
 
   const start = useMutation(api.jobs.start);
@@ -313,11 +314,7 @@ export default function Dashboard({
               </label>
             </details>
             <button type="submit" className="control-start" disabled={busy || !config?.indexing}>
-              {busy
-                ? "Starting..."
-                : kind === "bulk"
-                  ? "Import posts"
-                  : "Start download"}
+              {busy ? "Starting..." : kind === "bulk" ? "Import posts" : "Start download"}
             </button>
             {config && !config.indexing && (
               <p role="status">{indexingUnavailableMessage(config)}</p>
