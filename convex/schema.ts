@@ -297,6 +297,9 @@ export default defineSchema({
     oldest: v.optional(v.string()),
     floorReached: v.optional(v.boolean()),
     attempt: v.number(),
+    // When the current attempt was claimed. `updatedAt` moves on every
+    // progress write, so attempt-duration telemetry cannot use it.
+    attemptStartedAt: v.optional(v.number()),
     warnings: v.array(v.string()),
     error: v.optional(v.string()),
     updatedAt: v.number(),

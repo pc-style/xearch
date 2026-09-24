@@ -461,11 +461,13 @@ export const claim = internalMutation({
 
     if (!job || job.status !== "queued" || (job.readyAt ?? 0) > Date.now()) return null;
     const attempt = job.attempt + 1;
+    const now = Date.now();
     await ctx.db.patch(jobId, {
       status: "running",
       attempt,
+      attemptStartedAt: now,
       pageAttempt: (job.pageAttempt ?? 0) + 1,
-      updatedAt: Date.now(),
+      updatedAt: now,
       error: undefined,
       retryable: undefined,
     });
@@ -845,7 +847,7 @@ export const expire = internalMutation({
         status,
         attempt: job.attempt,
         pages: job.pages ?? 0,
-        duration_ms: Date.now() - job.updatedAt,
+        duration_ms: Date.now() - (job.attemptStartedAt ?? job.updatedAt),
         records: job.count,
         error: sanitizeError(error),
       },
@@ -1031,7 +1033,7 @@ export const finish = internalMutation({
           status: patch.status ?? "unknown",
           attempt: args.attempt,
           pages,
-          duration_ms: Date.now() - job.updatedAt,
+          duration_ms: Date.now() - (job.attemptStartedAt ?? job.updatedAt),
           records: patch.count ?? job.count,
           error: args.error ? sanitizeError(args.error) : "",
         },

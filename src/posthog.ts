@@ -32,11 +32,13 @@ export function initPostHog(): void {
       posthog.init(key, {
         api_host: host,
         autocapture: false,
-        // "history_change" also records the query-param navigations this
-        // SPA makes through pushState (src/locationStore.ts); a plain `true`
-        // records one pageview per full load. Pageleave pairs with it so web
-        // analytics can compute bounce rate and session duration.
-        capture_pageview: "history_change",
+        // This SPA navigates through pushState on the query string
+        // (src/locationStore.ts sets `q=`); the pathname rarely changes.
+        // "history_change" watches the pathname only, so `search: true` is
+        // what makes each search a pageview. A plain `true` records one per
+        // full load. Pageleave pairs with it so web analytics can compute
+        // bounce rate and session duration.
+        capture_pageview: { path: true, search: true },
         capture_pageleave: true,
         capture_exceptions: true,
         capture_performance: true,
