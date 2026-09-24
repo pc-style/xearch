@@ -228,10 +228,11 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
   users by stable ID and role. Replay all sessions while traffic is small;
   show the search field and mask other inputs.
 - Keep separate search journey and operator health dashboards. New exceptions
-  and terminal failed jobs go to Discord immediately. PostHog's real-time
-  insight alerts require Scale/Enterprise; the in-app/email fallback choice
-  is pending. Performance thresholds wait for a production baseline.
-- The personal API key for source-map upload is pending. The frontend and
+  and terminal failed jobs go to Discord immediately. In-app/email insight
+  alerts run hourly because PostHog's real-time insight alerts require
+  Scale/Enterprise. Performance thresholds wait for a production baseline.
+- The personal API key for source-map upload belongs in the private VM file
+  `~/xearch-data/posthog-build.env` and is still pending. The frontend and
   Convex code is prepared but is not published by this branch. Native Convex
   exception forwarding requires Convex Pro and has no documented redaction
   hook, so it is not enabled while the no-email-address rule applies.
