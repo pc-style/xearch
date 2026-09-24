@@ -232,8 +232,9 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
   dashboard) and "Xearch · Imports & health" (failures by cause with their
   reasons, throughput, search service success and latency, exceptions).
 - One alert path per signal. `job_failed` posts to Discord in real time with
-  the provider's reason, stage, and cause; it fires from every terminal path,
-  including the worker timeout. Error tracking's own issue-created,
+  the sanitised failure reason (the provider's own message when there is
+  one; a fixed timeout message when the worker timed out), stage, and cause;
+  it fires from every terminal path, including the worker timeout. Error tracking's own issue-created,
   spiking, and reopened destinations cover exceptions. The hourly insight
   alerts that duplicated both were removed (2026-09-24).
 - Volume guards: `job_attempt_finished` only reports attempts that errored
