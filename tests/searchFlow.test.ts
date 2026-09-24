@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
+  mergeSearchPages,
   searchFlow,
   type SearchFlowDependencies,
   type SearchRequest,
@@ -102,5 +103,41 @@ describe("searchFlow", () => {
     };
 
     await expect(Effect.runPromise(searchFlow(dependencies, request))).rejects.toBe(failure);
+  });
+});
+
+describe("mergeSearchPages", () => {
+  const post = (tweetId: string) => ({ tweetId, text: `post ${tweetId}` });
+
+  it("replace mode discards the base and returns only the incoming page", () => {
+    const base = [post("1"), post("2")];
+    const incoming = [post("3"), post("4")];
+    expect(mergeSearchPages(base, incoming, "replace")).toEqual(incoming);
+  });
+
+  it("append mode keeps the base rows and adds new ones after them", () => {
+    const base = [post("1"), post("2")];
+    const incoming = [post("3"), post("4")];
+    expect(mergeSearchPages(base, incoming, "append")).toEqual([
+      post("1"),
+      post("2"),
+      post("3"),
+      post("4"),
+    ]);
+  });
+
+  it("append mode dedupes by tweetId, keeping the earlier copy", () => {
+    const base = [post("1"), { tweetId: "2", text: "original" }];
+    const incoming = [{ tweetId: "2", text: "duplicate from a replayed cursor" }, post("3")];
+    expect(mergeSearchPages(base, incoming, "append")).toEqual([
+      post("1"),
+      { tweetId: "2", text: "original" },
+      post("3"),
+    ]);
+  });
+
+  it("replace mode also dedupes within the incoming page itself", () => {
+    const incoming = [post("1"), post("1"), post("2")];
+    expect(mergeSearchPages([], incoming, "replace")).toEqual([post("1"), post("2")]);
   });
 });

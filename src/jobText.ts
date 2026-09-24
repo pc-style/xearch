@@ -105,6 +105,41 @@ export function acquisitionStatusLabel(status: JobStatus): string {
  * stop (see convex/jobs.ts finish, which never clears `phase` on failure),
  * so it is deliberately not surfaced here as if it explained the outcome.
  */
+/**
+ * Inline status line for a job started directly from a result (Conversation
+ * / Find on X). Those buttons trigger a real paid x.md fetch, not a preview,
+ * so the caller needs an honest "this is happening" state instead of just
+ * being dropped into the Recent imports modal. Reuses `jobLabel`/
+ * `jobSummary` for the terminal wording so this never drifts from what the
+ * Recent imports list itself says about the same job.
+ */
+// Only `.`, `!`, `?`, and `…` read as a sentence ending; `jobSummary` values
+// and some provider error strings have none, so joining them straight to
+// "See Recent imports" runs two sentences together with no separator.
+const SENTENCE_END = /[.!?…]$/;
+
+function withSentenceEnd(text: string): string {
+  return SENTENCE_END.test(text) ? text : `${text}.`;
+}
+
+export function inlineImportStatus(job: Doc<"jobs"> | undefined): string | null {
+  if (!job) return null;
+
+  // "Downloading", not "Fetching…results" — this only reports the x.md
+  // download landing in Recent imports, a different state from the
+  // download later becoming searchable (see docs/publication-contract.md);
+  // "results" here read as search results, which this is not. Queued and
+  // running are also kept distinct: nothing is downloading yet while the
+  // job waits its turn.
+  if (job.status === "queued")
+    return "Waiting to download from X… Progress appears in Recent imports.";
+
+  if (job.status === "running") return "Downloading from X… Progress appears in Recent imports.";
+  const detail = job.error ?? jobSummary(job);
+
+  return `${jobLabel(job)} — ${withSentenceEnd(detail)} See Recent imports for details.`;
+}
+
 export function describeRunOutcome(run: {
   status: JobStatus;
   phase?: string;
