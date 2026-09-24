@@ -13,6 +13,7 @@ import {
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
+import { keyLinkifySegments, linkifyText } from "./linkify";
 import type { ResultPost } from "../convex/lib/results";
 import type { Sort } from "../convex/lib/search";
 import { NerdStatsPanel } from "./library/NerdStatsPanel";
@@ -86,6 +87,7 @@ export function PostCard({
   onThread,
   onRead,
   onAuthor,
+  threadStatus,
 }: {
   post: ResultPost;
   query: string;
@@ -94,11 +96,15 @@ export function PostCard({
   onThread: () => void;
   onRead: (url: string) => void;
   onAuthor: () => void;
+  threadStatus?: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const createdAt = post.createdAt === undefined ? null : new Date(post.createdAt);
   const hasValidDate = createdAt !== null && !Number.isNaN(createdAt.getTime());
-
+  const trimmedText = post.text.trim();
+  const displayText =
+    !expanded && trimmedText.length > 700 ? `${trimmedText.slice(0, 700)}…` : trimmedText;
+  const keyedSegments = keyLinkifySegments(trimmedText ? linkifyText(displayText) : []);
   return (
     <article className="post">
       <header>
@@ -123,13 +129,34 @@ export function PostCard({
           </button>
         </div>
       </header>
-      <p className="post-text">
-        <Highlight
-          text={!expanded && post.text.length > 700 ? `${post.text.slice(0, 700)}…` : post.text}
-          query={query}
-        />
-      </p>
-      {post.text.length > 700 && (
+      {trimmedText ? (
+        <p className="post-text">
+          {keyedSegments.map(({ key, segment }) =>
+            segment.type === "link" ? (
+              <a
+                key={key}
+                href={segment.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={segment.href}
+              >
+                {segment.label}
+              </a>
+            ) : (
+              <Highlight key={key} text={segment.value} query={query} />
+            ),
+          )}
+        </p>
+      ) : (
+        // x.md's search API doesn't carry a media field (convex/lib/results.ts
+        // `resultPost` has no image/video property), so an empty `text` is
+        // the only signal a media-only post gives us. Say so honestly rather
+        // than rendering a blank card or inventing a thumbnail we can't back.
+        <p className="post-text muted-copy">
+          📷 Media post — text wasn't captured. Open on X to view it.
+        </p>
+      )}
+      {trimmedText.length > 700 && (
         <button type="button" className="text-button" onClick={() => setExpanded(!expanded)}>
           {expanded ? "Show less" : "Read full post"}
         </button>
@@ -167,13 +194,22 @@ export function PostCard({
           )}
         </div>
         <div className="post-actions">
+          {/* This fetches the conversation from X (a real x.md job), it
+              doesn't open a preview — the label says so, and the status
+              line below tracks the job it starts instead of only surfacing
+              it in the Recent imports modal. */}
           <button type="button" onClick={onThread}>
-            Conversation
+            Fetch conversation from X
           </button>
           <a href={post.url} target="_blank" rel="noreferrer">
             Open on X <ArrowUpRight size={14} />
           </a>
         </div>
+        {threadStatus && (
+          <p className="scope-note" role="status">
+            {threadStatus}
+          </p>
+        )}
       </footer>
     </article>
   );
@@ -219,6 +255,8 @@ export function ResultsSection({
   onRead,
   onBookmark,
   onThread,
+  liveImportStatus,
+  threadStatus,
   frontendStats,
   searchPending,
 }: {
@@ -240,6 +278,10 @@ export function ResultsSection({
   onRead: (url: string) => void;
   onBookmark: (post: ResultPost) => void;
   onThread: (post: ResultPost) => void;
+  /** Inline status for the header-level "Import from X" job, if one is running/finished. */
+  liveImportStatus?: string | null;
+  /** Inline status for a specific post's "Fetch conversation from X" job, if one is running/finished. */
+  threadStatus?: (tweetId: string) => string | null | undefined;
   frontendStats?: SearchAttemptSnapshot | null;
   searchPending?: boolean;
 }) {
@@ -297,13 +339,21 @@ export function ResultsSection({
               <Mail size={15} />
               Email
             </button>
+            {/* This starts a real x.md fetch against X, not a preview — the
+                label says so, and the status line below tracks the job
+                instead of only surfacing it in the Recent imports modal. */}
             <button type="button" disabled={busy || !configured?.indexing} onClick={onLiveSearch}>
               <Search size={15} />
-              Find on X
+              Import from X
             </button>
           </div>
         )}
       </header>
+      {view === ViewMode.Search && liveImportStatus && (
+        <p className="scope-note" role="status">
+          {liveImportStatus}
+        </p>
+      )}
       {queryError ? (
         <div className="empty">
           <h2>Adjust your search</h2>
@@ -381,12 +431,13 @@ export function ResultsSection({
                 onBookmark={() => onBookmark(post)}
                 onThread={() => onThread(post)}
                 onRead={onRead}
+                threadStatus={threadStatus?.(post.tweetId)}
               />
             ))}
           </div>
           {view === ViewMode.Search && result?.nextCursor && (
             <button type="button" className="load-more" disabled={busy} onClick={onLoadMore}>
-              Next page
+              Load more
             </button>
           )}
         </>

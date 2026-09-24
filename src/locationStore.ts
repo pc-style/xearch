@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { Sort } from "../convex/lib/search";
+import { ViewMode } from "./uiState";
 
 export interface LocationSnapshot {
   readonly version: number;
@@ -7,6 +8,7 @@ export interface LocationSnapshot {
   readonly sort: Sort;
   readonly includeStats: boolean;
   readonly dashboard: boolean;
+  readonly view: ViewMode;
 }
 
 export interface LocationPatch {
@@ -14,6 +16,7 @@ export interface LocationPatch {
   readonly sort?: Sort;
   readonly includeStats?: boolean;
   readonly dashboard?: boolean;
+  readonly view?: ViewMode;
 }
 
 const DEFAULT_SORT: Sort = "relevance";
@@ -25,6 +28,7 @@ const SORT_VALUES: ReadonlySet<string> = new Set([
   "newest",
   "oldest",
 ]);
+const VIEW_VALUES: ReadonlySet<string> = new Set([ViewMode.Search, ViewMode.Bookmarks]);
 
 const SERVER_SNAPSHOT: LocationSnapshot = Object.freeze({
   version: 0,
@@ -32,6 +36,7 @@ const SERVER_SNAPSHOT: LocationSnapshot = Object.freeze({
   sort: DEFAULT_SORT,
   includeStats: false,
   dashboard: false,
+  view: ViewMode.Search,
 });
 
 const listeners = new Set<() => void>();
@@ -54,15 +59,20 @@ function isSort(value: string | null): value is Sort {
   return value !== null && SORT_VALUES.has(value);
 }
 
+function isView(value: string | null): value is ViewMode {
+  return value !== null && VIEW_VALUES.has(value);
+}
+
 function parseUrl(input: string | URL): Omit<LocationSnapshot, "version"> {
   const url = input instanceof URL ? input : new URL(input, "https://xearch.invalid");
   const sortValue = url.searchParams.get("sort");
-
+  const viewValue = url.searchParams.get("view");
   return {
     raw: url.searchParams.get("q") ?? "",
     sort: isSort(sortValue) ? sortValue : DEFAULT_SORT,
     includeStats: url.searchParams.get("stats") === "1",
     dashboard: url.searchParams.has("dashboard"),
+    view: isView(viewValue) ? viewValue : ViewMode.Search,
   };
 }
 
@@ -149,6 +159,19 @@ export function getServerSnapshot(): LocationSnapshot {
   return SERVER_SNAPSHOT;
 }
 
+/**
+ * Apply a location patch to a URL and return the resulting query string.
+ * Exported so tests can verify how a patch mutates a URL (e.g. that opening
+ * the dashboard clears `q=`) without a `window`/`history` — this repo has no
+ * jsdom dependency, so `pushLocation`/`replaceLocation` themselves are
+ * exercised through the app, not unit tests.
+ */
+export function previewPatch(input: string | URL, patch: LocationPatch): string {
+  const url = typeof input === "string" ? new URL(input, "https://xearch.invalid") : new URL(input);
+  applyPatch(url, patch);
+  return `${url.pathname}${url.search}`;
+}
+
 function applyPatch(url: URL, patch: LocationPatch): void {
   if (patch.raw !== undefined) {
     if (patch.raw) url.searchParams.set("q", patch.raw);
@@ -165,6 +188,10 @@ function applyPatch(url: URL, patch: LocationPatch): void {
   if (patch.dashboard !== undefined) {
     if (patch.dashboard) url.searchParams.set("dashboard", "1");
     else url.searchParams.delete("dashboard");
+  }
+  if (patch.view !== undefined) {
+    if (patch.view === ViewMode.Search) url.searchParams.delete("view");
+    else url.searchParams.set("view", patch.view);
   }
 }
 

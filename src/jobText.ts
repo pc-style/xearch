@@ -105,6 +105,22 @@ export function acquisitionStatusLabel(status: JobStatus): string {
  * stop (see convex/jobs.ts finish, which never clears `phase` on failure),
  * so it is deliberately not surfaced here as if it explained the outcome.
  */
+/**
+ * Inline status line for a job started directly from a result (Conversation
+ * / Find on X). Those buttons trigger a real paid x.md fetch, not a preview,
+ * so the caller needs an honest "this is happening" state instead of just
+ * being dropped into the Recent imports modal. Reuses `jobLabel`/
+ * `jobSummary` for the terminal wording so this never drifts from what the
+ * Recent imports list itself says about the same job.
+ */
+export function inlineImportStatus(job: Doc<"jobs"> | undefined): string | null {
+  if (!job) return null;
+  if (job.status === "queued" || job.status === "running")
+    return "Fetching from X… results land in Recent imports.";
+  const detail = job.error ?? jobSummary(job);
+  return `${jobLabel(job)} — ${detail} See Recent imports for details.`;
+}
+
 export function describeRunOutcome(run: {
   status: JobStatus;
   phase?: string;

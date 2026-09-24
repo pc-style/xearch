@@ -40,6 +40,32 @@ export const searchFlow = Effect.fn("searchFlow")(function* (
 
 export const runSearchFlow = searchFlow;
 
+/**
+ * Combine one page of search rows with whatever is already on screen.
+ *
+ * "replace" (a fresh search) discards `base` outright — the pagination
+ * cursor from a previous query is meaningless once the query itself
+ * changes. "append" (Load more) keeps `base` and adds only the rows this
+ * page hasn't already shown, so a post that straddles a page boundary (or a
+ * cursor replayed after a retry) never appears twice. Order is preserved:
+ * kept rows first, then new ones in the order the page returned them.
+ */
+export function mergeSearchPages<T extends { tweetId: string }>(
+  base: readonly T[],
+  incoming: readonly T[],
+  mode: "replace" | "append",
+): T[] {
+  const start = mode === "append" ? base : [];
+  const seen = new Set(start.map((post) => post.tweetId));
+  const merged = start.slice();
+  for (const post of incoming) {
+    if (seen.has(post.tweetId)) continue;
+    seen.add(post.tweetId);
+    merged.push(post);
+  }
+  return merged;
+}
+
 export function makeSearchFlow(
   dependencies: SearchFlowDependencies,
 ): (request: SearchRequest) => Effect.Effect<SearchSessionId, unknown> {

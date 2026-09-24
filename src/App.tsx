@@ -38,14 +38,18 @@ import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE } from "./integrationStatus";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { describeError } from "./errors";
-import { jobLabel, jobSummary, jobWarnings } from "./jobText";
+import { inlineImportStatus, jobLabel, jobSummary, jobWarnings } from "./jobText";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
 import { parseQuery, type Sort } from "../convex/lib/search";
 import { pushLocation, replaceLocation, useLocation } from "./locationStore";
 import { runTask } from "./runTask";
-import { searchFlow, type SearchRequest as FlowSearchRequest } from "./searchFlow";
+import {
+  mergeSearchPages,
+  searchFlow,
+  type SearchRequest as FlowSearchRequest,
+} from "./searchFlow";
 import { createSessionGate } from "./sessionGate";
 import {
   createSearchTelemetryStore,
@@ -82,6 +86,21 @@ function connectionObservation(connection: {
     hasEverConnected: connection.hasEverConnected,
     connectionCount: connection.hasEverConnected ? 1 : 0,
   };
+}
+
+// A query that is only `@handle`/`from:handle` has no keywords to rank by
+// relevance, so relevance ordering degenerates to whatever arbitrary order
+// the index happens to return (oldest-first in practice) rather than the
+// account's actual most-recent activity. `search()` below uses this to pick
+// a sane default sort when the caller hasn't explicitly chosen one for this
+// particular search (a real dropdown pick always wins).
+function isAccountOnlyQuery(raw: string): boolean {
+  try {
+    const { author, text } = parseQuery(raw);
+    return Boolean(author) && text.length === 0;
+  } catch {
+    return false;
+  }
 }
 
 const sorts: { value: Sort; label: string }[] = [
@@ -170,15 +189,29 @@ export default function App() {
     );
 
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(null);
-
-  const [view, setView] = useState<ViewMode>(ViewMode.Search),
+  // Accumulated rows across pages for the current search: `search()`/
+  // `retrySearch()` reset this to empty (a fresh query invalidates whatever
+  // was paged in before), while `runLoadMore` appends. Kept as its own state
+  // rather than derived straight from `result.rows` because a single Convex
+  // session only ever holds one page — this is what lets "Load more" grow
+  // the on-screen list instead of swapping it.
+  const [rows, setRows] = useState<ResultPost[]>([]);
+  const appendModeRef = useRef(false);
+  const mergedSessionRef = useRef<Id<"sessions"> | null>(null);
+  const [view, setView] = useState<ViewMode>(initialRoute.view),
     [modal, setModal] = useState<ModalKind | null>(null);
 
   const [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [accountInput, setAccountInput] = useState(""),
     [since, setSince] = useState("");
-
+  // Job ids for imports kicked off directly from a result (Conversation /
+  // Find on X). Those are real x.md fetches, not previews, so the inline
+  // status line below reads live from `jobs.list` instead of just firing a
+  // toast and hoping the Recent imports modal gets opened.
+  const [liveImportJobId, setLiveImportJobId] = useState<Id<"jobs"> | null>(null);
+  const [threadJobs, setThreadJobs] = useState<Record<string, Id<"jobs">>>({});
+  const pushedDashboardEntry = useRef(false);
   const [page, setPage] = useState<{
     title: string;
     text: string;
@@ -223,6 +256,11 @@ export default function App() {
       setSort(route.sort);
       setStatsForNerds(route.includeStats);
       setSessionId(null);
+      // `appendModeRef` is deliberately left untouched here: it's only
+      // consulted once new rows land, at which point `rows` is already `[]`
+      // (below), so "append to nothing" and "replace" produce the same
+      // result — no ref mutation needed during render.
+      setRows([]);
       setSearchRequest(
         route.raw.trim()
           ? {
@@ -236,6 +274,12 @@ export default function App() {
       );
       setView(ViewMode.Search);
       setProposal(null);
+    } else if (route.view !== view) {
+      // Same query, only the view changed underneath it — e.g. Back/Forward
+      // across a `?view=bookmarks` toggle. A real query change (above)
+      // already forces the search view, so this only ever fires for that
+      // narrower case.
+      setView(route.view);
     }
   }
 
@@ -359,11 +403,27 @@ export default function App() {
   // changes without any useEffect. Popstate itself is covered by
   // locationStore's useSyncExternalStore subscription.
   function kickPendingRef(node: HTMLElement | null) {
-    if (node === null || searchRequest === null) return;
+    if (node === null) return;
 
-    if (kickedAttempt.current === searchRequest.attemptId) return;
+    if (searchRequest !== null && kickedAttempt.current !== searchRequest.attemptId) {
+      if (runSearch(searchRequest)) kickedAttempt.current = searchRequest.attemptId;
+    }
 
-    if (runSearch(searchRequest)) kickedAttempt.current = searchRequest.attemptId;
+    // Fold a freshly-landed page into `rows` at commit time (same
+    // no-useEffect trick as the kick above): once this session's rows are
+    // in, "Load more" (append) or a new search (replace, see `search()`/
+    // route sync) decides how they combine with what's already on screen.
+    if (
+      result &&
+      result._id === sessionId &&
+      result.status === "complete" &&
+      mergedSessionRef.current !== result._id
+    ) {
+      mergedSessionRef.current = result._id;
+      setRows((prev) =>
+        mergeSearchPages(prev, result.rows, appendModeRef.current ? "append" : "replace"),
+      );
+    }
   }
 
   // Commit-phase telemetry: Profiler onRender (no useEffect) records render cost,
@@ -428,8 +488,11 @@ export default function App() {
 
   const runLoadLive = async () => {
     await ensureSession();
-    await start({ kind: "live", input: raw.replace(/(^|\s)@([\w]+)/g, "$1from:$2") });
-    setModal(ModalKind.Imports);
+    const jobId = await start({
+      kind: "live",
+      input: raw.replace(/(^|\s)@([\w]+)/g, "$1from:$2"),
+    });
+    setLiveImportJobId(jobId);
   };
 
   const runRead = async (url: string) => {
@@ -446,27 +509,40 @@ export default function App() {
     await ensureSession();
     setContextPages(await webContext({ query: raw }));
   };
-
-  const runThread = async (url: string) => {
+  const runThread = async (post: ResultPost) => {
     await ensureSession();
-    await start({ kind: "post", input: url });
-    setModal(ModalKind.Imports);
+    const jobId = await start({ kind: "post", input: post.url });
+    setThreadJobs((prev) => ({ ...prev, [post.tweetId]: jobId }));
   };
 
-  const runLoadMore = async () => {
-    const next = result?.nextCursor;
-
-    if (!next) return;
-
-    const id = await startSearch({
+  const runLoadMore = () => {
+    if (!result?.nextCursor) return;
+    appendModeRef.current = true;
+    // Its own telemetry attempt (trigger `NextPage`), not a continuation of
+    // the first page's: `runSearch` starts a fresh one below, so the "Stats
+    // for nerds" panel times *this* cursor request instead of freezing on
+    // whatever the first page measured (its attempt already reached a
+    // terminal state, so further commits for it are ignored — see
+    // `searchTelemetry.ts` `commitResult`'s `terminalCommitAt` guard).
+    const attemptId = allocateAttempt();
+    const request: SearchRequest = {
       raw,
       sort,
-      cursor: next,
+      cursor: result.nextCursor,
       includeStats: result.includeStats === true,
+      attemptId,
+      trigger: SearchTrigger.NextPage,
+    };
+    // No scrollTo: "Load more" appends to the current list, so the reader's
+    // place in what they've already read is preserved (see
+    // `kickPendingRef`'s merge into `rows`, which is what actually makes
+    // the append visible once this page's rows land). `sessionId` is left
+    // alone until the new page resolves, so the list on screen doesn't blip
+    // to a loading state while it fetches.
+    setSearchRequest(request);
+    startSearchTransition(() => {
+      if (runSearch(request)) kickedAttempt.current = request.attemptId;
     });
-
-    setSessionId(id);
-    window.scrollTo({ top: 0 });
   };
 
   const runSave = async () => {
@@ -487,8 +563,10 @@ export default function App() {
     e.preventDefault();
     void task(submitImport(), "Indexing started. Raw captures are handed to your data service.");
   };
-
-  const loadLive = () => void task(runLoadLive(), "Looking for more posts on X.");
+  // The inline status line already says the fetch is running (see the
+  // "Import from X" toolbar button below), so there's nothing left for the
+  // dismissible top notice to add here.
+  const loadLive = () => void task(runLoadLive());
 
   const read = (url: string) => {
     setReading(true);
@@ -496,22 +574,28 @@ export default function App() {
   };
 
   const deferredRaw = useDeferredValue(raw);
-  const visible = view === ViewMode.Bookmarks ? bookmarks : (result?.rows ?? []);
+  const visible = view === ViewMode.Bookmarks ? bookmarks : rows;
   const home = !deferredRaw && view === ViewMode.Search;
 
   const openDashboard = () => {
     if (!OPERATOR_BUILD) return;
     setModal(null);
-    pushLocation({ dashboard: true });
+    pushedDashboardEntry.current = true;
+    // Drop `q`/the search query from the URL the dashboard entry carries:
+    // it's a leftover from whatever page the user was on, not a dashboard
+    // param, and showing up there is confusing on reload/share (see close()
+    // below for the matching Back-button fix).
+    pushLocation({ dashboard: true, raw: "" });
   };
-
-  const search = (query: string, nextSort: Sort = sort) => {
+  const search = (query: string, nextSort?: Sort) => {
     const trimmed = query.trim();
+    const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort);
+    appendModeRef.current = false;
     const attemptId = allocateAttempt();
 
     const request: SearchRequest = {
       raw: trimmed,
-      sort: nextSort,
+      sort: effectiveSort,
       includeStats: statsForNerds,
       attemptId,
       trigger: SearchTrigger.Submit,
@@ -519,12 +603,18 @@ export default function App() {
 
     setRaw(trimmed);
     setDraft(trimmed);
-    setSort(nextSort);
+    setSort(effectiveSort);
     setSessionId(null);
+    setRows([]);
     setSearchRequest(request);
     setView(ViewMode.Search);
     setProposal(null);
-    pushLocation({ raw: trimmed, sort: nextSort, includeStats: statsForNerds });
+    pushLocation({
+      raw: trimmed,
+      sort: effectiveSort,
+      includeStats: statsForNerds,
+      view: ViewMode.Search,
+    });
     startSearchTransition(() => {
       if (runSearch(request)) kickedAttempt.current = request.attemptId;
     });
@@ -540,8 +630,9 @@ export default function App() {
       attemptId,
       trigger: SearchTrigger.Retry,
     };
-
+    appendModeRef.current = false;
     setSessionId(null);
+    setRows([]);
     setSearchRequest(request);
     startSearchTransition(() => {
       if (runSearch(request)) kickedAttempt.current = request.attemptId;
@@ -555,7 +646,19 @@ export default function App() {
         <Dashboard
           ensureSession={ensureSession}
           close={() => {
-            replaceLocation({ dashboard: false });
+            // `openDashboard` pushed exactly one history entry to get here,
+            // so undo it with a real Back instead of rewriting this entry
+            // in place — that's what actually lands back on the page the
+            // user came from rather than skipping it on a later Back press.
+            // A direct link/reload into `?dashboard=1` never pushed that
+            // entry, so there is nothing to go back to; fall back to
+            // clearing the flag on the current entry.
+            if (pushedDashboardEntry.current) {
+              pushedDashboardEntry.current = false;
+              window.history.back();
+            } else {
+              replaceLocation({ dashboard: false });
+            }
           }}
         />
       </Suspense>
@@ -594,9 +697,11 @@ export default function App() {
             type="button"
             aria-label="Bookmarks"
             aria-pressed={view === ViewMode.Bookmarks}
-            onClick={() =>
-              setView(view === ViewMode.Bookmarks ? ViewMode.Search : ViewMode.Bookmarks)
-            }
+            onClick={() => {
+              const nextView = view === ViewMode.Bookmarks ? ViewMode.Search : ViewMode.Bookmarks;
+              setView(nextView);
+              pushLocation({ view: nextView });
+            }}
           >
             <Bookmark size={15} />
             <span>Bookmarks</span>
@@ -821,7 +926,11 @@ export default function App() {
                 onLoadMore={runLoadMore}
                 onRead={read}
                 onBookmark={(post) => void task(runBookmark(post))}
-                onThread={(post) => void task(runThread(post.url))}
+                onThread={(post) => void task(runThread(post))}
+                liveImportStatus={inlineImportStatus(jobs.find((j) => j._id === liveImportJobId))}
+                threadStatus={(tweetId) =>
+                  inlineImportStatus(jobs.find((j) => j._id === threadJobs[tweetId]))
+                }
                 frontendStats={deferredFrontendStats}
                 searchPending={isSearchPending}
               />
