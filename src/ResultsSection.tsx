@@ -72,6 +72,9 @@ export function PostRow(props: {
    * (fetching a conversation or a linked page from a paid provider) render
    * only for a confirmed operator — on the public site they cannot run. */
   isOperator: boolean | undefined;
+  /** Avatar for an author whose row carries none (older imports stored the
+   * post without one); the imported account still knows it. */
+  avatarFor?: (handle: string) => string | undefined;
 }) {
   const [expanded, setExpanded] = createSignal(false);
   const text = () => props.post.text.trim();
@@ -95,7 +98,10 @@ export function PostRow(props: {
         aria-label={`Search @${props.post.author}`}
         onClick={() => props.onAuthor()}
       >
-        <Avatar name={props.post.author} url={props.post.avatar} />
+        <Avatar
+          name={props.post.author}
+          url={props.post.avatar ?? props.avatarFor?.(props.post.author)}
+        />
       </button>
       <div>
         <div class="rt">
@@ -399,6 +405,7 @@ export interface ResultsSectionProps {
   statsForNerds?: boolean;
   /** `undefined` while the operator check is loading. */
   isOperator: boolean | undefined;
+  avatarFor?: (handle: string) => string | undefined;
 }
 
 export function ResultsSection(props: ResultsSectionProps) {
@@ -539,6 +546,7 @@ export function ResultsSection(props: ResultsSectionProps) {
                 onRead={props.onRead}
                 threadStatus={props.threadStatus?.(post().tweetId)}
                 isOperator={props.isOperator}
+                avatarFor={props.avatarFor}
               />
             )}
           </For>

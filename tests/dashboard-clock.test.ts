@@ -5,7 +5,7 @@ import { isWorkerLive, WORKER_LIVE_WINDOW_MS } from "../convex/worker";
 /**
  * `bucketNow` backs `useDashboardClock`/`useDashboardNow`, used only for
  * loose-tolerance staleness displays (convex/summary.ts's `summary`/`health`,
- * read by src/library/Library.tsx) where several open browsers sharing one
+ * read by the /ops dashboard, src/ops/Ops.tsx) where several open browsers sharing one
  * rounded `now` is a pure win with no correctness downside.
  *
  * It must NEVER feed convex/worker.ts's 45s `isWorkerLive` window (used by

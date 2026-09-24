@@ -1,0 +1,1414 @@
+/* Operator dashboard at /ops (src/ops). Ported from the design artifact
+   and scoped under .ops so none of it reaches the search app. The status
+   colours are dashboard-only: the search app's own --warn is untouched. */
+.ops {
+  --warn: #e8cf7c;
+  --crit: #f2948c;
+  --info: #9bbfe0;
+  --ok-soft: #a8c69a1f;
+  --warn-soft: #e8cf7c1f;
+  --crit-soft: #f2948c1f;
+  --info-soft: #9bbfe01f;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.ops {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+}
+.ops .top {
+  padding: 22px 0 14px;
+}
+.ops .who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.ops .who .ring {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--av);
+  display: inline-grid;
+  place-items: center;
+  font-size: 11.5px;
+  color: var(--text);
+  font-weight: 500;
+}
+.ops .who .ring + .ring {
+  margin-left: -14px;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.ops .who .ring {
+  flex: none;
+}
+.ops .who > .b.s,
+.opsnav > .b.s {
+  margin-right: -8px;
+}
+.opsnav {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 22px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  background: var(--bg);
+  z-index: 10;
+}
+.opsnav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 14px;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.opsnav a:hover,
+.opsnav a.on {
+  background: var(--hover);
+  color: var(--text);
+}
+.opsnav .sp {
+  flex: 1;
+}
+.opsnav a.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ops .pgd {
+  margin: -8px 0 18px;
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 70ch;
+}
+.opsnav .now {
+  font-size: 12.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* health strip */
+.ops .health {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 26px;
+}
+.ops .hc {
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-items: start;
+  align-content: start;
+  background: var(--field);
+}
+.ops .hc:hover {
+  border-color: var(--field-line);
+}
+.ops .hc .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 6px;
+  background: var(--faint);
+}
+.ops .hc[data-s="ok"] .dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px var(--ok-soft);
+}
+.ops .hc[data-s="warn"] .dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 4px var(--warn-soft);
+}
+.ops .hc[data-s="crit"] .dot {
+  background: var(--crit);
+  box-shadow: 0 0 0 4px var(--crit-soft);
+}
+.ops .hc b {
+  font-weight: 500;
+  font-size: 14.5px;
+  display: block;
+}
+.ops .hc span {
+  font-size: 13px;
+  color: var(--muted);
+  display: block;
+  grid-column: 2;
+}
+.ops .hc code {
+  font: inherit;
+  color: var(--text);
+}
+
+/* sections */
+.ops .sec {
+  margin-bottom: 38px;
+  scroll-margin-top: 70px;
+}
+.ops .sh {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.ops .sh h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.3px;
+}
+.ops .sh .sub {
+  color: var(--faint);
+  font-size: 13.5px;
+}
+.ops .sh .end {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* buttons */
+.ops .b {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--field-line);
+  background: none;
+  border-radius: 5px;
+  padding: 6px 11px;
+  font-size: 13.5px;
+  line-height: 1.2;
+  color: var(--text);
+  white-space: nowrap;
+  transition:
+    transform 160ms var(--ease),
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.ops .b:active {
+  transform: scale(0.97);
+}
+.ops .b.p {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 500;
+}
+.ops .b.s {
+  border-color: transparent;
+  color: var(--muted);
+  padding: 6px 8px;
+}
+.ops .b.s:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.ops .b.d {
+  color: var(--crit);
+}
+.ops .b:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .ops .b:hover {
+    border-color: var(--muted);
+  }
+  .ops .b.p:hover {
+    border-color: var(--accent);
+    filter: brightness(1.05);
+  }
+}
+
+/* status pill */
+.ops .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 99px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.ops .pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex: none;
+}
+.ops .pill[data-s="ok"] {
+  color: var(--ok);
+  border-color: #a8c69a44;
+}
+.ops .pill[data-s="ok"]::before {
+  background: var(--ok);
+}
+.ops .pill[data-s="warn"] {
+  color: var(--warn);
+  border-color: #e8cf7c44;
+}
+.ops .pill[data-s="warn"]::before {
+  background: var(--warn);
+}
+.ops .pill[data-s="crit"] {
+  color: var(--crit);
+  border-color: #f2948c44;
+}
+.ops .pill[data-s="crit"]::before {
+  background: var(--crit);
+}
+.ops .pill[data-s="run"] {
+  color: var(--info);
+  border-color: #9bbfe044;
+}
+.ops .pill[data-s="run"]::before {
+  background: var(--info);
+  animation: ops-blink 1.4s ease-in-out infinite;
+}
+.ops .pill[data-s="wait"]::before {
+  background: var(--faint);
+}
+@keyframes ops-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* attention list */
+.ops .att {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ops .ai {
+  display: grid;
+  grid-template-columns: 4px 1fr auto;
+  gap: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  overflow: hidden;
+  animation: rin 300ms var(--ease) both;
+}
+.ops .ai .bar {
+  background: var(--faint);
+}
+.ops .ai[data-s="crit"] .bar {
+  background: var(--crit);
+}
+.ops .ai[data-s="warn"] .bar {
+  background: var(--warn);
+}
+.ops .ai[data-s="info"] .bar {
+  background: var(--info);
+}
+.ops .ai .body {
+  padding: 12px 0 12px 2px;
+  min-width: 0;
+}
+.ops .ai .body b {
+  font-weight: 500;
+  font-size: 14.5px;
+  display: block;
+}
+.ops .ai .body span {
+  font-size: 13px;
+  color: var(--muted);
+  display: block;
+  margin-top: 2px;
+}
+.ops .ai .body code {
+  font: 12px var(--mono);
+  color: var(--faint);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.ops .ai .acts {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 12px 10px 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.ops .att .none {
+  padding: 22px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* pipeline */
+.ops .pipe {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 14px;
+}
+.ops .srch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 20px;
+  margin-top: 14px;
+}
+.ops .srch b {
+  display: block;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ops .srch span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ops .bl {
+  margin-top: 0;
+}
+.ops .flowrow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  overflow: hidden;
+}
+.ops .st {
+  padding: 14px 16px;
+  position: relative;
+  min-width: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  width: 100%;
+}
+.ops .st:hover {
+  background: var(--hover);
+}
+.ops .st + .st {
+  border-left: 1px solid var(--line);
+}
+.ops .st small {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.ops .st big {
+  display: block;
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: -1px;
+  line-height: 1.15;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.ops .st .d {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.ops .st .d .w {
+  color: var(--warn);
+}
+.ops .st .d .c {
+  color: var(--crit);
+}
+.ops .st .arrow {
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border-top: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  transform: translateY(-50%) rotate(45deg);
+  background: var(--field);
+  z-index: 1;
+}
+.ops .st:last-child .arrow {
+  display: none;
+}
+.ops .cov {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  padding: 14px 16px;
+}
+.ops .cov h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.ops .cov .row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ops .cov .bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+  display: flex;
+}
+.ops .cov .bar i {
+  display: block;
+  height: 100%;
+}
+.ops .cov .bar .a {
+  background: var(--ok);
+}
+.ops .cov .bar .b2 {
+  background: var(--warn);
+}
+.ops .cov .bar .c {
+  background: var(--crit);
+}
+.ops .cov .k {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.ops .cov .k i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.ops .chart {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  padding: 14px 16px;
+  min-width: 0;
+}
+.ops .chart h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.ops .chart h3 b {
+  color: var(--text);
+  font-weight: 500;
+  font-size: 14.5px;
+}
+.ops .chart .lg {
+  display: flex;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--faint);
+  margin-top: 4px;
+}
+.ops .chart .lg i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.ops .chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 8px;
+  overflow: visible;
+}
+.ops .chart .tt {
+  font: 12px var(--sans);
+  fill: var(--faint);
+}
+.ops .chart .tip,
+.ops .bl .tip {
+  position: absolute;
+  pointer-events: none;
+  background: #1b1a18;
+  border: 1px solid var(--field-line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 8px));
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ops .chart .tip.on,
+.ops .bl .tip.on {
+  opacity: 1;
+}
+.ops .chart {
+  position: relative;
+}
+
+/* backlog panel: downloaded -> searchable */
+.ops .bl {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  padding: 14px 16px 12px;
+  position: relative;
+}
+.ops .bl .bh {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ops .bl .bh h3 {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 500;
+}
+.ops .bl .bh span {
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.ops .bl .bb {
+  display: grid;
+  grid-template-columns: minmax(200px, auto) 1fr;
+  gap: 10px 36px;
+  align-items: start;
+}
+.ops .bl .hero big {
+  display: block;
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -1.2px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.ops .bl .hero small {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.ops .bl .stats {
+  display: flex;
+  gap: 26px;
+  flex-wrap: wrap;
+}
+.ops .bl .stats b {
+  display: block;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.3px;
+  font-variant-numeric: tabular-nums;
+}
+.ops .bl .stats span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ops .bl .v {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+  max-width: 78ch;
+  line-height: 1.5;
+}
+.ops .bl .v em {
+  font-style: normal;
+  color: var(--warn);
+}
+.ops .bl .v em.ok {
+  color: var(--ok);
+}
+.ops .bl svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 12px;
+  overflow: visible;
+}
+.ops .bl .tt {
+  font: 12px var(--sans);
+  fill: var(--faint);
+}
+.ops .bl .bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  margin-top: 10px;
+}
+.ops .bl .bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.ops .bl .bar i:nth-child(2) {
+  opacity: 0.6;
+}
+.ops .bl .bar i:nth-child(3) {
+  background: var(--faint);
+}
+.ops .bl .leg {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ops .bl .leg i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--accent);
+}
+.ops .bl .leg span:nth-child(2) i {
+  opacity: 0.6;
+}
+.ops .bl .leg span:nth-child(3) i {
+  background: var(--faint);
+}
+.ops .bl .leg b {
+  font-weight: 500;
+  color: var(--text);
+}
+@media (max-width: 640px) {
+  .ops .bl .bb {
+    grid-template-columns: 1fr;
+  }
+}
+/* accounts table */
+.ops .tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.ops .seg {
+  display: inline-flex;
+  height: 38px;
+  border: 1px solid var(--field-line);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.ops .seg button {
+  background: none;
+  border: 0;
+  padding: 0 11px;
+  font-size: 13.5px;
+  color: var(--muted);
+  border-right: 1px solid var(--field-line);
+}
+.ops .seg button:last-child {
+  border-right: 0;
+}
+.ops .seg button[aria-pressed="true"] {
+  background: var(--hover);
+  color: var(--text);
+}
+.ops .seg button .n {
+  color: var(--faint);
+  margin-left: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.ops .bulk {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.ops .tw {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  overflow: hidden;
+}
+.ops .jobs .tw {
+  overflow-x: auto;
+}
+.ops table.t {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  min-width: 900px;
+}
+.ops .t th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--faint);
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ops .t td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.ops .t th:first-child,
+.ops .t td:first-child {
+  padding-left: 20px;
+}
+.ops .t th:last-child,
+.ops .t td:last-child {
+  padding-right: 16px;
+}
+.ops .t tr:last-child td {
+  border-bottom: 0;
+}
+.ops .t tr:hover td {
+  background: var(--hover);
+}
+.ops .t td.num,
+.ops .t th.num {
+  text-align: right;
+}
+.ops .t .acc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ops .t .acc img {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--av);
+  flex: none;
+}
+.ops .t .acc b {
+  font-weight: 500;
+  display: block;
+  line-height: 1.2;
+}
+.ops .t .acc small {
+  color: var(--faint);
+  font-size: 12px;
+}
+.ops .t .muted {
+  color: var(--muted);
+}
+.ops .t .faint {
+  color: var(--faint);
+}
+.ops .t input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+.ops .span {
+  display: grid;
+  gap: 4px;
+  min-width: 170px;
+}
+.ops .span .rr {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ops .span .tl {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  position: relative;
+  overflow: hidden;
+}
+.ops .span .tl i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--ok);
+}
+.ops .span .tl i.gap {
+  background: repeating-linear-gradient(45deg, var(--warn) 0 3px, transparent 3px 6px);
+}
+.ops .span .tl i.unk {
+  background: repeating-linear-gradient(45deg, var(--faint) 0 2px, transparent 2px 5px);
+  opacity: 0.6;
+}
+.ops .span .tl i.pend {
+  background: var(--info);
+  opacity: 0.7;
+}
+.ops .prog {
+  display: grid;
+  gap: 4px;
+  min-width: 120px;
+}
+.ops .prog .tl {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.ops .prog .tl i {
+  display: block;
+  height: 100%;
+  background: var(--info);
+  transition: width 400ms var(--ease);
+}
+.ops .prog .tl i.ind {
+  width: 35%;
+  animation: ops-ind 1.4s var(--ease-in-out) infinite alternate;
+}
+@keyframes ops-ind {
+  from {
+    margin-left: 0;
+  }
+  to {
+    margin-left: 65%;
+  }
+}
+.ops .prog small {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ops .acts {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.ops .ib2 {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  color: var(--faint);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.ops .ib2:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.ops .ib2:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* jobs */
+.ops .jobs .tw {
+  margin-top: 0;
+}
+.ops .jobs table.t {
+  table-layout: fixed;
+  min-width: 1000px;
+}
+.ops .jobs .t col.c1 {
+  width: 76px;
+}
+.ops .jobs .t col.c2 {
+  width: 24%;
+}
+.ops .jobs .t col.c3 {
+  width: 96px;
+}
+.ops .jobs .t col.c4 {
+  width: 19%;
+}
+.ops .jobs .t col.c5 {
+  width: 15%;
+}
+.ops .jobs .t col.c7 {
+  width: 130px;
+}
+.ops .jobs .t td {
+  overflow-wrap: anywhere;
+}
+.ops .err {
+  font: 12px var(--mono);
+  color: var(--crit);
+  white-space: normal;
+  max-width: 36ch;
+}
+.ops .t .tgt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ops .t .tgt .ty {
+  font-size: 11.5px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  min-width: 92px;
+  text-align: center;
+  flex: none;
+}
+.ops .t .tgt b {
+  font-weight: 500;
+}
+.ops .t .tgt small {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* extra imports */
+.ops .imports {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  overflow: hidden;
+}
+.ops .imports .list {
+  border-right: 1px solid var(--line);
+  padding: 12px;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+.ops .imports .list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: var(--muted);
+  transition: background-color 150ms ease;
+}
+.ops .imports .list button b {
+  display: block;
+  font-weight: 500;
+  color: var(--text);
+  font-size: 14px;
+}
+.ops .imports .list button small {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+.ops .imports .list button[aria-pressed="true"] {
+  background: var(--hover);
+}
+.ops .imports .list button:hover {
+  background: var(--hover);
+}
+.ops .imports .form {
+  padding: 18px 20px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+.ops .imports .form h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+.ops .imports .form p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 62ch;
+}
+.ops .imports .out {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 13.5px;
+  color: var(--muted);
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.ops .imports .out dt {
+  color: var(--faint);
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.ops .imports .out dd {
+  margin: 0;
+}
+.ops .imports .form .row {
+  gap: 8px;
+}
+.ops .imports #impF {
+  display: grid;
+  gap: 14px;
+}
+.ops .imports .form .q {
+  min-height: 42px;
+  flex: 1 1 260px;
+}
+.ops .imports .form label.opt {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.ops .imports .form input[type="date"],
+.ops .imports .form input[type="number"] {
+  background: var(--field);
+  border: 1px solid var(--field-line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: var(--text);
+  color-scheme: dark;
+}
+.ops .imports .form .costline {
+  font-size: 13px;
+  color: var(--faint);
+}
+
+/* provider */
+.ops .prov {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+.ops .pc {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  padding: 14px 16px;
+}
+.ops .pc small {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.ops .pc big {
+  display: block;
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.6px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.ops .pc .d {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.ops .pc .meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+  margin-top: 10px;
+}
+.ops .pc .meter i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.ops .pc .meter i.w {
+  background: var(--warn);
+}
+.ops .pc dl {
+  margin: 10px 0 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ops .pc dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* modal for confirmations */
+.ops .md {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #000000b3;
+}
+.ops .md .box {
+  background: #121110;
+  border: 1px solid var(--field-line);
+  border-radius: 10px;
+  padding: 20px 22px;
+  width: min(440px, 100%);
+  box-shadow: 0 12px 32px #0009;
+}
+.ops .md h3 {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 500;
+}
+.ops .md p {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.ops .md .acts {
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .ops .pipe {
+    grid-template-columns: 1fr;
+  }
+  .ops .imports {
+    grid-template-columns: 1fr;
+  }
+  .ops .imports .list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .ops .flowrow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ops .st:nth-child(2) .arrow {
+    display: none;
+  }
+  .ops .st:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .ops .st:nth-child(4) {
+    border-top: 1px solid var(--line);
+  }
+}
+@media (max-width: 720px) {
+  .ops .who > span:not(.ring) {
+    display: none;
+  }
+  .opsnav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 10px;
+  }
+  .opsnav::-webkit-scrollbar {
+    display: none;
+  }
+  .opsnav a {
+    flex: none;
+  }
+  .opsnav .now {
+    display: none;
+  }
+  .opsnav > .b.s {
+    flex: none;
+  }
+  .ops .flowrow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .ops .ai {
+    grid-template-columns: 4px 1fr;
+  }
+  .ops .ai .acts {
+    grid-column: 2;
+    padding: 0 12px 12px 2px;
+    justify-content: flex-start;
+  }
+  .ops .st big {
+    font-size: 24px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ops .pill[data-s="run"]::before {
+    animation: none;
+  }
+  .ops .prog .tl i.ind {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+  .ops .ai {
+    animation: none;
+  }
+}
+
+/* additions for the live data */
+.ops .ops-word {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 17px;
+  letter-spacing: 0;
+  margin-left: 6px;
+}
+.ops .ops-loading {
+  margin: 0;
+  padding: 18px 16px;
+  color: var(--faint);
+  font-size: 14px;
+}
+.ops .ops-error {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid #f2948c44;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.ops .ops-error b {
+  color: var(--crit);
+  font-weight: 500;
+}
+.ops .note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.ops .note.pad {
+  margin: 0;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line);
+}
+.ops .nt {
+  color: var(--faint);
+  font-style: italic;
+  font-weight: 400;
+}
+.ops .hc[data-s="none"] .dot {
+  background: var(--faint);
+}
+.ops .scroll {
+  overflow-x: auto;
+}
+.ops .t td.empty {
+  padding: 22px;
+}
+.ops .t td.warn {
+  color: var(--warn);
+}
+.ops .t .info {
+  color: var(--info);
+}
+.ops .t .crit,
+.ops .crit {
+  color: var(--crit);
+}
+.ops .t .nowrap {
+  white-space: nowrap;
+}
+.ops .jid {
+  font: 12.5px var(--mono);
+  color: var(--faint);
+}
+.ops .ops-av {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--av);
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  color: var(--text);
+}
+.ops .prog {
+  margin-top: 6px;
+}
+.ops a.ib2 {
+  text-decoration: none;
+}
+.ops .pc big .unit,
+.ops .pc .unit {
+  font-size: 15px;
+  color: var(--faint);
+  letter-spacing: 0;
+}
+.ops .pc dd {
+  overflow-wrap: anywhere;
+}
+.ops .bl .stats b.nt {
+  font-size: 17px;
+}
+.ops .imports .impf {
+  display: grid;
+  gap: 14px;
+}
+.ops .imports .form .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.ops .imports .form .b.go {
+  min-height: 42px;
+  padding-inline: 18px;
+}
+.ops .imports .form label.opt input[type="checkbox"] {
+  accent-color: var(--accent);
+}

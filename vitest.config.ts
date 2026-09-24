@@ -8,12 +8,10 @@ import solid from "@solidjs/vite-plugin";
 const DOM_TESTS = [
   "tests/**/*-ui.test.{ts,tsx}",
   "tests/coderabbit-pr46-results-section.test.ts",
-  "tests/coderabbit-pr46-round2.test.ts",
   "tests/results-section-*.test.ts",
   "tests/scenario-provider-throttling.test.ts",
   "tests/scenario-publication-lifecycle.test.ts",
   "tests/scenario-screenshot-cases.test.ts",
-  "tests/signed-out-states.test.ts",
 ];
 
 const shared = {

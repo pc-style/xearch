@@ -1210,16 +1210,13 @@ dialog::backdrop {
 .stack-form label small {
   color: var(--faint);
 }
-.stack-form input,
-.control-room input:not([type="checkbox"]),
-.control-room select {
+.stack-form input {
   background: var(--field);
   border: 1px solid var(--field-line);
   border-radius: 4px;
   padding: 10px 12px;
 }
-.stack-form input:focus,
-.control-room input:focus {
+.stack-form input:focus {
   outline: 0;
   border-color: var(--accent);
 }
@@ -1324,9 +1321,8 @@ dialog::backdrop {
 }
 
 /* plain buttons in the operator surfaces and modals */
-:where(.control-room, dialog, .library) button:where(:not([class])),
-.job-row-actions button,
-.library-row-actions button {
+:where(dialog) button:where(:not([class])),
+.job-row-actions button {
   background: none;
   border: 1px solid var(--field-line);
   border-radius: 5px;

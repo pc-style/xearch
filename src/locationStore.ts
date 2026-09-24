@@ -16,21 +16,20 @@ export interface LocationSnapshot {
    * false in the public build's URLs, where it does nothing.
    */
   readonly search: boolean;
-  // The operator Queue page (src/library/QueueTimeline.tsx), reachable at
-  // `?queue=1` the same way `dashboard` is reachable at `?dashboard=1` — see
-  // src/App.tsx's `queue` render branch.
+  // `?queue=1`: the old operator Queue page's address, now only read so
+  // `opsEntryPatch` can send it to the dashboard's Jobs tab.
   readonly queue: boolean;
   readonly view: ViewMode;
-  /** Read-only: the app has no path-based routes (dashboard, search, etc.
-   * are all query params on "/"), so this exists only so a caller can tell
-   * a genuine unknown path (e.g. a typo'd shared link) apart from "/" — QA
+  /** The search app lives at "/" (its views are query params); the
+   * operator build's dashboard lives at `OPS_PATH` and its tab paths
+   * (`opsTabFromPath`). Anything else is a genuinely unknown address (QA
    * report A14, which found `/nope/does-not-exist` silently rendering the
-   * full home page with a 200. Never written by `pushLocation`/
-   * `replaceLocation`; a real path change needs a real navigation. */
+   * full home page with a 200). */
   readonly path: string;
 }
 
 export interface LocationPatch {
+  readonly path?: string;
   readonly raw?: string;
   readonly sort?: Sort;
   readonly includeStats?: boolean;
@@ -203,6 +202,8 @@ export function previewPatch(input: string | URL, patch: LocationPatch): string 
 }
 
 function applyPatch(url: URL, patch: LocationPatch): void {
+  if (patch.path !== undefined) url.pathname = patch.path;
+
   if (patch.raw !== undefined) {
     if (patch.raw) url.searchParams.set("q", patch.raw);
     else url.searchParams.delete("q");
@@ -248,12 +249,97 @@ function navigate(mode: "pushState" | "replaceState", patch: LocationPatch): voi
   publishBrowserLocation();
 }
 
+/** The operator dashboard's address. Each tab has its own path below it. */
+export const OPS_PATH = "/ops";
+
+/** The dashboard's tabs, in nav order. "overview" lives at `OPS_PATH` itself. */
+export const OPS_TABS = [
+  "overview",
+  "accounts",
+  "jobs",
+  "imports",
+  "performance",
+  "provider",
+] as const;
+
+export type OpsTab = (typeof OPS_TABS)[number];
+
+const OPS_TAB_SET: ReadonlySet<string> = new Set(OPS_TABS);
+
+function isOpsTab(value: string): value is OpsTab {
+  return OPS_TAB_SET.has(value);
+}
+
+/** The path for one dashboard tab: `/ops` for the overview, `/ops/<tab>` otherwise. */
+export function opsPath(tab: OpsTab): string {
+  return tab === "overview" ? OPS_PATH : `${OPS_PATH}/${tab}`;
+}
+
+/**
+ * Which dashboard tab `path` addresses, or null when it is not a dashboard
+ * address at all. `/ops/overview` is not one: the overview's address is
+ * `/ops`, so there is exactly one URL per tab. A trailing slash is allowed.
+ */
+export function opsTabFromPath(path: string): OpsTab | null {
+  const trimmed = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+
+  if (trimmed === OPS_PATH) return "overview";
+
+  if (!trimmed.startsWith(`${OPS_PATH}/`)) return null;
+  const tab = trimmed.slice(OPS_PATH.length + 1);
+
+  return tab !== "overview" && isOpsTab(tab) ? tab : null;
+}
+
+/**
+ * What to do with a page load, or null to leave the URL alone.
+ *
+ * Operator build: the dashboard lives at `/ops` and `/ops/<tab>`. A bare
+ * "/" (no query, no `?search=1`) has always meant the dashboard there, so
+ * it becomes `/ops`; the old Queue page link `/?queue=1` becomes
+ * `/ops/jobs`. A dashboard address carrying search params (`?q=`,
+ * `?search=1`, `?queue=1`) drops them, so the dashboard always opens.
+ *
+ * Public build: there is no dashboard, so a dashboard address is just the
+ * home page at "/" (keeping the rest of the URL). Unknown paths stay as
+ * they are and get the not-found page.
+ */
+export function opsEntryPatch(
+  location: Pick<LocationSnapshot, "path" | "raw" | "search" | "queue">,
+  operator: boolean,
+): LocationPatch | null {
+  const tab = opsTabFromPath(location.path);
+
+  if (!operator) return tab ? { path: "/" } : null;
+
+  if (tab)
+    return location.raw || location.search || location.queue
+      ? { raw: "", search: false, queue: false }
+      : null;
+
+  if (location.path === "/" && !location.search && !location.raw)
+    return { path: location.queue ? opsPath("jobs") : OPS_PATH, queue: false };
+
+  return null;
+}
+
 export function pushLocation(patch: LocationPatch): void {
   navigate("pushState", patch);
 }
 
 export function replaceLocation(patch: LocationPatch): void {
   navigate("replaceState", patch);
+}
+
+/** Navigate to exactly `href` (path and query), adding a history entry. */
+export function pushHref(href: string): void {
+  const currentWindow = browserWindow();
+
+  if (!currentWindow) return;
+
+  currentSnapshot();
+  currentWindow.history.pushState(null, "", href);
+  publishBrowserLocation();
 }
 
 export function useLocation(): Accessor<LocationSnapshot> {

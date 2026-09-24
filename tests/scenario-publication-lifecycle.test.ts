@@ -1,16 +1,12 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import { fakeConvex, renderHtml } from "./solid";
 import schema from "../convex/schema";
-import { PUBLICATION_STATE_META } from "../src/library/format";
-import type { AccountLibraryRow, PublicationUpdateEnvelope } from "../convex/lib/contracts";
-import AccountRow from "../src/library/AccountRow";
-
-// AccountRow reads Convex through src/data/convex; this test never expands
-// the row or fires its buttons, so a fake app whose queries all read as "no
-// data yet" is all it needs.
-const fakeConvexClient = fakeConvex();
+import { api } from "../convex/_generated/api";
+import type { PublicationUpdateEnvelope } from "../convex/lib/contracts";
+import type { OpsAccount } from "../convex/ops";
+import { mountOps } from "./opsHarness";
+import { stripMarkers } from "./solid";
 
 /**
  * Workflow-run scenario evidence for to-do.md's acceptance check:
@@ -22,9 +18,9 @@ const fakeConvexClient = fakeConvex();
  *
  * This does not touch search/ (Rust) or anything Pronsh owns. It drives
  * only this app's Convex receiver (convex/publication.ts), the
- * account-library read model (convex/library.ts), and the exact label the
- * UI renders for that state (src/library/format.tsx / AccountRow.tsx),
- * against a convex-test in-memory deployment. No paid import, no live
+ * account-library read model (convex/library.ts), the operator dashboard's
+ * account read model (convex/ops.ts `accounts`), and the status the /ops
+ * Accounts page renders for it (src/ops), against a convex-test in-memory deployment. No paid import, no live
  * coordination, nothing merged or deployed.
  */
 
@@ -51,8 +47,12 @@ function envelope(overrides: Partial<PublicationUpdateEnvelope> = {}): Publicati
   };
 }
 
-function renderedLabel(row: AccountLibraryRow): string {
-  const html = renderHtml(AccountRow, { row }, fakeConvexClient);
+/** The dashboard's Accounts row for this account, fed the real query result. */
+async function renderedRow(rows: OpsAccount[]): Promise<string> {
+  const ops = await mountOps("accounts", { accounts: rows });
+  const html = stripMarkers(ops.find("tr[data-account]").outerHTML);
+
+  ops.unmount();
 
   return html;
 }
@@ -63,7 +63,15 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
 
     // --- Seed: an account this user owns, with one completed acquisition
     // job (a "downloaded capture") and NO publication update yet. ---
-    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    // An operator (tests/setupEnv.ts), so the dashboard's own read model
+    // can be read too.
+    const owner = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        isAnonymous: false,
+        email: "operator@test.xearch",
+        emailVerificationTime: Date.now(),
+      }),
+    );
 
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "alice", userId: "111", name: "Alice" }),
@@ -95,12 +103,16 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     console.log("STEP1 library.rows:", JSON.stringify(rowsBefore));
     expect(rowsBefore).toHaveLength(1);
     expect(rowsBefore[0].publicationState).toBe("waiting_for_indexing");
-    const uiBefore = renderedLabel(rowsBefore[0]);
+    const opsBefore = await session.query(api.ops.accounts, {});
+
+    expect(opsBefore.rows[0].publication).toBeNull();
+    const uiBefore = await renderedRow(opsBefore.rows);
     console.log(
-      "STEP1 UI label present:",
-      uiBefore.includes(PUBLICATION_STATE_META.waiting_for_indexing.label),
+      "STEP1 dashboard row says awaiting indexing:",
+      uiBefore.includes("Awaiting indexing"),
     );
-    expect(uiBefore).toContain("Waiting for indexing");
+    expect(uiBefore).toContain("Awaiting indexing");
+    expect(uiBefore).not.toContain("Up to date");
     expect(await t.run((ctx) => ctx.db.query("accountPublications").collect())).toEqual([]);
 
     // --- Step 2: confirmed publication update -> searchable, no reacquisition ---
@@ -129,8 +141,15 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     console.log("STEP2 library.rows:", JSON.stringify(rowsAfter));
     expect(rowsAfter[0].publicationState).toBe("searchable");
     expect(rowsAfter[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 480 });
-    const uiAfter = renderedLabel(rowsAfter[0]);
-    expect(uiAfter).toContain("Searchable");
+    const opsAfter = await session.query(api.ops.accounts, {});
+
+    expect(opsAfter.rows[0].publication).toMatchObject({
+      state: "searchable",
+      searchablePostCount: 480,
+    });
+    const uiAfter = await renderedRow(opsAfter.rows);
+    expect(uiAfter).toContain("Up to date");
+    expect(uiAfter).toContain(">480<");
 
     // --- Step 3: the exact same update resent verbatim -> idempotent, no
     // double count. Resent verbatim (not merely with the same numbers
