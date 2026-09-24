@@ -217,7 +217,12 @@ export function createSearchTelemetryStore(
   let nextAttemptId = 0;
 
   const notify = () => {
-    for (const listener of listeners) listener();
+    // Iterate a snapshot: a listener that unsubscribes and re-subscribes
+    // while being notified would otherwise be visited again by the live Set
+    // iterator, and a component doing that on every notification would keep
+    // this loop running. The copy is deliberate, not a useless spread.
+    const snapshot = [...listeners];
+    for (const listener of snapshot) listener();
   };
 
   const update = (
