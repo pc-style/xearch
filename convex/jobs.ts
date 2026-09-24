@@ -10,13 +10,20 @@ import { canonicalQuery } from "./lib/search";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 
 // Every filter a caller cares about is applied BEFORE the limit, by streaming
-// the owner's jobs newest-first and stopping once enough eligible ones are
-// found. Taking a fixed page and filtering afterwards silently shortens the
-// feed: 20 dismissed runs, or 20 account imports when the caller only wants
-// the other kinds, would hide older rows that should have been shown.
+// every job newest-first and stopping once enough eligible ones are found.
+// Taking a fixed page and filtering afterwards silently shortens the feed:
+// 20 dismissed runs, or 20 account imports when the caller only wants the
+// other kinds, would hide older rows that should have been shown.
 // `scanned` bounds the read (Convex guidelines: never an unbounded scan);
-// reaching it means the owner has thousands of jobs newer than the next
-// eligible one, which is not a case worth paginating a dashboard feed for.
+// reaching it means there are thousands of jobs newer than the next eligible
+// one, which is not a case worth paginating a dashboard feed for.
+//
+// The imported corpus is shared infrastructure, not personal data (to-do.md,
+// convex/lib/search.ts): this reads across every owner, not just the
+// caller's own jobs. `jobs.owner` still records who started each run (an
+// audit trail); it is no longer a visibility boundary here. No index needed
+// for the whole-table scan below — it is ordered by `_creationTime`, Convex's
+// default table order, the same as an indexed `.order("desc")` would give.
 const JOB_FEED_SCAN = 2_000;
 const JOB_FEED_LIMIT = 20;
 // Which kinds a caller wants. "account" is the full-history import that owns
@@ -30,14 +37,13 @@ export const list = query({
     scope: v.optional(jobScopeValidator),
   },
   handler: async (ctx, args) => {
-    const owner = await user(ctx);
+    // Authenticated callers only; every signed-in caller sees the same
+    // shared feed, so nothing about the identity narrows what comes back.
+    await user(ctx);
     const scope = args.scope ?? "all";
     const out: Doc<"jobs">[] = [];
     let scanned = 0;
-    for await (const job of ctx.db
-      .query("jobs")
-      .withIndex("by_owner", (q) => q.eq("owner", owner))
-      .order("desc")) {
+    for await (const job of ctx.db.query("jobs").order("desc")) {
       if (++scanned > JOB_FEED_SCAN) break;
       if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
       if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
@@ -92,10 +98,10 @@ function canonicalLiveQuery(raw: string): string {
   }
 }
 /**
- * How long an identical request from the same person is answered with the
- * run it already made rather than a new one. Long enough to absorb a
- * double-click and a "did that work?" retry, short enough that a deliberate
- * re-run is never mistaken for one.
+ * How long an identical request is answered with the run that was already
+ * made rather than a new one. Long enough to absorb a double-click and a
+ * "did that work?" retry, short enough that a deliberate re-run is never
+ * mistaken for one.
  */
 const REPEAT_WINDOW_MS = 60_000;
 export const start = mutation({
@@ -107,6 +113,10 @@ export const start = mutation({
     previous: v.optional(v.id("jobs")),
   },
   handler: async (ctx, args) => {
+    // Authentication only. The job this creates is not scoped back to this
+    // caller for reads or actions on it — imports are shared infrastructure,
+    // not personal data (to-do.md) — `owner` below is written purely as an
+    // audit trail of who started the run.
     const owner = await user(ctx);
     const outbound = process.env.COLLECTOR_MODE === "outbound";
     const worker = outbound
@@ -135,14 +145,13 @@ export const start = mutation({
       (!/^\d{4}-\d{2}-\d{2}$/.test(args.since) || !Number.isFinite(Date.parse(args.since)))
     )
       throw new ConvexError("Choose a valid start date.");
+    // Ownership is deliberately not part of this check any more: the
+    // imported corpus is shared, so a continuation is valid regardless of
+    // who started the run it continues. Existence, input, and kind still
+    // must match — a continuation is only ever the SAME request picking up
+    // where it left off.
     const previous = args.previous ? await ctx.db.get(args.previous) : null;
-    if (
-      args.previous &&
-      (!previous ||
-        previous.owner !== owner ||
-        previous.input !== input ||
-        previous.kind !== args.kind)
-    )
+    if (args.previous && (!previous || previous.input !== input || previous.kind !== args.kind))
       throw new ConvexError("Continuation does not belong to this indexing job.");
     // A second click is not a second import.
     //
@@ -157,15 +166,19 @@ export const start = mutation({
     // no allowance is tracked (the self-imposed budgets were deleted in #12
     // and are not coming back). A deliberate re-run a minute later starts a
     // real import. An explicit continuation is never collapsed — it carries
-    // a different cursor, which is the whole point of "Get next page" — and
-    // the lookup is owner-scoped, so it can never hand back someone else's
-    // job id.
+    // a different cursor, which is the whole point of "Get next page".
+    //
+    // This lookup is global by kind+input, not per-owner: the imported
+    // corpus is shared, so a duplicate request from ANY caller answers with
+    // the run that already exists rather than starting a second one, the
+    // same as a duplicate from the same person. `by_input` (kind, input,
+    // status) already exists for the concurrent-duplicate guard below;
+    // reused here with only its first two columns bound, which is a valid
+    // partial-prefix query on the same index rather than a new one.
     if (!args.previous) {
       const recent = await ctx.db
         .query("jobs")
-        .withIndex("by_owner_and_input", (q) =>
-          q.eq("owner", owner).eq("kind", args.kind).eq("input", input),
-        )
+        .withIndex("by_input", (q) => q.eq("kind", args.kind).eq("input", input))
         .order("desc")
         .first();
       if (
@@ -257,19 +270,21 @@ export const progress = internalMutation({
     await ctx.db.patch(job._id, { phase: args.phase, updatedAt: Date.now() });
   },
 });
-// Load a job this caller owns, or refuse. The same "not found" message
-// whether the job does not exist or simply is not theirs — never confirm the
-// existence of someone else's run.
-async function ownedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
-  const owner = await user(ctx);
+// Load a job, requiring only that the caller is authenticated. Jobs are
+// shared infrastructure, not personal data (to-do.md): any signed-in caller
+// may cancel, retry, dismiss, or restore any job, not only the one they
+// started. `job.owner` still records who started it (an audit trail); it is
+// no longer a permission check.
+async function sharedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
+  await user(ctx);
   const job = await ctx.db.get(jobId);
-  if (!job || job.owner !== owner) throw new ConvexError("Job not found.");
+  if (!job) throw new ConvexError("Job not found.");
   return job;
 }
 export const cancel = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const job = await ownedJob(ctx, jobId);
+    const job = await sharedJob(ctx, jobId);
     if (!["queued", "running"].includes(job.status)) return;
     await ctx.db.patch(jobId, {
       status: "cancelled",
@@ -281,7 +296,7 @@ export const cancel = mutation({
 export const retry = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const job = await ownedJob(ctx, jobId);
+    const job = await sharedJob(ctx, jobId);
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
     for (const status of ["queued", "running"] as const) {
@@ -314,7 +329,7 @@ export const retry = mutation({
 export const dismiss = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    const job = await ownedJob(ctx, jobId);
+    const job = await sharedJob(ctx, jobId);
     // Deliberately refuses queued/running work: hiding a run that is still
     // spending provider allowance would make it unstoppable from the UI.
     // Stop it first, then dismiss it.
@@ -328,7 +343,7 @@ export const restore = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     // Ownership is the whole check here; the row itself is not needed.
-    await ownedJob(ctx, jobId);
+    await sharedJob(ctx, jobId);
     await ctx.db.patch(jobId, { dismissedAt: undefined });
   },
 });
@@ -372,7 +387,7 @@ export const recordThrottle = internalMutation({
 export const receipts = query({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
-    await ownedJob(ctx, jobId);
+    await sharedJob(ctx, jobId);
     return ctx.db
       .query("receipts")
       .withIndex("by_capture", (q) => q.eq("jobId", jobId))
@@ -456,17 +471,49 @@ export const finish = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
     if (!job || job.status !== "running" || job.attempt !== args.attempt) return;
-    const retry = args.retryAfter !== undefined && (job.pageAttempt ?? args.attempt) < 3;
+
+    // A transient provider failure backs off and requeues on its own — no
+    // person has to click "Retry". `pageAttempt` is bumped once per attempt
+    // by `claim` (never here), so it already counts this attempt. Backoff
+    // grows with each attempt and is capped so a chronically-throttled job
+    // never sleeps for hours; past MAX_PAGE_ATTEMPTS the failure is handed to
+    // a person as partial/failed instead of retried forever.
+    const MAX_PAGE_ATTEMPTS = 10;
+    const RETRY_BASE_MS = 30_000;
+    const RETRY_CAP_MS = 15 * 60_000;
+    const pageAttempt = job.pageAttempt ?? 0;
+    const retry = args.retryAfter !== undefined && pageAttempt < MAX_PAGE_ATTEMPTS;
+    const retryDelayMs = retry
+      ? Math.min(RETRY_CAP_MS, Math.max(args.retryAfter!, RETRY_BASE_MS * 2 ** pageAttempt))
+      : undefined;
+
     const pages = (job.pages ?? 0) + (args.error ? 0 : 1);
-    const wantsMore = !args.error && job.kind === "bulk" && job.autoContinue && !!args.nextUntil;
-    const stalled =
-      wantsMore &&
+
+    // The admin types a handle once; xearch indexes everything it can obtain
+    // for it without anyone asking for the next page. Bulk history pages by
+    // walking an ever-older time window (`nextUntil`); every other kind
+    // (live/post/profile/followers/following/archive) pages by a provider
+    // cursor (`nextCursor`). Whichever one the provider returned, the SAME
+    // job requeues itself.
+    const wantsMoreUntil = !args.error && job.kind === "bulk" && job.autoContinue && !!args.nextUntil;
+    const wantsMoreCursor = !args.error && job.kind !== "bulk" && !!args.nextCursor;
+
+    const stalledUntil =
+      wantsMoreUntil &&
       (!Number.isFinite(Date.parse(args.nextUntil!)) ||
         (job.until !== undefined && Date.parse(args.nextUntil!) >= Date.parse(job.until)));
-    const pause = stalled
+    // A cursor identical to the one this attempt was given back means the
+    // provider made no progress; continuing would loop on the same page
+    // forever instead of ever finishing.
+    const stalledCursor =
+      wantsMoreCursor && job.cursor !== undefined && args.nextCursor === job.cursor;
+    const pause = stalledUntil
       ? "Paused because x.md did not return an older page. Your downloaded posts are safe."
-      : undefined;
-    const continueImport = wantsMore && !pause;
+      : stalledCursor
+        ? "Paused because x.md did not return a further page. Your downloaded posts are safe."
+        : undefined;
+    const continueImport = (wantsMoreUntil || wantsMoreCursor) && !pause;
+
     await ctx.db.patch(job._id, {
       status:
         retry || continueImport
@@ -477,14 +524,21 @@ export const finish = internalMutation({
               : "failed"
             : "complete",
       error: args.error ?? pause,
+      // Set whenever this job will run again on its own, so the UI can say
+      // "retrying automatically" instead of offering a button that does
+      // nothing until then.
       readyAt: retry
-        ? Date.now() + Math.max(1000, args.retryAfter!)
+        ? Date.now() + retryDelayMs!
         : continueImport
           ? Date.now() + 2000
           : undefined,
       warnings: args.warnings.slice(0, 10),
-      nextUntil: stalled ? undefined : args.nextUntil,
-      nextCursor: args.nextCursor,
+      nextUntil: stalledUntil ? undefined : args.nextUntil,
+      nextCursor: stalledCursor ? undefined : args.nextCursor,
+      // The cursor this job's NEXT claim will read (convex/importer.ts reads
+      // `job.cursor`) — only advanced when a cursor-paged kind is actually
+      // continuing; bulk kinds never use this field for their own paging.
+      cursor: wantsMoreCursor && !stalledCursor ? args.nextCursor : job.cursor,
       expectedUserId: args.expectedUserId ?? job.expectedUserId,
       pages,
       postsReceived: (job.postsReceived ?? 0) + (args.error ? 0 : (args.postsReceived ?? 0)),
@@ -492,9 +546,9 @@ export const finish = internalMutation({
       floorReached: args.floorReached ?? job.floorReached,
       ...(continueImport
         ? {
-            until: args.nextUntil,
+            ...(wantsMoreUntil ? { until: args.nextUntil } : {}),
             pageAttempt: 0,
-            phase: "Downloading older posts",
+            phase: wantsMoreUntil ? "Downloading older posts" : "Downloading the next page",
           }
         : {}),
       updatedAt: Date.now(),
@@ -504,7 +558,7 @@ export const finish = internalMutation({
         jobId: job._id,
       });
     if (retry)
-      await ctx.scheduler.runAfter(Math.max(1000, args.retryAfter!), internal.importer.run, {
+      await ctx.scheduler.runAfter(retryDelayMs!, internal.importer.run, {
         jobId: job._id,
       });
     if (args.profile) await upsertAccount(ctx, args.profile);

@@ -46,6 +46,7 @@ import { parseQuery, type Sort } from "../convex/lib/search";
 import { pushLocation, replaceLocation, useLocation } from "./locationStore";
 import { runTask } from "./runTask";
 import { searchFlow, type SearchRequest as FlowSearchRequest } from "./searchFlow";
+import { createSessionGate } from "./sessionGate";
 import {
   createSearchTelemetryStore,
   SearchStatus,
@@ -131,7 +132,7 @@ function Modal({
 }
 
 export default function App() {
-  const { isAuthenticated } = useConvexAuth();
+  const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn } = useAuthActions();
   const connection = useConvexConnectionState();
   const route = useLocation();
@@ -181,47 +182,17 @@ export default function App() {
       query: string;
       explanation: string;
     } | null>(null);
-  const session = useRef<Promise<void> | null>(null);
-  const authReady = useRef(isAuthenticated);
-  const authWaiters = useRef<(() => void)[]>([]);
+  // `signIn` is memoized by ConvexAuthProvider for the provider's lifetime, so
+  // capturing it once is safe. See src/sessionGate.ts for why the gate waits
+  // for `isLoading` before it ever creates an anonymous session.
+  const [sessionGate] = useState(() => createSessionGate(() => signIn("anonymous")));
+  // Commit-phase ref callback: runs after every render with the auth values
+  // of that render, so the gate always sees the latest state without an effect.
   function authProbe(node: HTMLSpanElement | null) {
     if (!node) return;
-    authReady.current = isAuthenticated;
-    if (isAuthenticated) {
-      for (const resolve of authWaiters.current.splice(0)) resolve();
-    }
+    sessionGate.update({ isLoading: authLoading, isAuthenticated });
   }
-  async function ensureSession(): Promise<void> {
-    if (authReady.current) return;
-    if (session.current) return session.current;
-    const pending = (async () => {
-      await signIn("anonymous");
-      // signIn stores tokens before the Convex websocket confirms authentication.
-      if (!authReady.current)
-        await new Promise<void>((resolve, reject) => {
-          let timer: ReturnType<typeof setTimeout>;
-          const done = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-          timer = setTimeout(() => {
-            authWaiters.current = authWaiters.current.filter((fn) => fn !== done);
-            reject(new Error("Session connection timed out. Try again."));
-          }, 20_000);
-          authWaiters.current.push(done);
-        });
-    })();
-    session.current = pending;
-    return pending.then(
-      () => {
-        if (session.current === pending) session.current = null;
-      },
-      (error: unknown) => {
-        if (session.current === pending) session.current = null;
-        throw error;
-      },
-    );
-  }
+  const ensureSession = sessionGate.ensure;
 
   if (route.version !== appliedRouteVersion) {
     setAppliedRouteVersion(route.version);
@@ -289,6 +260,7 @@ export default function App() {
   );
   const startSearch = useMutation(api.search.start);
   const start = useMutation(api.jobs.start),
+    retry = useMutation(api.jobs.retry),
     bookmark = useMutation(api.search.bookmark),
     save = useMutation(api.search.save),
     removeSaved = useMutation(api.search.removeSaved),
@@ -848,36 +820,27 @@ export default function App() {
                     {w}
                   </p>
                 ))}
-                {job.status !== "running" &&
-                  job.status !== "queued" &&
-                  (job.status === "failed" ||
-                    job.status === "partial" ||
-                    job.nextUntil ||
-                    job.nextCursor) && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        void task(
-                          (async () => {
-                            await ensureSession();
-                            await start({
-                              kind: job.kind,
-                              input: job.input,
-                              since: job.since,
-                              previous: job._id,
-                            });
-                          })(),
-                        )
-                      }
-                    >
-                      {job.nextUntil
-                        ? "Import older posts"
-                        : job.nextCursor
-                          ? "Get next page"
-                          : "Retry import"}
-                    </button>
-                  )}
+                {/* An import runs to the end of what the provider has on its
+                    own (convex/jobs.ts `finish` continues and retries by
+                    itself), so the only thing left for a person is to resume
+                    a run that gave up for good. That resumes THIS job where
+                    it stopped — never a new job from its cursor. */}
+                {(job.status === "failed" || job.status === "partial") && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void task(
+                        (async () => {
+                          await ensureSession();
+                          await retry({ jobId: job._id });
+                        })(),
+                      )
+                    }
+                  >
+                    Retry import
+                  </button>
+                )}
               </div>
             ))}
           </div>

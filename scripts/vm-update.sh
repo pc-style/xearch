@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Fast-forward the VM checkout and update already-running search services.
+# Fast-forward the VM checkout, update already-running search services, and
+# republish the operator site when application code changed.
 # Worker/capture cutover, unit changes, and cloud deployments are manual.
 # Skip only successfully applied revisions unless --force is given.
 set -euo pipefail
@@ -35,6 +36,15 @@ search_changed=false
 if [ "${1:-}" = "--force" ] || [ -z "$applied" ] || \
    ! git diff --quiet "$applied" "$after" -- search; then
   search_changed=true
+fi
+# The operator site (nginx on :8080) is built from this checkout and nothing
+# else republishes it, so it silently fell behind main: the dashboard people
+# actually use was three merges old while the public site auto-deployed.
+app_changed=false
+if [ "${1:-}" = "--force" ] || [ -z "$applied" ] || \
+   ! git diff --quiet "$applied" "$after" -- src convex public index.html \
+     package.json bun.lock vite.config.ts tsconfig.json scripts/deploy-operator-site.sh; then
+  app_changed=true
 fi
 bun install --frozen-lockfile
 if "$search_changed"; then
@@ -84,6 +94,11 @@ if "$search_changed"; then
     done
     curl -fsS --max-time 2 http://127.0.0.1:4320/health >/dev/null || { echo "search health failed on :4320"; exit 1; }
   fi
+fi
+# A directory swap under nginx, no service is touched; the script refuses to
+# publish a build without the dashboard in it.
+if "$app_changed"; then
+  bash "$CODE/scripts/deploy-operator-site.sh"
 fi
 # Atomic success marker: partial failures remain retryable without imports.
 printf '%s\n' "$after" > "$APPLIED.tmp"

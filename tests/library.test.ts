@@ -342,11 +342,12 @@ describe("library.rows", () => {
     expect(byHandle.map((r) => r.handle)).toEqual(["failed-one"]);
   });
 
-  it("scopes rows to the requesting owner and requires authentication", async () => {
+  it("returns rows across every owner — imports are shared infrastructure, not personal data — and still requires authentication", async () => {
     const { t, alice, b } = await setup();
     await insertAccount(t, { handle: "adam", userId: "1001" });
     await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
-    expect((await b.query(api.library.rows, {})).rows).toHaveLength(0);
+    const bobsRows = (await b.query(api.library.rows, {})).rows;
+    expect(bobsRows.map((r) => r.handle)).toEqual(["adam"]);
     await expect(t.query(api.library.rows, {})).rejects.toThrow();
   });
 });
@@ -392,10 +393,15 @@ describe("library.history", () => {
     ]);
   });
 
-  it("does not reveal another owner's account history", async () => {
+  it("shows an account's history to any authenticated caller — imports are shared, not owner-scoped", async () => {
     const { t, alice, b } = await setup();
     const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });
-    await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
-    await expect(b.query(api.library.history, { accountId })).rejects.toThrow("Account not found");
+    const job = await insertJob(t, alice, {
+      input: "adam",
+      expectedUserId: "1001",
+      status: "complete",
+    });
+    const runs = await b.query(api.library.history, { accountId });
+    expect(runs.map((r) => r.jobId)).toEqual([job]);
   });
 });

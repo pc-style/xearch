@@ -269,7 +269,130 @@ describe("Convex application boundaries", () => {
     expect(job?.error).toContain("did not return an older page");
     expect(job?.nextUntil).toBeUndefined();
   });
-  it("owns cancellation and rejects progress from a stopped worker", async () => {
+  it("requeues a bulk import with a further nextUntil on its own — nobody calls jobs.start to get the next page", async () => {
+    const { t, alice } = await setup();
+    const jobId = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner: alice,
+        kind: "bulk",
+        input: "theo",
+        status: "running",
+        count: 2,
+        attempt: 1,
+        pageAttempt: 1,
+        refresh: false,
+        warnings: [],
+        updatedAt: Date.now(),
+        autoContinue: true,
+        until: "2026-06-01",
+        pages: 0,
+        postsReceived: 0,
+      }),
+    );
+    await t.mutation(internal.jobs.finish, {
+      jobId,
+      attempt: 1,
+      warnings: [],
+      postsReceived: 500,
+      oldest: "2026-05-01",
+      nextUntil: "2026-05-01",
+    });
+    const job = await t.run((ctx) => ctx.db.get(jobId));
+    // Requeued as the SAME job, not left "complete" waiting on a button:
+    // there is no `jobs.start` call anywhere in this test.
+    expect(job).toMatchObject({
+      status: "queued",
+      until: "2026-05-01",
+      nextUntil: "2026-05-01",
+      pageAttempt: 0,
+    });
+    expect(job?.readyAt).toBeDefined();
+    // And it is genuinely claimable once its readyAt arrives — proof the
+    // requeue actually leads somewhere, not just a status flip.
+    await t.run((ctx) => ctx.db.patch(jobId, { readyAt: 0 }));
+    expect(await t.mutation(internal.jobs.claim, { jobId })).not.toBeNull();
+  });
+  it("requeues a non-bulk kind with a nextCursor on its own, and the next attempt reads that cursor", async () => {
+    const { t, alice } = await setup();
+    const jobId = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner: alice,
+        kind: "live",
+        input: "@theo",
+        status: "running",
+        count: 5,
+        attempt: 1,
+        pageAttempt: 1,
+        refresh: false,
+        warnings: [],
+        updatedAt: Date.now(),
+      }),
+    );
+    await t.mutation(internal.jobs.finish, {
+      jobId,
+      attempt: 1,
+      warnings: [],
+      nextCursor: "cursor-page-2",
+    });
+    const job = await t.run((ctx) => ctx.db.get(jobId));
+    expect(job).toMatchObject({
+      status: "queued",
+      nextCursor: "cursor-page-2",
+      // convex/importer.ts reads `job.cursor` for the NEXT attempt — this is
+      // what makes the requeued run actually ask for the next page instead
+      // of repeating the one it just fetched.
+      cursor: "cursor-page-2",
+      pageAttempt: 0,
+    });
+    expect(job?.readyAt).toBeDefined();
+  });
+  it("backs off a retryable failure with growing delay, and stops as a failed job after 10 attempts", async () => {
+    const { t, alice } = await setup();
+    const jobId = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner: alice,
+        kind: "live",
+        input: "@theo",
+        status: "queued",
+        count: 0,
+        attempt: 0,
+        refresh: false,
+        warnings: [],
+        updatedAt: Date.now(),
+        readyAt: 0,
+      }),
+    );
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+    for (let pageAttempt = 1; pageAttempt <= 10; pageAttempt++) {
+      vi.setSystemTime(now);
+      await t.mutation(internal.jobs.claim, { jobId });
+      await t.mutation(internal.jobs.finish, {
+        jobId,
+        attempt: pageAttempt,
+        warnings: [],
+        error: "provider hiccup",
+        retryAfter: 1_000,
+      });
+      const job = await t.run((ctx) => ctx.db.get(jobId));
+      if (pageAttempt < 10) {
+        // Backoff grows with each attempt (30s * 2^pageAttempt), capped at
+        // 15 minutes — by pageAttempt 5 the formula (960s) has already
+        // exceeded the cap, proving the cap actually applies.
+        const expectedDelay = Math.min(15 * 60_000, 30_000 * 2 ** pageAttempt);
+        expect(job?.status).toBe("queued");
+        expect(job?.readyAt).toBe(now + expectedDelay);
+        await t.run((ctx) => ctx.db.patch(jobId, { readyAt: 0 }));
+      } else {
+        // The 10th attempt is the last one retried on its own; a person has
+        // to retry from here.
+        expect(job?.status).toBe("failed");
+        expect(job?.error).toBe("provider hiccup");
+        expect(job?.readyAt).toBeUndefined();
+      }
+    }
+    vi.useRealTimers();
+  });
+  it("lets any signed-in caller cancel a job someone else started, and still rejects progress from a stopped worker", async () => {
     const { t, a, b, alice } = await setup();
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
@@ -284,9 +407,11 @@ describe("Convex application boundaries", () => {
         updatedAt: Date.now(),
       }),
     );
-    await expect(b.mutation(api.jobs.cancel, { jobId })).rejects.toThrow("Job not found");
-    await expect(b.query(api.jobs.receipts, { jobId })).rejects.toThrow("Job not found");
-    await a.mutation(api.jobs.cancel, { jobId });
+    // Imports are shared infrastructure, not personal data: bob (a
+    // different signed-in caller) can see the job's receipts and cancel it,
+    // even though alice started it.
+    await expect(b.query(api.jobs.receipts, { jobId })).resolves.toEqual([]);
+    await b.mutation(api.jobs.cancel, { jobId });
     await expect(
       t.mutation(internal.jobs.progress, {
         jobId,
@@ -296,6 +421,24 @@ describe("Convex application boundaries", () => {
     ).rejects.toThrow("no longer active");
     await t.mutation(internal.jobs.finish, { jobId, attempt: 1, warnings: [] });
     expect((await a.query(api.jobs.list, {}))[0].status).toBe("cancelled");
+  });
+  it("still refuses an unauthenticated caller entirely", async () => {
+    const { t, alice } = await setup();
+    const jobId = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner: alice,
+        kind: "profile",
+        input: "theo",
+        status: "running",
+        count: 0,
+        attempt: 1,
+        refresh: false,
+        warnings: [],
+        updatedAt: Date.now(),
+      }),
+    );
+    await expect(t.mutation(api.jobs.cancel, { jobId })).rejects.toThrow();
+    await expect(t.query(api.jobs.receipts, { jobId })).rejects.toThrow();
   });
   it("keeps saved searches private and rejects cross-user removal", async () => {
     const { a, b } = await setup();

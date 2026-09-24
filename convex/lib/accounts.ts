@@ -94,48 +94,54 @@ export async function resolveJobAccount(
   return found;
 }
 
-// Bounded read. One person's own account imports, newest first — the set both
-// the account library and the owner-scoped totals are built from. Shared so
+// Bounded read. Every account import in the shared corpus, newest first —
+// the set both the account library and its totals are built from. Shared so
 // the index, the kind filter, the order and the bound are one decision rather
 // than two that a comment asks you to keep equal.
+//
+// The imported corpus is shared infrastructure, not personal data (to-do.md,
+// convex/lib/search.ts): `jobs.owner` still records who started each run
+// (an audit trail), but it is no longer a visibility boundary for account
+// imports, so this reads across every owner rather than one.
 export const MAX_OWNED_ACCOUNT_JOBS = 500;
 
 /**
- * This owner's account-history jobs, plus whether there were more than the
- * bound allows. `truncated` exists so a caller can say "unknown" instead of
- * presenting the part it managed to read as a complete total.
+ * Every account-history job in the shared corpus, plus whether there were
+ * more than the bound allows. `truncated` exists so a caller can say
+ * "unknown" instead of presenting the part it managed to read as a complete
+ * total.
  */
-export async function ownedAccountJobs(
+export async function allAccountJobs(
   db: Db,
-  owner: Id<"users">,
 ): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
   // Indexed on kind rather than `.filter()`ed: a filter is applied after the
   // index scan and does not reduce documents read, so filtering here would
-  // read every job this owner has ever run — including thousands of live
+  // read every job any owner has ever run — including thousands of live
   // searches — to find the account imports among them.
   const scanned = await db
     .query("jobs")
-    .withIndex("by_owner_and_kind", (q) => q.eq("owner", owner).eq("kind", ACCOUNT_JOB_KIND))
+    .withIndex("by_kind", (q) => q.eq("kind", ACCOUNT_JOB_KIND))
     .order("desc")
     .take(MAX_OWNED_ACCOUNT_JOBS + 1);
   const truncated = scanned.length > MAX_OWNED_ACCOUNT_JOBS;
   return { jobs: truncated ? scanned.slice(0, MAX_OWNED_ACCOUNT_JOBS) : scanned, truncated };
 }
 
-// How far a targeted lookup will walk an owner's account imports, and how
-// many matching runs it will keep. Both are bounds on work, and reaching
-// either one means the answer is incomplete — which the caller is told,
-// rather than left to mistake for a finished search.
+// How far a targeted lookup will walk the shared corpus's account imports,
+// and how many matching runs it will keep. Both are bounds on work, and
+// reaching either one means the answer is incomplete — which the caller is
+// told, rather than left to mistake for a finished search.
 const MAX_OWNERSHIP_SCAN = 20_000;
 const MAX_ACCOUNT_RUNS = 1_000;
 
 /**
- * Every job this owner ran for ONE account, newest first, plus whether the
+ * Every job any owner ran for ONE account, newest first, plus whether the
  * search actually finished.
  *
- * Deliberately not derived from the bounded library page: an owner with more
- * imports than that page holds would be told "not found" for an account they
- * genuinely own, losing its run history and its dismissal evidence.
+ * Deliberately not derived from the bounded library page: a caller reaching
+ * for an account past that page's bound would be told "not found" for an
+ * account that genuinely exists, losing its run history and its dismissal
+ * evidence.
  *
  * `exhausted` is the honest part. These bounds exist so one request cannot
  * read unboundedly, but hitting one does NOT mean the account is absent — it
@@ -147,9 +153,8 @@ const MAX_ACCOUNT_RUNS = 1_000;
  * Every match inside the scanned window is collected, so the ordering the
  * caller applies is exact over that window.
  */
-export async function ownerJobsForAccount(
+export async function jobsForAccount(
   db: Db,
-  owner: Id<"users">,
   accountId: Id<"accounts">,
 ): Promise<{ jobs: Doc<"jobs">[]; exhausted: boolean }> {
   const cache = new Map<string, Doc<"accounts"> | null>();
@@ -157,7 +162,7 @@ export async function ownerJobsForAccount(
   let scanned = 0;
   for await (const job of db
     .query("jobs")
-    .withIndex("by_owner_and_kind", (q) => q.eq("owner", owner).eq("kind", ACCOUNT_JOB_KIND))
+    .withIndex("by_kind", (q) => q.eq("kind", ACCOUNT_JOB_KIND))
     .order("desc")) {
     if (++scanned > MAX_OWNERSHIP_SCAN) return { jobs, exhausted: false };
     const account = await resolveJobAccount(db, job, cache);

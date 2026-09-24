@@ -17,7 +17,7 @@ import type { DashboardSummary } from "../convex/lib/contracts";
  *   - a reported posts count is surfaced, in posts;
  *   - an account that never reported contributes nothing — not a zero;
  *   - two accounts reporting different units are never summed together;
- *   - another owner's account is never folded into this caller's figure.
+ *   - the figure is shared across every owner's imports, not scoped to one.
  */
 
 const modules = import.meta.glob("../convex/**/*.ts");
@@ -209,37 +209,38 @@ describe("summary.summary providerQueuedWork", () => {
     expect(values).not.toContain(10);
   });
 
-  it("scopes the figure to the caller's own imports: another owner's reported work is never counted as yours", async () => {
+  it("is shared across every owner: an import someone else started is counted the same as your own", async () => {
     const { t, alice, bob, a, b } = await setup();
     await seedImportedAccount(t, alice, {
       handle: "alice-account",
       userId: "1",
       pendingWork: { unit: "posts", count: 99 },
     });
-    // Bob imported nothing; alice's backlog is not his to see, and the
-    // honest answer for him is "unknown", not 0 and certainly not 99.
+    // Bob imported nothing himself, but the imported corpus is shared
+    // infrastructure, not personal data — he reads alice's reported figure
+    // exactly as she would.
     const bobs = await b.query(summaryQuery, { now: Date.now() });
-    expect(bobs.providerQueuedWork.posts).toEqual({ kind: "unknown", unit: "posts" });
+    expect(bobs.providerQueuedWork.posts).toEqual({ kind: "known", unit: "posts", value: 99 });
 
-    // Bob's own import, reporting its own number, is all he ever sees.
+    // Bob's own import adds to the same shared total, not a separate one.
     await seedImportedAccount(t, bob, {
       handle: "bob-account",
       userId: "2",
       pendingWork: { unit: "posts", count: 4 },
     });
-    const bobsOwn = await b.query(summaryQuery, { now: Date.now() });
-    expect(bobsOwn.providerQueuedWork.posts).toEqual({ kind: "known", unit: "posts", value: 4 });
+    const bobsAfter = await b.query(summaryQuery, { now: Date.now() });
+    expect(bobsAfter.providerQueuedWork.posts).toEqual({ kind: "known", unit: "posts", value: 103 });
 
-    // Alice's figure never picked up bob's 4 either.
+    // Alice reads the identical combined figure.
     const alices = await a.query(summaryQuery, { now: Date.now() });
-    expect(alices.providerQueuedWork.posts).toEqual({ kind: "known", unit: "posts", value: 99 });
+    expect(alices.providerQueuedWork.posts).toEqual({ kind: "known", unit: "posts", value: 103 });
   });
 
-  it("ignores pendingWork on an account this caller never imported, even though the row exists", async () => {
+  it("counts pendingWork on an account another owner imported — the corpus is shared, not owner-scoped", async () => {
     const { t, alice, bob, a } = await setup();
     // Bob's import; alice has one of her own that says nothing about
-    // outstanding work. Alice must still read "unknown" — the existence of
-    // somebody else's number is not information about her corpus.
+    // outstanding work. Alice still reads bob's reported figure, because
+    // both accounts are in the same shared corpus.
     await seedImportedAccount(t, bob, {
       handle: "bob-account",
       userId: "2",
@@ -247,7 +248,7 @@ describe("summary.summary providerQueuedWork", () => {
     });
     await seedImportedAccount(t, alice, { handle: "alice-account", userId: "1" });
     const alices = await a.query(summaryQuery, { now: Date.now() });
-    expect(alices.providerQueuedWork.captures).toEqual({ kind: "unknown", unit: "captures" });
+    expect(alices.providerQueuedWork.captures).toEqual({ kind: "known", unit: "captures", value: 12 });
   });
 
   it("requires authentication", async () => {

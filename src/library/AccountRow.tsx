@@ -14,6 +14,7 @@ import {
   isStalledRun,
 } from "./format";
 import { Badge } from "./format.tsx";
+import { useDashboardClock } from "./clock";
 
 /**
  * One account library row: identity, the four states the "dashboard"
@@ -40,7 +41,6 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
     expanded || needsFailureDetail ? { accountId: row.accountId } : "skip",
   );
   const retry = useMutation(api.jobs.retry);
-  const start = useMutation(api.jobs.start);
   const cancel = useMutation(api.jobs.cancel);
 
   const currentRun = job && history?.find((h) => h.jobId === job.jobId);
@@ -120,9 +120,6 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           action={row.nextAction}
           busy={busy}
           onRetry={(jobId) => act(() => retry({ jobId }))}
-          onContinue={(jobId) =>
-            act(() => start({ kind: "bulk", input: row.handle, previous: jobId }))
-          }
         />
         {job && (job.status === "running" || job.status === "queued") && (
           <button disabled={busy} onClick={() => act(() => cancel({ jobId: job.jobId }))}>
@@ -148,33 +145,36 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   );
 }
 
+// No "continue" case: acquisition never waits on a person to ask for the
+// next page or to retry a transient failure — convex/jobs.ts `finish`
+// requeues the job on its own (convex/lib/contracts.ts nextActionValidator).
+// "wait" covers both a paging continuation and a backed-off retry, since
+// both are the same thing from here: a queued job with a future `readyAt`.
+// "retry" only ever appears for a genuinely stopped run.
 function NextActionControl({
   action,
   busy,
   onRetry,
-  onContinue,
 }: {
   action: NextAction;
   busy: boolean;
   onRetry: (jobId: Id<"jobs">) => void;
-  onContinue: (jobId: Id<"jobs">) => void;
 }) {
+  // The query reports the scheduled time; whether it has passed is decided
+  // here against the dashboard's ticking clock (see convex/library.ts).
+  const now = useDashboardClock();
   if (action.kind === "retry")
     return (
       <button disabled={busy} onClick={() => onRetry(action.jobId)}>
         {busy ? "Retrying…" : "Retry"}
       </button>
     );
-  if (action.kind === "continue")
-    return (
-      <button disabled={busy} onClick={() => onContinue(action.jobId)}>
-        {busy ? "Continuing…" : "Continue download"}
-      </button>
-    );
   if (action.kind === "wait")
     return (
       <span className="library-muted">
-        Retries automatically around {new Date(action.readyAt).toLocaleTimeString()}
+        {action.readyAt > now
+          ? `Retrying automatically at ${new Date(action.readyAt).toLocaleTimeString()}`
+          : "Retrying automatically…"}
       </span>
     );
   return null;

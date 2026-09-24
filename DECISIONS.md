@@ -31,7 +31,7 @@
      `accepted`/`rejected` fields today are per-last-import-attempt only, not
      this.
   3. **Delivery direction** — push (indexer calls our `POST
-     /publication/update`), not Convex polling the indexer.
+/publication/update`), not Convex polling the indexer.
   4. **State granularity** — handle collisions and index-reset recovery
      surface to us as ordinary `failed`/fresh-`searchable` updates, not a
      distinct event shape.
@@ -44,6 +44,7 @@
   in-repo sender actually does (`search/crates/indexer/src/publish.rs`,
   merged in `4c13fe4`); that settles our side of them, not Pronsh's
   agreement.
+
 - Known consequence of building ahead of agreement, found while verifying this
   document (2026-09-20): `convex/jobs.ts`'s `finish` upsert resolved accounts
   purely `by_handle` and unconditionally patched whatever row it found,
@@ -161,3 +162,32 @@ Decisions added during review of that branch, before it merged:
 
 Developer/operator map of the resulting behavior (identity, dismissal,
 limits, worker liveness, publication loop): `docs/control-plane.md`.
+
+# Indexing audit (`adam/indexing-fixes`, 2026-09-24)
+
+Adam's rule: the admin types a handle and xearch indexes every post it can
+obtain, on its own. No "next page", "older posts", or "continue" clicks.
+
+- **Import jobs are shared, not personal.** Auth is anonymous-only, and
+  `ensureSession` created a new user whenever `isAuthenticated` was false —
+  including the moment before the client had verified stored tokens. Prod had
+  18 anonymous users for one operator and 49 jobs across 7 owners, so the
+  dashboard showed an empty library and "Continuation does not belong to this
+  indexing job". Two fixes, both kept: `src/sessionGate.ts` waits for
+  `isLoading` before it ever signs in, and jobs/library/summary read across all
+  owners because the corpus they describe is already one shared corpus.
+  Saved searches, bookmarks, sessions and email deliveries stay per-owner.
+- **A provider timeout is a provider error.** `XmdClient` aborts at 120 s; the
+  abort escaped as a plain `TimeoutError`, the worker logged "Job interrupted"
+  and asked for the same 5000-post page again (huggingface: 7 times). It is now
+  `provider_timeout`, retryable, and the collector halves the page to a floor
+  of 500. This is not pacing: it asks for less only after the provider failed
+  to deliver more.
+- **Imports finish on their own.** `finish` continues on `nextCursor` as well
+  as `nextUntil`, retries any retryable failure with backoff (up to 10 page
+  attempts), and the worker reports generic interruptions as retryable.
+  The only manual action left is resuming a run that gave up for good.
+- **The operator site tracks main.** It is served from the VM checkout and
+  nothing republished it; `scripts/vm-update.sh` now does when application
+  code changed. Re-enabling `xearch-update.timer` and restarting the worker
+  stay manual, per docs/production.md.

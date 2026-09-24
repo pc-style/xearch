@@ -188,7 +188,7 @@ describe("the publication receiver and the library agree on identity", () => {
 describe("bounded reads never pass as complete data", () => {
   it("reports unknown queue counts once the owner has more jobs than one read covers", async () => {
     const { t, alice, a } = await setup();
-    // One past the 1,000-job bound `ownedJobs` reads. Every queue figure is
+    // One past the 1,000-job bound `allJobs` reads. Every queue figure is
     // derived from that page, so a "known" count here would be a partial
     // presented as a total.
     for (let i = 0; i < 1001; i++)
@@ -218,7 +218,7 @@ describe("bounded reads never pass as complete data", () => {
   });
 });
 
-describe("an owner is never refused their own account", () => {
+describe("a caller is never refused an account that genuinely exists", () => {
   it("serves history for an account older than the bounded library page", async () => {
     const { t, alice, a } = await setup();
     const accountId = await t.run((ctx) =>
@@ -268,15 +268,16 @@ describe("an owner is never refused their own account", () => {
     await expect(a.query(libraryHistory, { accountId })).rejects.toThrow("full history");
   });
 
-  it("still refuses an account that is not the caller's", async () => {
+  it("serves an account's history to a different signed-in caller too — imports are shared, not owned", async () => {
     const { t, alice } = await setup();
     const bob = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
     const b = t.withIdentity({ subject: `${bob}|session` });
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "alices", userId: "4242", name: "Alice's" }),
     );
-    await job(t, alice, { input: "alices", kind: "bulk", expectedUserId: "4242" });
-    await expect(b.query(libraryHistory, { accountId })).rejects.toThrow("Account not found.");
+    const run = await job(t, alice, { input: "alices", kind: "bulk", expectedUserId: "4242" });
+    const runs = await b.query(libraryHistory, { accountId });
+    expect(runs.map((r) => String(r.jobId))).toEqual([String(run)]);
   });
 });
 
@@ -326,15 +327,15 @@ describe("a capture the indexer could not index", () => {
 describe("a capped account scope", () => {
   it("reports unknown rather than presenting the part it could read as the whole", async () => {
     const { t, alice, a } = await setup();
-    // One past the 500 cap ownedAccountJobs reads.
+    // One past the 500 cap allAccountJobs reads.
     for (let i = 0; i < 501; i++)
       await job(t, alice, { input: `acct${i}`, kind: "bulk", expectedUserId: `${i}` });
 
     const summary = await a.query(summaryQuery, { now: Date.now() });
     expect(summary.indexedPosts).toEqual({ kind: "unknown", unit: "posts" });
     expect(summary.indexedAccounts).toEqual({ kind: "unknown", unit: "accounts" });
-    // The scope literal still claims the owner's whole set, which is exactly
-    // why the counts must not claim to be complete.
-    expect(summary.scope).toEqual({ kind: "owner" });
+    // The scope literal still claims the whole shared corpus, which is
+    // exactly why the counts must not claim to be complete.
+    expect(summary.scope).toEqual({ kind: "global" });
   });
 });

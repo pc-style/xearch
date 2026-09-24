@@ -1,12 +1,11 @@
 import type { Doc } from "../convex/_generated/dataModel";
 import type { JobStatus } from "../convex/lib/contracts";
 export function jobLabel(job: Doc<"jobs">) {
-  if (job.status === "complete")
-    return job.error
-      ? "Paused"
-      : job.nextUntil || job.nextCursor
-        ? "More to download"
-        : "Downloaded";
+  // A "complete" job never has more to fetch: convex/jobs.ts `finish`
+  // requeues the SAME job (status stays "queued") whenever the provider
+  // reports a `nextUntil`/`nextCursor` to continue from, so nobody has to
+  // ask for the next page — "complete" only means genuinely done.
+  if (job.status === "complete") return job.error ? "Paused" : "Downloaded";
   return {
     queued: "Waiting",
     running: "Downloading",

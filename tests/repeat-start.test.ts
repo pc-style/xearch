@@ -105,15 +105,31 @@ describe("a repeated identical import request", () => {
     expect(await countJobs(t)).toBe(2);
   });
 
-  it("is scoped to one person — it can never hand back someone else's job", async () => {
+  it("is global by kind+input, not scoped to one person — a second person's identical request answers with the run that already exists", async () => {
     const { t, a, b } = await setup();
     const mine = await a.mutation(api.jobs.start, { kind: "live", input: "from:theo" });
     await t.run((ctx) => ctx.db.patch(mine, { status: "complete" }));
+    // Imports are shared infrastructure, not personal data: bob's identical
+    // request inside the window gets back alice's run instead of starting a
+    // second one, exactly as it would if alice asked twice herself.
     const theirs = await b.mutation(api.jobs.start, { kind: "live", input: "from:theo" });
-    expect(theirs).not.toBe(mine);
-    expect(await t.run(async (ctx) => (await ctx.db.get(theirs))!.owner)).not.toBe(
-      await t.run(async (ctx) => (await ctx.db.get(mine))!.owner),
+    expect(theirs).toBe(mine);
+    expect(await countJobs(t)).toBe(1);
+  });
+
+  it("lets a different person continue someone else's job — 'Continuation does not belong' no longer checks ownership", async () => {
+    const { t, a, b } = await setup();
+    const first = await a.mutation(api.jobs.start, { kind: "bulk", input: "theo" });
+    await t.run((ctx) =>
+      ctx.db.patch(first, { status: "complete", nextUntil: "2025-01-01T00:00:00.000Z" }),
     );
+    const next = await b.mutation(api.jobs.start, {
+      kind: "bulk",
+      input: "theo",
+      previous: first,
+    });
+    expect(next).not.toBe(first);
+    expect(await countJobs(t)).toBe(2);
   });
 });
 

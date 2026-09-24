@@ -230,27 +230,35 @@ export default defineSchema({
     error: v.optional(v.string()),
     updatedAt: v.number(),
     readyAt: v.optional(v.number()),
-    // When the owner dismissed this finished run from their feeds, if they
-    // did. Dismissing HIDES a run; it never deletes it, and it never touches
-    // the `receipts` rows that prove a capture was durably stored — to-do.md
-    // P0 "Preserve receipts and failure evidence; do not delete records just
-    // to hide duplicates". Only a terminal run can be dismissed (see
-    // convex/jobs.ts `dismiss`), and `restore` clears this field again.
+    // When someone dismissed this finished run from the shared feeds, if
+    // they did. Dismissing HIDES a run; it never deletes it, and it never
+    // touches the `receipts` rows that prove a capture was durably stored —
+    // to-do.md P0 "Preserve receipts and failure evidence; do not delete
+    // records just to hide duplicates". Only a terminal run can be
+    // dismissed (see convex/jobs.ts `dismiss`), and `restore` clears this
+    // field again.
     dismissedAt: v.optional(v.number()),
   })
     .index("by_status", ["status"])
-    .index("by_owner", ["owner"])
-    // Kind belongs in the index, not in a `.filter()`: Convex applies a
-    // filter after the index scan, so filtering by kind would still read
-    // every job an owner has run to find their account imports among them.
-    .index("by_owner_and_kind", ["owner", "kind"])
-    // One person's runs of one exact request, newest first — Convex appends
-    // `_creationTime` as the trailing column of every index, so `.order("desc")
-    // .first()` on this is "what did they last ask for this?". Used by
-    // `jobs.start` to answer a repeated click with the run it already made
-    // instead of a second one.
-    .index("by_owner_and_input", ["owner", "kind", "input"])
-    .index("by_input", ["kind", "input", "status"]),
+    // No index on `owner` alone: the imported corpus is shared
+    // infrastructure, not personal data (to-do.md, convex/lib/search.ts), so
+    // no query filters the jobs feed, the account library, or the dashboard
+    // totals down to one owner any more. `owner` itself stays on every job
+    // as an audit trail of who started it.
+    //
+    // One exact request's runs, newest first — Convex appends
+    // `_creationTime` as the trailing column of every index, so
+    // `.order("desc").first()` on this is "when was this last asked for?".
+    // Used by `jobs.start` to answer a repeated request (from anyone) with
+    // the run that already exists instead of starting a second one.
+    .index("by_input", ["kind", "input", "status"])
+    // The imported corpus is shared across every owner (see convex/lib/
+    // search.ts and to-do.md): convex/lib/accounts.ts scans every account-
+    // history job across all owners to build the account library and its
+    // totals, and needs an index on kind alone to do that without reading
+    // (and filtering out) every live search, single-post, and profile job
+    // any owner has ever run.
+    .index("by_kind", ["kind"]),
   // One row per account: the current publication pipeline state plus the
   // last confirmed-searchable snapshot. These are deliberately separate
   // fields so a failed refresh can move `state` to "failed" while leaving

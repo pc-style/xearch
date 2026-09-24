@@ -14,14 +14,15 @@ import ProviderLimits from "./ProviderLimits";
  * "never invent a number" rule in the frozen contract.
  */
 /**
- * Plain words for the scope these figures cover. "owner" is what
- * convex/summary.ts returns: only the accounts the signed-in person has
- * imported themselves. Saying that out loud matters — the same tiles used to
- * report deployment-wide totals above a personal account list.
+ * Plain words for the scope these figures cover. "global" is what
+ * convex/summary.ts now returns: every imported account, shared across
+ * everyone signed in — the imports are shared infrastructure, not personal
+ * data (to-do.md). "owner" is kept as a declared shape for a future
+ * per-person view; nothing currently returns it.
  */
 function scopeLabel(scope: DashboardSummary["scope"]): string {
   if (scope.kind === "owner") return "your imports only";
-  return scope.kind === "global" ? "all accounts in this deployment" : "one account";
+  return scope.kind === "global" ? "shared across every signed-in user" : "one account";
 }
 
 export default function OverviewStats({
@@ -61,7 +62,7 @@ export default function OverviewStats({
         <div className="library-stats-grid">
           <Stat label="Indexed posts" count={summary.indexedPosts} />
           {/* Links to the account library below. Both are now built from the
-              same owner-scoped account set (convex/summary.ts), so this
+              same shared account set (convex/summary.ts), so this
               number is genuinely the length of the list it points at — it is
               a real link, not a navigation gesture past a mismatch. */}
           <Stat label="Indexed people" count={summary.indexedAccounts} href="#account-library" />
@@ -71,7 +72,7 @@ export default function OverviewStats({
             label="Saved captures awaiting indexing"
             count={summary.queue.savedCapturesAwaitingIndexing}
           />
-          {/* The indexer's own backlog for your accounts, one tile per unit
+          {/* The indexer's own backlog for the shared accounts, one tile per unit
               it can report in (convex/lib/contracts.ts
               providerQueuedWorkValidator). Never added together: a capture
               is a file and a job is a run, and neither is a post. A unit no

@@ -68,7 +68,7 @@ function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummar
       captures: { kind: "unknown", unit: "captures" },
       jobs: { kind: "unknown", unit: "jobs" },
     },
-    scope: { kind: "owner" },
+    scope: { kind: "global" },
     observedAt: Date.now(),
     ...overrides,
   };

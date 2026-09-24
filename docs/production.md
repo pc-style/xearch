@@ -3,13 +3,13 @@
 Two sites are built from this one source tree, and they are not the same
 application.
 
-| | operator site | public site |
-|---|---|---|
-| url | https://exp-xearch.exe.xyz:8080/ | https://utmost-kudu-321.convex.site |
-| served by | nginx on this VM | Convex static hosting |
-| who can reach it | exe.dev accounts with access to the VM | anyone |
-| contains the dashboard | yes | no |
-| build | `bash scripts/deploy-operator-site.sh` | `bun run deploy:prod` |
+|                        | operator site                          | public site                         |
+| ---------------------- | -------------------------------------- | ----------------------------------- |
+| url                    | https://exp-xearch.exe.xyz:8080/       | https://utmost-kudu-321.convex.site |
+| served by              | nginx on this VM                       | Convex static hosting               |
+| who can reach it       | exe.dev accounts with access to the VM | anyone                              |
+| contains the dashboard | yes                                    | no                                  |
+| build                  | `bash scripts/deploy-operator-site.sh` | `bun run deploy:prod`               |
 
 The dashboard, the Connections panel and the account library exist only in the
 operator build (`VITE_XEARCH_OPERATOR=1`). The public build resolves
@@ -50,7 +50,7 @@ Production imports use an outbound worker. At the September 20 integration check
 
 `COLLECTOR_MODE=outbound` means Convex never talks to x.md or the capture receiver: `convex/importer.ts` returns before reading `RAW_CAPTURE_URL`/`RAW_CAPTURE_TOKEN`, so setting them on the production deployment does nothing. The worker reads them on its own machine, and the Connections UI labels that row "Download worker" rather than listing env vars. Worker liveness is expiry-driven: `worker.heartbeat` writes `collector.online` and schedules `worker.expire` 45 seconds later (`convex/worker.ts`), and the browser re-checks the disclosed `lastSeen` against its own clock. A Convex query does not re-run because time passed, so liveness must never be computed from `Date.now()` inside `integrations.configured`. Details: [the control plane](control-plane.md).
 
-In outbound mode the worker is also the only production writer of `providerThrottleEvents`, through `worker.report`'s `"throttle"` event. Without it the Provider limits panel stays empty while x.md is refusing imports. Facts are captured from refusals only, so remaining allowance on a *successful* call is still invisible, and `{ kind: "none" }` means nothing was observed, never "not throttled".
+In outbound mode the worker is also the only production writer of `providerThrottleEvents`, through `worker.report`'s `"throttle"` event. Without it the Provider limits panel stays empty while x.md is refusing imports. Facts are captured from refusals only, so remaining allowance on a _successful_ call is still invisible, and `{ kind: "none" }` means nothing was observed, never "not throttled".
 
 Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
 
@@ -76,11 +76,11 @@ The dashboard reports two different things and must never confuse them:
 
 Three writers, one row per service:
 
-| Service | Written by | Observation |
-| --- | --- | --- |
-| `indexer` | the Rust indexer, once per poll pass (`search/crates/indexer/src/health.rs`) | the pass completed, or failed with its verbatim error |
-| `search` | a Convex cron every 2 minutes (`convex/crons.ts` → `health.probeSearch`) | `GET <SEARCH_API_URL origin>/health` answered `ok` |
-| `receiver` | the production download worker, on every poll (`scripts/production-worker.ts` → `worker:poll`) | `http://127.0.0.1:4319/health` answered |
+| Service    | Written by                                                                                     | Observation                                           |
+| ---------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `indexer`  | the Rust indexer, once per poll pass (`search/crates/indexer/src/health.rs`)                   | the pass completed, or failed with its verbatim error |
+| `search`   | a Convex cron every 2 minutes (`convex/crons.ts` → `health.probeSearch`)                       | `GET <SEARCH_API_URL origin>/health` answered `ok`    |
+| `receiver` | the production download worker, on every poll (`scripts/production-worker.ts` → `worker:poll`) | `http://127.0.0.1:4319/health` answered               |
 
 `lastSuccessAt` is only ever stamped from an observed success and is never
 erased by a later failure; `lastError` carries the reporter's real error text.
@@ -123,8 +123,10 @@ updates. The API listens on `127.0.0.1:4320`; nginx proxies search on port 4321.
 The unsafe installed updater was disabled/stopped on September 20. Install and
 verify the corrected `scripts/vm-update.sh` before re-enabling
 `xearch-update.timer`. The corrected updater only restarts already-active search
-services, disables legacy reindex triggers, and records successful application
-for retries. It does not deploy Convex/frontend or restart worker/capture.
+services, disables legacy reindex triggers, republishes the operator site when
+application code changed (`scripts/deploy-operator-site.sh`, a directory swap
+under nginx), and records successful application for retries. It does not
+deploy Convex or the public site, and never restarts worker/capture.
 Never run legacy reindexing alongside the continuous watcher.
 
 The following unit installation commands are for initial provisioning only. Do not overwrite the existing production units or their operator-configured paths/drop-ins during routine updates:

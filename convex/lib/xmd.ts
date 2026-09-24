@@ -289,6 +289,8 @@ export const MAX_POSTS_PER_PAGE = 5000;
  * exchange for more upstream retries. Left at the value in production use.
  */
 const CHAIN_CONCURRENCY = "8";
+/** How long one x.md request may take before it is reported as `provider_timeout`. */
+export const REQUEST_TIMEOUT_MS = 120_000;
 export class XmdClient {
   readonly origin: string;
   constructor(
@@ -315,14 +317,33 @@ export class XmdClient {
   ) {
     const url = new URL(path, this.origin);
     for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-    const response = await this.fetcher(url, {
-      headers: {
-        Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
-        ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}),
-      },
-      signal: signal ?? AbortSignal.timeout(120_000),
-      redirect: "error",
-    });
+    let response: Response;
+    try {
+      response = await this.fetcher(url, {
+        headers: {
+          Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
+          ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}),
+        },
+        signal: signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        redirect: "error",
+      });
+    } catch (error) {
+      // An elapsed AbortSignal.timeout surfaces as a DOMException named
+      // "TimeoutError" — a plain Error, so it used to reach the worker as
+      // "Download interrupted" with no trace of the cause. In production the
+      // huggingface import failed seven times this way: x.md needs more than
+      // the timeout to assemble a 5000-post page for a media-heavy account,
+      // and every retry asked for the same page. Naming it lets the collector
+      // ask for a smaller page and the dashboard say what actually happened.
+      if (error instanceof Error && error.name === "TimeoutError")
+        throw new ProviderError(
+          "provider_timeout",
+          `x.md did not answer within ${REQUEST_TIMEOUT_MS / 1000} seconds (${operation}).`,
+          30_000,
+          true,
+        );
+      throw error;
+    }
     if (!response.ok) {
       let code = `http_${response.status}`;
       let problem: RawObject | undefined;

@@ -110,7 +110,7 @@ GitHub Actions check scoped to `src/` (`.github/workflows/react-doctor.yml`,
 not gate `Check`. Search-service responses are decoded with Effect Schema
 in `convex/lib/results.ts`; other validators still use Zod.
 
-Tests cover raw payload preservation, JSON backfill pagination, split oversized history pages, safe unordered-stream behavior, stream completion, partial capture, identity pinning and handle reassignment, origin selection, retry timing, durable receipts, user isolation, owner-scoped stats, provider-throttle writes, job dismissal, worker liveness, and the Firecrawl component response shape. Provider calls are mocked in tests. No email is sent and no provider credits are consumed by the suite. Selected ideas and remaining work from the supplied local-first spec are tracked in [spec adoption](spec-adoption.md).
+Tests cover raw payload preservation, JSON backfill pagination, split oversized history pages, safe unordered-stream behavior, stream completion, partial capture, identity pinning and handle reassignment, origin selection, retry timing, durable receipts, shared-corpus visibility across owners, provider-throttle writes, job dismissal, worker liveness, and the Firecrawl component response shape. Provider calls are mocked in tests. No email is sent and no provider credits are consumed by the suite. Selected ideas and remaining work from the supplied local-first spec are tracked in [spec adoption](spec-adoption.md).
 
 ## Guest sessions and publication
 
