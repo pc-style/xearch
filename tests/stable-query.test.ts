@@ -55,6 +55,9 @@ const baseClient = {
   close: () => Promise.resolve(),
 };
 
+// SAFETY: `options.baseClient` is a real, working constructor option that is
+// merely `@internal` and so missing from the published type — the same
+// bridge tests/library-ui.test.ts documents.
 const client = new ConvexReactClient("https://stable-query-test.convex.cloud", {
   baseClient,
 } as ConvexReactClientOptions);
