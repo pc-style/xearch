@@ -73,7 +73,7 @@ let root: Root | undefined;
 
 let host: HTMLElement | undefined;
 
-function seen(): unknown {
+function seen(): Value | undefined {
   const text = host?.textContent ?? "undefined";
 
   return text === "undefined" ? undefined : JSON.parse(text);
