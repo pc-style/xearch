@@ -1,6 +1,6 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
-import { internalQuery, query } from "./_generated/server";
+import { env, internalQuery, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import schema from "./schema";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -143,7 +143,10 @@ export async function requireOperator(
   // Path 1: the operator build's own token. Fails closed when
   // `OPERATOR_TOKEN` is unset on this deployment — an unset env var must
   // never make this branch trivially satisfiable by an empty/undefined
-  // token on either side.
+  // token on either side. Read from the typed `env` (convex/convex.config.ts
+  // declares both as optional strings), not `process.env` directly, per
+  // convex/_generated/ai/guidelines.md's env-var guidance (CodeRabbit
+  // #4091034345).
   //
   // `OPERATOR_TOKEN_PREVIOUS` (optional) exists only to make rotation
   // gapless (CodeRabbit #4090910221): the deployed operator bundle has ONE
@@ -154,8 +157,8 @@ export async function requireOperator(
   // matching for that gap. Setting the OLD value here during a rotation
   // lets both the not-yet-republished and freshly-republished bundle work
   // at once; see docs/production.md "To rotate it" for the exact sequence.
-  const configuredToken = process.env.OPERATOR_TOKEN;
-  const previousToken = process.env.OPERATOR_TOKEN_PREVIOUS;
+  const configuredToken = env.OPERATOR_TOKEN;
+  const previousToken = env.OPERATOR_TOKEN_PREVIOUS;
 
   if (operatorToken) {
     if (configuredToken && timingSafeEqual(operatorToken, configuredToken)) return id;
