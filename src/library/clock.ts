@@ -5,8 +5,8 @@ export const DASHBOARD_CLOCK_INTERVAL_MS = 30_000;
 
 // Rounded to a shared wall-clock bucket, not the raw instant this module
 // happened to load or tick, purely so widely-shared, loose-tolerance
-// staleness displays (convex/summary.ts's `summary`/`health`, read by
-// src/library/Library.tsx) don't each mint their own slightly-different
+// staleness displays (convex/summary.ts's `summary`/`health`, read by the
+// /ops dashboard, src/ops/Ops.tsx) don't each mint their own slightly-different
 // `now` per browser.
 //
 // NEVER use this (or `useDashboardClock`/`useDashboardNow` below) to feed a

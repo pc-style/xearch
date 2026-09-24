@@ -64,7 +64,7 @@ VITE_CONVEX_SITE_URL="$CONVEX_SITE_URL" \
 VITE_OPERATOR_TOKEN="${VITE_OPERATOR_TOKEN:-}" \
   bash scripts/with-posthog-build-env.sh bun run build:operator
 
-grep -rqF "Account library" dist-operator/assets || {
+grep -rqF "Needs attention" dist-operator/assets || {
   echo "deploy-operator-site: built tree has no dashboard in it — refusing to publish." >&2
   exit 1
 }

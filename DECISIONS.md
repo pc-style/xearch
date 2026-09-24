@@ -237,3 +237,28 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
   by this branch. Native Convex
   exception forwarding requires Convex Pro and has no documented redaction
   hook, so it is not enabled while the no-email-address rule applies.
+
+# Ops dashboard rebuild (`adam/ops-route`, 2026-09-24)
+
+- The operator dashboard is `src/ops`, rendered at `/ops` and `/ops/<tab>`
+  (accounts, jobs, imports, performance, provider) as real paths with real
+  history entries. In the operator build a bare `/` and the old `?queue=1`
+  land on `/ops` and `/ops/jobs`. The public build sends any `/ops` address
+  home. The old dashboard (`src/Dashboard.tsx`, `src/library/*` panels, the
+  Queue page) is deleted, not kept alongside.
+- Every figure comes from a query. Two operator-only reads were added:
+  `ops.accounts` (the accounts table with publication, runs, backfill and
+  collected range) and `ops.activity` (last 24 h downloads per hour,
+  searches, runs by kind, x.md rate-limit responses). Both are bounded and
+  say when a bound cut them short.
+- What the app does not record is shown as "not tracked yet", never a guess:
+  the number of operators, x.md's hourly call budget and calls made, x.md
+  latency and cost, the indexer's throughput and backlog history, the oldest
+  item waiting. Search latency comes only from searches run with "Stats for
+  nerds".
+- Actions map to existing mutations only: retry, cancel, dismiss, start
+  (refresh, run again, imports). Restart, backfill and "run indexer now"
+  have no safe mutation and are left out.
+- Queries take the 30-second bucketed clock; ages, stalls and rate-limit
+  windows on the page use the exact 5-second clock, because the bucket runs
+  up to 30 seconds ahead.

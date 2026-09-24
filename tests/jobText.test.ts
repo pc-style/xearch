@@ -125,10 +125,8 @@ describe("jobKindLabel", () => {
 
 // /tmp/issues.md item 3: several failed "Conversation on @handle's post"
 // rows can otherwise share the exact same label, age, and retained-record
-// summary. `conversationLabel` is the shared helper both src/JobRow.tsx
-// (via `jobKindLabel`) and src/library/QueueTimeline.tsx's own fallback
-// label call, so a post job's identity reads the same distinguishable way
-// in both places.
+// summary. `conversationLabel` is the helper src/JobRow.tsx calls (via
+// `jobKindLabel`), so a post job's identity reads distinguishably.
 describe("conversationLabel / jobPostIdentity", () => {
   it("shortens a long snowflake post id to its last 6 digits", () => {
     expect(jobPostIdentity("https://x.com/theo/status/1839274653482910720")).toEqual({

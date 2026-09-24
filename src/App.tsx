@@ -20,7 +20,7 @@ import { Icon } from "./icons";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { useLiveNow } from "./library/clock";
-import { ConnectionsPanel, Dashboard, OPERATOR_BUILD, QueueTimeline } from "./operatorSurface";
+import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { useStableQuery } from "./library/stableQuery";
 import { capture, captureError, identifyUser, redactEmail, resetUser } from "./posthog";
 import { operatorArgs } from "./operatorToken";
@@ -33,7 +33,10 @@ import type { ResultPost } from "../convex/lib/results";
 import { parseQuery, type Sort } from "../convex/lib/search";
 import {
   getSnapshot,
+  OPS_PATH,
   opsEntryPatch,
+  opsTabFromPath,
+  pushHref,
   pushLocation,
   replaceLocation,
   useLocation,
@@ -157,10 +160,10 @@ function WebContextPage(props: { page: Page; expanded: boolean; onExpand: () => 
 export default function App() {
   const convex = useConvex();
   const isAuthenticated = convex.isAuthenticated;
-  // `/ops` is rewritten to "/" before anything reads the route (see
-  // `opsEntryPatch`), so closing the dashboard lands on "/" like any other
-  // direct link into it.
-  const opsEntry = opsEntryPatch(getSnapshot().path, OPERATOR_BUILD);
+  // Normalize the address before anything reads the route (see
+  // `opsEntryPatch`): in the operator build a bare "/" becomes `/ops`, and
+  // in the public build a dashboard address becomes the home page.
+  const opsEntry = opsEntryPatch(getSnapshot(), OPERATOR_BUILD);
 
   if (opsEntry) replaceLocation(opsEntry);
 
@@ -228,8 +231,6 @@ export default function App() {
   } | null>(null);
 
   const [threadJobs, setThreadJobs] = createSignal<Record<string, Id<"jobs">>>({});
-  let pushedDashboardEntry = false;
-  let pushedQueueEntry = false;
 
   const [page, setPage] = createSignal<Page | null>(null);
   const [contextPages, setContextPages] = createSignal<Page[] | null>(null);
@@ -294,10 +295,16 @@ export default function App() {
     setView(next.view);
   });
 
-  // The operator build opens at the dashboard (the operator URL IS the
-  // dashboard): `?search=1`, or a URL that already carries a query, asks for
-  // search instead. The public build never has OPERATOR_BUILD true.
-  const dashboard = () => (OPERATOR_BUILD ? !route().search && !route().raw : route().dashboard);
+  // Which dashboard tab the address is on, in the operator build only. The
+  // dashboard lives at `/ops` and `/ops/<tab>`; a bare "/" with no query and
+  // no `?search=1` (e.g. Back to an entry from before the `/ops` rewrite)
+  // still means the dashboard there, as it always has.
+  const opsTab = () => {
+    if (!OPERATOR_BUILD) return null;
+    const { path, search, raw } = route();
+
+    return opsTabFromPath(path) ?? (path === "/" && !search && !raw ? "overview" : null);
+  };
 
   // --- Data -----------------------------------------------------------------
   const accountResults = useQuery(api.search.accounts, () => ({}));
@@ -788,41 +795,15 @@ export default function App() {
   const openDashboard = () => {
     if (!OPERATOR_BUILD) return;
     setModal(null);
-    pushedDashboardEntry = true;
-    pushLocation({ search: false, raw: "" });
+    pushHref(OPS_PATH);
   };
 
-  // Reachable from Dashboard's own "Queue" button and ActiveQueue's "See
-  // timeline" link, threaded down as a prop so the entry this pushes is
-  // tracked: closing the Queue page pops it with a real Back instead of
-  // rewriting it in place (which left a duplicate dashboard entry behind).
-  const openQueue = () => {
-    if (!OPERATOR_BUILD) return;
-    pushedQueueEntry = true;
-    pushLocation({ queue: true });
-  };
-
-  const closeQueue = () => {
-    // Same back-vs-clear-the-flag rule as `closeDashboard`: a direct
-    // link/reload into `?queue=1` pushed nothing to go back to.
-    if (pushedQueueEntry) {
-      pushedQueueEntry = false;
-      window.history.back();
-    } else {
-      replaceLocation({ queue: false });
-    }
-  };
-
-  const closeDashboard = () => {
-    // `openDashboard` pushed exactly one entry; undo it with a real Back. A
-    // direct link into the dashboard pushed nothing, so flip `search` on
-    // the current entry instead.
-    if (pushedDashboardEntry) {
-      pushedDashboardEntry = false;
-      window.history.back();
-    } else {
-      replaceLocation({ search: true });
-    }
+  // The dashboard's way back to the search app ("Public site", and "Search
+  // posts" on an account). `?search=1` keeps the operator build on search
+  // with an empty query; a query goes through the URL like a shared link.
+  const openSearch = (query?: string) => {
+    pushHref(query ? `/?search=1&q=${encodeURIComponent(query)}` : "/?search=1");
+    window.scrollTo(0, 0);
   };
 
   // --- Derived view state ---------------------------------------------------------
@@ -899,8 +880,23 @@ export default function App() {
 
   return (
     <Switch>
-      {/* This app has no path routes — everything is a query param on "/" —
-          so any other path is a genuinely unknown address. */}
+      <Match when={OPERATOR_BUILD && opsTab() && Dashboard}>
+        {(Board) => {
+          const Component = Board();
+
+          return (
+            <Loading fallback={null}>
+              <Component
+                tab={opsTab() ?? "overview"}
+                ensureSession={ensureSession}
+                openSearch={openSearch}
+              />
+            </Loading>
+          );
+        }}
+      </Match>
+      {/* The search app lives at "/" (its views are query params) and the
+          dashboard is matched above, so any other path is unknown. */}
       <Match when={route().path !== "/"}>
         <div class="page not-found">
           <h1>Page not found</h1>
@@ -909,35 +905,6 @@ export default function App() {
             Back to search
           </a>
         </div>
-      </Match>
-      {/* Before the dashboard: its "Queue" button sets `queue=1` without
-          touching `search`/`raw`, so a URL that would otherwise resolve to
-          the dashboard plus `queue=1` means the Queue page. */}
-      <Match when={OPERATOR_BUILD && route().queue && QueueTimeline}>
-        {(Queue) => {
-          const Component = Queue();
-
-          return (
-            <Loading fallback={null}>
-              <Component close={closeQueue} />
-            </Loading>
-          );
-        }}
-      </Match>
-      <Match when={OPERATOR_BUILD && dashboard() && Dashboard}>
-        {(Board) => {
-          const Component = Board();
-
-          return (
-            <Loading fallback={null}>
-              <Component
-                ensureSession={ensureSession}
-                close={closeDashboard}
-                onOpenQueue={openQueue}
-              />
-            </Loading>
-          );
-        }}
       </Match>
       <Match when={true}>
         <div class="page">

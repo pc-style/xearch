@@ -1,68 +1,61 @@
 import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
-import { anyApi, getFunctionName } from "convex/server";
-import type { Value } from "convex/values";
-import { fakeConvex, mount, renderHtml, stripMarkers } from "./solid";
+import { anyApi } from "convex/server";
+import { stripMarkers } from "./solid";
 import schema from "../convex/schema";
+import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
-import type { AccountLibraryRow } from "../convex/lib/contracts";
 import type { ServiceStatus } from "../convex/summary";
-import OverviewStats from "../src/library/OverviewStats";
-import AccountRow from "../src/library/AccountRow";
+import type { OpsTab } from "../src/locationStore";
+import { mountOps, type OpsFixtures } from "./opsHarness";
 
 /**
  * Workflow-run evidence for to-do.md's acceptance check: "Test the
  * screenshot's partial/failing imports, successful imports, empty corpus,
  * failed refresh with existing indexed posts, and stale/offline services."
  *
- * Each case drives the REAL Convex queries (convex/library.ts rows/history,
- * convex/summary.ts summary/health) against a local convex-test in-memory
- * deployment seeded here, then feeds the REAL return value into the REAL UI
- * component (AccountRow / OverviewStats), rendered into jsdom, and prints
- * what actually came out. AccountRow reads Convex through src/data/convex,
- * so it renders under a fake Convex app (tests/solid.ts) that answers each
- * query from a response this test already fetched from the real backend
- * above; nothing here fabricates data the backend did not actually return. This
+ * Each case drives the REAL Convex queries (convex/library.ts rows,
+ * convex/ops.ts accounts, convex/jobs.ts list, convex/summary.ts
+ * summary/health) against a local convex-test in-memory deployment seeded
+ * here, then feeds the REAL return value into the REAL /ops dashboard
+ * (src/ops), rendered into jsdom, and prints what actually came out. The
+ * dashboard reads Convex through src/data/convex, so it renders under a fake
+ * Convex app (tests/opsHarness.ts) that answers each query from a response
+ * this test already fetched from the real backend above; nothing here
+ * fabricates data the backend did not actually return. This
  * does not touch search/ (Rust) or anything Pronsh owns, and does not
  * implement any indexer/watcher/registry. No paid import, no live
  * coordination, nothing merged or deployed.
  */
 
-const mockResponses = new Map<string, Value>();
-
 const modules = import.meta.glob("../convex/**/*.ts");
 
 const libraryRows = anyApi.library.rows;
-
-const libraryHistory = anyApi.library.history;
 
 const summaryQ = anyApi.summary.summary;
 
 const healthQ = anyApi.summary.health;
 
-// QA finding 5 (/tmp/issues-t3-dashboard-current.md #5) moved AccountRow's
-// publication notes (failure text, the "still-good corpus" note) behind its
-// "Show history" toggle, collapsed by default, so this clicks the toggle
-// before reading the DOM — the collapsed state is exercised separately by
-// tests/library-ui.test.ts.
-function renderRow(row: AccountLibraryRow): string {
-  // `mockResponses` is filled per test with exactly the real query result
-  // convex-test returned for each function name.
-  const mounted = mount(
-    AccountRow,
-    { row },
-    fakeConvex({ query: (name) => mockResponses.get(name) }),
-  );
+/** One dashboard page, fed only real query results, as markup. */
+async function renderPage(tab: OpsTab, fixtures: OpsFixtures, selector: string): Promise<string> {
+  const ops = await mountOps(tab, fixtures);
+  const html = stripMarkers(ops.find(selector).outerHTML);
 
-  mounted.container.querySelector<HTMLButtonElement>(".library-row-toggle")?.click();
-  const html = stripMarkers(mounted.html());
-  mounted.unmount();
+  ops.unmount();
 
   return html;
 }
 
 async function seedOwner(t: ReturnType<typeof convexTest>) {
-  const owner: Id<"users"> = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+  // An operator (tests/setupEnv.ts): the dashboard's read models are
+  // operator-only.
+  const owner: Id<"users"> = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "operator@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
+  );
 
   return { owner, session: t.withIdentity({ subject: `${owner}|session` }) };
 }
@@ -97,39 +90,36 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(rows[0].latestJob).toMatchObject({ jobId, status: "failed" });
     expect(rows[0].nextAction).toEqual({ kind: "retry", jobId });
 
-    // AccountRow fetches convex/library.ts `history` itself (needed here
-    // since job.status === "failed" makes needsFailureDetail true) — pull
-    // the REAL result from the real query and feed exactly that into
-    // FakeConvexClient's `watchQuery` below (see file header comment).
-    const history = await session.query(libraryHistory, { accountId: rows[0].accountId });
-    console.log("CASE1 real library.history:", JSON.stringify(history));
-    mockResponses.clear();
-    mockResponses.set(getFunctionName(libraryHistory), history);
+    const jobs = (await session.query(api.jobs.list, {})).jobs;
+    const accounts = (await session.query(api.ops.accounts, {})).rows;
+    const html = await renderPage("overview", { jobs, accounts }, ".att");
 
-    const html = renderRow(rows[0]);
     console.log(
       "CASE1 UI contains the real error text:",
       html.includes("x.md returned a malformed history page after 340 posts."),
     );
-    console.log("CASE1 UI contains retained-count text:", html.includes("340 records retained"));
     console.log(
-      "CASE1 UI contains stale leftover phase 'Saving raw capture' as the outcome (should NOT):",
+      "CASE1 UI contains stale leftover phase 'Saving raw capture' (should NOT):",
       html.includes("Saving raw capture"),
     );
     console.log("CASE1 UI contains Retry action:", html.includes(">Retry<"));
+    expect(html).toContain("Import of @bob failed");
     expect(html).toContain("x.md returned a malformed history page after 340 posts.");
-    expect(html).toContain("340 records retained");
-    // The stale leftover `phase` field is legitimate as raw diagnostic
-    // context ("Last phase: Saving raw capture" inside the expanded run's
-    // own raw-diagnostics <details>) — what must never happen is it standing
-    // alone as if it were the actual outcome, which a bare tag-content match
-    // rules out.
-    expect(html).not.toContain(">Saving raw capture<");
+    expect(html).not.toContain("Saving raw capture");
     expect(html).toContain(">Retry<");
+
+    const row = await renderPage("accounts", { jobs, accounts }, "tr[data-account=bob]");
+
+    expect(row).toContain("Last import failed");
+    expect(row).toContain("failed · see jobs");
+
+    const jobRow = await renderPage("jobs", { jobs, accounts }, `tr[data-job="${jobId}"]`);
+
+    expect(jobRow).toContain("x.md returned a malformed history page after 340 posts.");
+    expect(jobRow).toContain(">Retry<");
   });
 
   it("case 2: successful import — searchable, real count, no next action needed", async () => {
-    mockResponses.clear();
     const t = convexTest(schema, modules);
     const { owner, session } = await seedOwner(t);
 
@@ -172,22 +162,18 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(rows[0].latestJob?.jobId).toBe(jobId);
     expect(rows[0].nextAction).toEqual({ kind: "none" });
 
-    const html = renderRow(rows[0]);
-    console.log("CASE2 UI contains 'Searchable':", html.includes("Searchable"));
-    console.log("CASE2 UI contains real count '512':", html.includes("512 posts"));
-    console.log(
-      "CASE2 UI contains a contradictory failure line (should NOT):",
-      html.includes("library-row-failure"),
-    );
-    expect(html).toContain("Searchable");
-    expect(html).toContain("512 posts");
-    expect(html).not.toContain("library-row-failure");
-    // /tmp/issues.md item 2: "Download complete" must never stand alone as
-    // if it meant the account's entire X history was retrieved. QA finding 5
-    // moved the caveat that makes that explicit out of this per-row
-    // component and into a single section-level note in AccountLibrary.tsx
-    // (see tests/library-ui.test.ts) — it no longer renders from AccountRow.
-    expect(html).toContain("Download complete");
+    const accounts = (await session.query(api.ops.accounts, {})).rows;
+    const html = await renderPage("accounts", { accounts }, "tr[data-account=carol]");
+
+    console.log("CASE2 UI says up to date:", html.includes("Up to date"));
+    console.log("CASE2 UI contains real count '512':", html.includes(">512<"));
+    expect(html).toContain("Up to date");
+    expect(html).toContain(">512<");
+    expect(html).not.toContain("failed");
+
+    const attention = await renderPage("overview", { accounts }, ".att");
+
+    expect(attention).toContain("Nothing needs you right now.");
   });
 
   it("case 3: empty corpus — real zero from summary, empty account list, no invented numbers", async () => {
@@ -215,7 +201,6 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
   });
 
   it("case 4: failed refresh on an account that still has indexed posts — old corpus stays visible, does not regress, distinguished from a currently-searchable account", async () => {
-    mockResponses.clear();
     const t = convexTest(schema, modules);
     const { owner, session } = await seedOwner(t);
 
@@ -263,23 +248,17 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 950 });
     expect(rows[0].lastError?.message).toBe("indexer rejected generation 2: schema mismatch");
 
-    const html = renderRow(rows[0]);
+    const accounts = (await session.query(api.ops.accounts, {})).rows;
+    const html = await renderPage("accounts", { accounts }, "tr[data-account=dana]");
+
     console.log(
       "CASE4 UI keeps the old corpus visible alongside the failure:",
-      html.includes("The previously confirmed index still has 950 posts"),
+      html.includes(">950<"),
+      html.includes("Indexing failed"),
     );
-    console.log(
-      "CASE4 UI shows the real failure reason:",
-      html.includes("indexer rejected generation 2: schema mismatch"),
-    );
-    console.log(
-      "CASE4 UI still labels state 'Publication failed', not 'Searchable':",
-      html.includes("Publication failed"),
-      !html.includes(">Searchable<"),
-    );
-    expect(html).toContain("The previously confirmed index still has 950 posts");
-    expect(html).toContain("indexer rejected generation 2: schema mismatch");
-    expect(html).toContain("Publication failed");
+    expect(html).toContain(">950<");
+    expect(html).toContain("Indexing failed");
+    expect(html).not.toContain("Up to date");
 
     // The account-level summary must reflect the non-regression guarantee:
     // the 950 posts still count toward indexedPosts (they are still really
@@ -332,35 +311,19 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(receiver).toMatchObject({ kind: "known", healthy: false, stale: false });
     expect(search).toEqual({ service: "search", kind: "unknown" });
 
-    const html = renderHtml(OverviewStats, {
-      summary: undefined,
-      health,
-      limits: undefined,
-      config: undefined,
-      liveNow: Date.now(),
-      connected: false,
-      isAuthenticated: true,
-    });
+    const html = await renderPage("performance", { health }, ".health");
 
-    console.log(
-      "CASE5 UI shows stale caution text for indexer (not plain 'Healthy'):",
-      html.includes("Stale reading from"),
-    );
-    console.log(
-      "CASE5 UI does NOT claim the stale indexer is live-healthy:",
-      !/indexer[^<]*Healthy(?!<\/summary)/i.test(html),
-    );
-    console.log(
-      "CASE5 UI shows offline/disconnected receiver as Unhealthy:",
-      html.includes("Unhealthy"),
-    );
-    console.log(
-      "CASE5 UI shows honest 'no health report yet' for search, never a live zero:",
-      html.includes("No health report received yet"),
-    );
-    expect(html).toContain("Stale reading from");
-    expect(html).toContain("treat with caution");
-    expect(html).toContain("Unhealthy");
-    expect(html).toContain("No health report received yet");
+    const card = (name: string) =>
+      html.split('class="hc"').find((c) => c.includes(`<b>${name}</b>`)) ?? "";
+
+    console.log("CASE5 stale indexer card:", card("Indexer"));
+    console.log("CASE5 unhealthy receiver card:", card("Capture receiver"));
+    console.log("CASE5 unreported search card:", card("Search"));
+    expect(card("Indexer")).toContain('data-s="warn"');
+    expect(card("Indexer")).toContain("healthy then");
+    expect(card("Capture receiver")).toContain('data-s="crit"');
+    expect(card("Capture receiver")).toContain("connection refused");
+    expect(card("Search")).toContain("Has never reported");
+    expect(card("Search")).not.toContain('data-s="ok"');
   });
 });

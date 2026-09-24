@@ -18,7 +18,3 @@ export type { DashboardProps };
 export const Dashboard: Component<DashboardProps> | null = null;
 
 export const ConnectionsPanel: Component | null = null;
-
-export type QueueTimelineProps = { close: () => void };
-
-export const QueueTimeline: Component<QueueTimelineProps> | null = null;
