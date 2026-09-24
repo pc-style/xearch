@@ -42,7 +42,11 @@ function describeFailure(cause: unknown): string {
         ? `${cause.name}: ${cause.message}`
         : String(cause);
 
-  return text.replaceAll(env.X_MD_API_KEY!, "[redacted]");
+  const redacted = text.replaceAll(env.X_MD_API_KEY!, "[redacted]");
+
+  return env.X_MD_API_KEY_FALLBACK
+    ? redacted.replaceAll(env.X_MD_API_KEY_FALLBACK, "[redacted]")
+    : redacted;
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const)
@@ -125,7 +129,7 @@ for (;;) {
 
       try {
         const result = await collectXmd(
-          new XmdClient(env.X_MD_API_KEY, fetch, env.X_MD_BASE_URL),
+          new XmdClient(env.X_MD_API_KEY, fetch, env.X_MD_BASE_URL, env.X_MD_API_KEY_FALLBACK),
           {
             runId: job._id,
             attempt: job.attempt,

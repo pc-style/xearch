@@ -428,12 +428,26 @@ export function timeoutFor(operation: string): number {
   return operation === "history" || operation === "bulk" ? HISTORY_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 }
 
+/**
+ * Answers that mean "this key, right now" rather than "this request": the key
+ * was refused, its quota or plan is exhausted, or it is rate limited. Only
+ * these are worth repeating with the fallback key — a 404 or 5xx would fail
+ * the same way under any key and would just double the load.
+ */
+const SWITCH_KEY_STATUSES = new Set([401, 402, 403, 429]);
+
 export class XmdClient {
   readonly origin: string;
   constructor(
     private key?: string,
     private fetcher: typeof fetch = fetch,
     origin = "https://mdfromx.com",
+    /**
+     * A second key tried once when the first is refused or rate limited
+     * (`SWITCH_KEY_STATUSES`). Same origin, same request; the fallback never
+     * goes to a different host.
+     */
+    private fallbackKey?: string,
   ) {
     const url = new URL(origin);
 
@@ -456,13 +470,40 @@ export class XmdClient {
     const url = new URL(path, this.origin);
 
     for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+
+    const keys =
+      this.fallbackKey && this.fallbackKey !== this.key ? [this.key, this.fallbackKey] : [this.key];
+
+    for (const [index, key] of keys.entries()) {
+      const outcome = await this.attempt(url, query, operation, key, signal);
+
+      if (outcome.ok) return outcome.response;
+
+      // The last key's failure is the one reported: with a fallback that is
+      // the fallback's own answer, so a dashboard never blames the primary
+      // key for a refusal the second key would have shown too.
+      if (index === keys.length - 1 || !SWITCH_KEY_STATUSES.has(outcome.status))
+        throw outcome.error;
+    }
+
+    throw new Error("unreachable: every key attempt returns or throws");
+  }
+  private async attempt(
+    url: URL,
+    query: Record<string, string>,
+    operation: string,
+    key: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<
+    { ok: true; response: Response } | { ok: false; status: number; error: ProviderError }
+  > {
     let response: Response;
 
     const headers = new Headers({
       Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
     });
 
-    if (this.key) headers.set("Authorization", `Bearer ${this.key}`);
+    if (key) headers.set("Authorization", `Bearer ${key}`);
 
     try {
       response = await this.fetcher(url, {
@@ -508,17 +549,21 @@ export class XmdClient {
         Match.orElse(() => `x.md could not finish this request (${response.status}, ${code}).`),
       );
 
-      throw new ProviderError(
-        code,
-        message,
-        retryDelay(response.headers.get("Retry-After")),
-        [408, 429, 500, 502, 503, 504].includes(response.status),
-        problem ? { error: problem, httpStatus: response.status } : undefined,
-        readThrottle("xmd", operation, response.status, response.headers, problem),
-      );
+      return {
+        ok: false,
+        status: response.status,
+        error: new ProviderError(
+          code,
+          message,
+          retryDelay(response.headers.get("Retry-After")),
+          [408, 429, 500, 502, 503, 504].includes(response.status),
+          problem ? { error: problem, httpStatus: response.status } : undefined,
+          readThrottle("xmd", operation, response.status, response.headers, problem),
+        ),
+      };
     }
 
-    return response;
+    return { ok: true, response };
   }
   async read(
     kind: "profile" | "search" | "post" | "following" | "followers" | "archive",

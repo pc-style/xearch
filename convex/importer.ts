@@ -24,7 +24,13 @@ export const run = internalAction({
           "configuration",
           "Configure X_MD_API_KEY and RAW_CAPTURE_URL to run indexing jobs.",
         );
-      const xmd = new XmdClient(process.env.X_MD_API_KEY, fetch, process.env.X_MD_BASE_URL);
+
+      const xmd = new XmdClient(
+        process.env.X_MD_API_KEY,
+        fetch,
+        process.env.X_MD_BASE_URL,
+        process.env.X_MD_API_KEY_FALLBACK,
+      );
 
       const result = await collectXmd(
         xmd,

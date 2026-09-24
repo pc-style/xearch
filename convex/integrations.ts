@@ -350,6 +350,7 @@ export const account = action({
       process.env.X_MD_API_KEY,
       fetch,
       process.env.X_MD_BASE_URL,
+      process.env.X_MD_API_KEY_FALLBACK,
     ).read("profile", args.handle);
 
     return response.profile ?? null;
