@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "../convex/schema";
+import type { PublicationUpdateEnvelope } from "../convex/lib/contracts";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -33,11 +34,13 @@ async function seedAccount(
   );
 }
 
-function envelope(overrides: Record<string, unknown> = {}) {
+function envelope(
+  overrides: Partial<PublicationUpdateEnvelope> = {},
+): PublicationUpdateEnvelope {
   return {
     version: 1 as const,
     handle: "alice",
-    captureIds: [] as string[],
+    captureIds: [],
     generation: 1,
     reportedState: "indexing" as const,
     observedAt: Date.now(),
@@ -518,12 +521,14 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
       const res = await t.fetch("/publication/update", {
         method: "POST",
         headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
-        body: JSON.stringify(
-          envelope({
-            providerAccountId: "111",
-            pendingWork: { unit: "posts", count: 1, extra: "nope" },
-          }),
-        ),
+        // The extra field is added outside `envelope()`'s own (contract-
+        // shaped) return type on purpose: it is exactly the malformed input
+        // this test proves gets rejected, not a shape `envelope()` itself
+        // should ever be able to produce.
+        body: JSON.stringify({
+          ...envelope({ providerAccountId: "111" }),
+          pendingWork: { unit: "posts", count: 1, extra: "nope" },
+        }),
       });
 
       expect(res.status).toBe(400);

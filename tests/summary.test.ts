@@ -21,14 +21,21 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // builds the query's args, is exactly the sanctioned pattern ("pass the
 // current time in as an argument") — it is not a wall-clock read inside a
 // query handler.
-const summaryQuery = anyApi.summary.summary as unknown as import("convex/server").FunctionReference<
+// SAFETY: `anyApi.summary.summary` is typed as `FunctionReference<any, any, any, any>`
+// (convex/server's untyped API-builder), so every field it carries is `any`
+// and a single assertion to the concrete signature below is a narrowing
+// TypeScript already allows structurally — verified at the call site because
+// convex-test rejects the reference outright if the module/function name it
+// resolves to does not actually exist.
+const summaryQuery = anyApi.summary.summary as import("convex/server").FunctionReference<
   "query",
   "public",
   { now: number },
   DashboardSummary
 >;
 
-const healthQuery = anyApi.summary.health as unknown as import("convex/server").FunctionReference<
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const healthQuery = anyApi.summary.health as import("convex/server").FunctionReference<
   "query",
   "public",
   { now: number },
@@ -224,7 +231,7 @@ describe("summary.summary", () => {
       captures: { kind: "unknown", unit: "captures" },
       jobs: { kind: "unknown", unit: "jobs" },
     });
-    expect(typeof result.observedAt).toBe("number");
+    expect(result.observedAt).toEqual(expect.any(Number));
   });
 
   it("requires authentication", async () => {

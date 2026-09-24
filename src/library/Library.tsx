@@ -30,7 +30,7 @@ import { useDashboardClock } from "./clock";
  * them. `ensureSession` mirrors Dashboard.tsx's existing prop so the
  * integrator can wire it the same way.
  */
-export default function Library({ ensureSession }: { ensureSession: () => Promise<unknown> }) {
+export default function Library({ ensureSession }: { ensureSession: () => Promise<void> }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
   const now = useDashboardClock();

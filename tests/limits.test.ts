@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "../convex/schema";
 import type { Id } from "../convex/_generated/dataModel";
+import type { ProviderLimit } from "../convex/limits";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -107,7 +108,10 @@ describe("provider limits (docs/publication-contract.md 'Provider throttle facts
     });
     // "unknown" must never carry a numeric value field at all.
     expect(result).not.toHaveProperty("remaining.value");
-    expect((result as { resetAt?: number }).resetAt).toBeUndefined();
+    // SAFETY: the `toMatchObject` above already proved `result.kind` is
+    // "throttled", so narrowing to that ProviderLimit union member (the
+    // only one carrying `resetAt`) is exactly what was just checked.
+    expect((result as Extract<ProviderLimit, { kind: "throttled" }>).resetAt).toBeUndefined();
     expect(result).toMatchObject({ nextRetryAt: observedAt + 5_000 });
   });
 

@@ -66,6 +66,9 @@ describe("Convex application boundaries", () => {
     await t.action(internal.search.execute, { sessionId });
     expect(fetcher).toHaveBeenCalledOnce();
     const init = fetcher.mock.calls[0][1];
+    // SAFETY: convex/search.ts's `execute` only ever calls `fetch` with a
+    // JSON.stringify'd string body (never a Blob/stream/etc — this is the
+    // only fetch call this action makes), so `init.body` is a string here.
     expect(JSON.parse(init?.body as string)).toEqual({
       version: 1,
       query: "convex",

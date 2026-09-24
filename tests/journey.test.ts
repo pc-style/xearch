@@ -12,6 +12,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { convexTest, type TestConvex } from "convex-test";
 import { getFunctionName } from "convex/server";
+import type { AgentMail as AgentMailClient } from "@agentmail/convex";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 
@@ -29,9 +30,13 @@ const { privateKey: JWT_PRIVATE_KEY } = generateKeyPairSync("rsa", {
 });
 
 const { sendMessage } = vi.hoisted(() => ({
-  sendMessage: vi.fn<(ctx: unknown, inboxId: string, message: SentMessage) => Promise<string>>(
-    async () => "outbound_test_id",
-  ),
+  sendMessage: vi.fn<
+    (
+      ctx: Parameters<AgentMailClient["sendMessage"]>[0],
+      inboxId: string,
+      message: SentMessage,
+    ) => Promise<string>
+  >(async () => "outbound_test_id"),
 }));
 
 vi.mock("@agentmail/convex", () => ({

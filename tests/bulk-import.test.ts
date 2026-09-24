@@ -21,9 +21,8 @@ function requestUrl(input: Parameters<typeof fetch>[0]) {
 }
 
 /** Serialized size, measured independently of the code under test. */
-function bytes(value: unknown) {
-  return new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value))
-    .byteLength;
+function bytes(value: RawObject) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 const profile = { id: "123", screen_name: "theo", name: "Theo" };
@@ -147,7 +146,7 @@ describe("x.md per-request capacity", () => {
     expect(history.length).toBeGreaterThan(1);
 
     // Every delivered body is under deliverCapture's hard ceiling.
-    for (const body of bodies) expect(bytes(body)).toBeLessThan(CAPTURE_MAX_BYTES);
+    for (const body of bodies) expect(utf8Bytes(body)).toBeLessThan(CAPTURE_MAX_BYTES);
     expect(new Set(ids).size).toBe(ids.length);
     // Sequence numbering stays contiguous across the split.
     expect(captures.map((capture) => capture.sequence)).toEqual(captures.map((_, i) => i));
@@ -161,6 +160,9 @@ describe("x.md per-request capacity", () => {
     );
     // The provider's page survives the split exactly: same posts, same order,
     // same envelope around every part.
+    // SAFETY: every record here came from splitting `envelope`, built above by
+    // this file's own `page()`/`post()` fixtures, which always populate
+    // `posts` as an array of post objects.
     expect(parts.flatMap((record) => record.payload.posts as RawObject[])).toEqual(envelope.posts);
 
     for (const record of parts) {
@@ -203,6 +205,9 @@ describe("x.md per-request capacity", () => {
       expect(part.bytes).toBeLessThanOrEqual(200_000);
     }
 
+    // SAFETY: every part here came from splitting `envelope`, built above by
+    // this file's own `page()`/`post()` fixtures, which always populate
+    // `posts` as an array of post objects.
     expect(parts.flatMap((part) => part.payload.posts as RawObject[])).toEqual(envelope.posts);
     // Nothing to split: a single record, and a non-array `posts` is untouched.
     expect(splitHistoryPage({ posts: "not-an-array" }, 1)).toEqual([
@@ -219,11 +224,15 @@ describe("x.md per-request capacity", () => {
 
     const parts = splitHistoryPage({ profile, posts, meta: { count: 60 } }, 12_000);
     expect(parts.length).toBeGreaterThan(1);
+    // SAFETY: every part here came from splitting the object literal built two
+    // lines above, whose `posts` field is the `posts` array constructed
+    // immediately before it.
     const counts = parts.map((part) => (part.payload.posts as RawObject[]).length);
     // Byte-driven slicing gives parts different post counts.
     expect(new Set(counts).size).toBeGreaterThan(1);
 
     for (const part of parts) expect(bytes(part.payload)).toBeLessThanOrEqual(12_000);
+    // SAFETY: same fixture as `counts` above — `posts` is always an array.
     expect(parts.flatMap((part) => part.payload.posts as RawObject[])).toEqual(posts);
   });
   it("sizes a whole page exactly, without serializing it a second time", () => {
@@ -254,7 +263,10 @@ const rateLimitedBody = {
   retry_after: 423,
 };
 
-async function throttleOf(response: () => Response, call?: (xmd: XmdClient) => Promise<unknown>) {
+async function throttleOf<Result>(
+  response: () => Response,
+  call?: (xmd: XmdClient) => Promise<Result>,
+) {
   const xmd = new XmdClient(
     "test-key",
     vi.fn<typeof fetch>(async () => response()),
@@ -262,11 +274,13 @@ async function throttleOf(response: () => Response, call?: (xmd: XmdClient) => P
 
   const error = await (call ? call(xmd) : xmd.read("profile", "theo")).then(
     () => undefined,
-    (reason: unknown) => reason,
+    (cause: unknown) => cause,
   );
 
   expect(error).toBeInstanceOf(ProviderError);
 
+  // SAFETY: the assertion immediately above proves `error` is a
+  // `ProviderError`; every code path this helper exercises rejects with one.
   return (error as ProviderError).throttle;
 }
 
@@ -299,7 +313,11 @@ describe("provider throttle facts", () => {
       reason: "Too many bulk imports for this API key: 20 per 15 minutes.",
       retryAfterMs: 423_000,
     });
+    // SAFETY: the `toMatchObject` assertion above proves the request throttled,
+    // so `throttleOf` (which only returns from a rejection) resolved with a
+    // real throttle fact rather than `undefined`.
     expect("remaining" in (throttle as ProviderThrottle)).toBe(false);
+    // SAFETY: same throttled response as the assertion immediately above.
     expect("resetAt" in (throttle as ProviderThrottle)).toBe(false);
   });
   it("reports the most constraining reported allowance", () => {
@@ -336,7 +354,10 @@ describe("provider throttle facts", () => {
     );
 
     expect(throttle?.retryAfterMs).toBe(5000);
+    // SAFETY: the assertion immediately above proves `retryAfterMs` was read
+    // off a real throttle fact, so `throttle` is not `undefined` here.
     expect("remaining" in (throttle as ProviderThrottle)).toBe(false);
+    // SAFETY: same throttled response as the assertion immediately above.
     expect("resetAt" in (throttle as ProviderThrottle)).toBe(false);
     // A 429 that carried no allowance at all is still a refusal, and still
     // reports nothing it was not told.
@@ -432,10 +453,12 @@ describe("provider throttle facts", () => {
       ),
     ).then(
       () => undefined,
-      (reason: unknown) => reason,
+      (cause: unknown) => cause,
     );
 
     expect(error).toBeInstanceOf(ProviderError);
+    // SAFETY: the assertion immediately above proves `error` is a
+    // `ProviderError`; this deliverCapture rejects with one on every 429.
     const throttle = (error as ProviderError).throttle;
     expect(throttle).toMatchObject({
       provider: "receiver",

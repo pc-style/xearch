@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getFunctionName } from "convex/server";
+import type { Value } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contracts";
@@ -34,7 +35,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock("convex/react", () => ({
   useConvexAuth: () => ({ isAuthenticated: mockState.isAuthenticated }),
   useConvexConnectionState: () => ({ isWebSocketConnected: mockState.connected }),
-  useQuery: (ref: Parameters<typeof getFunctionName>[0], args: unknown) => {
+  useQuery: (ref: Parameters<typeof getFunctionName>[0], args: Record<string, Value> | "skip") => {
     if (args === "skip") return undefined;
 
     return mockState.responses.get(getFunctionName(ref));
@@ -45,11 +46,16 @@ vi.mock("convex/react", () => ({
 import Library from "../src/library/Library";
 
 function accountId(id: string) {
-  return id as unknown as Id<"accounts">;
+  // SAFETY: `Id<"accounts">` is `string & { __tableName: "accounts" }`; the
+  // branded type is a subtype of `string`, so this fixture helper's job is
+  // exactly to attach that brand to a plain test-authored string.
+  return id as Id<"accounts">;
 }
 
 function jobId(id: string) {
-  return id as unknown as Id<"jobs">;
+  // SAFETY: `Id<"jobs">` is `string & { __tableName: "jobs" }`, a subtype of
+  // `string`; this fixture helper attaches that brand to a test-authored id.
+  return id as Id<"jobs">;
 }
 
 function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummary {
@@ -102,7 +108,7 @@ function reset() {
   mockState.responses = new Map();
 }
 
-function setQuery(ref: Parameters<typeof getFunctionName>[0], value: unknown) {
+function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
   mockState.responses.set(getFunctionName(ref), value);
 }
 

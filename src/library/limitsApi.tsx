@@ -12,7 +12,11 @@ import type { ProviderLimit } from "../../convex/limits";
  * resolves to the exact same function reference at runtime. Swap for
  * `api.limits.all` once codegen has run and picked up the module.
  */
-export const limitsAllQuery = anyApi.limits.all as unknown as FunctionReference<
+// SAFETY: `anyApi.limits.all` is typed as `FunctionReference<any, any>`
+// because `convex/_generated/api.d.ts` has not picked up `convex/limits.ts`
+// yet (see the module comment above); the `any` type parameters make this a
+// single, non-widening assertion to the reference's real, frozen contract.
+export const limitsAllQuery = anyApi.limits.all as FunctionReference<
   "query",
   "public",
   Record<string, never>,

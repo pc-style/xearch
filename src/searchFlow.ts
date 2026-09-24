@@ -24,7 +24,7 @@ export const searchFlow = Effect.fn("searchFlow")(function* (
 ): Effect.fn.Return<SearchSessionId, unknown> {
   yield* Effect.tryPromise({
     try: () => dependencies.ensureSession(),
-    catch: (error: unknown) => error,
+    catch: (cause: unknown) => cause,
   });
 
   if (dependencies.beforeStart) yield* Effect.sync(dependencies.beforeStart);

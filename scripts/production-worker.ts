@@ -1,9 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { ConvexHttpClient } from "convex/browser";
+import type { FunctionArgs } from "convex/server";
+import { api } from "../convex/_generated/api";
 import { collectXmd } from "../convex/lib/collect";
 import { XmdClient, ProviderError, string } from "../convex/lib/xmd";
 import { deliverCapture } from "../convex/lib/handoff";
+
+type ReportArgs = Omit<FunctionArgs<typeof api.worker.report>, "token" | "jobId" | "attempt">;
 
 const env = parseEnv(await readFile(".env.local", "utf8"));
 
@@ -75,7 +79,7 @@ for (;;) {
   try {
     const receiver = await receiverHealth();
 
-    const job = await client.action("worker:poll" as any, {
+    const job = await client.action(api.worker.poll, {
       token,
       online: receiver.healthy,
       receiver,
@@ -100,7 +104,7 @@ for (;;) {
         if (++ticks % 4 === 0) void report({ event: "phase", phase: currentPhase }).catch(() => {});
         void receiverHealth()
           .then((receiver) =>
-            client.action("worker:poll" as any, {
+            client.action(api.worker.poll, {
               token,
               heartbeatOnly: true,
               online: receiver.healthy,
@@ -225,5 +229,5 @@ for (;;) {
 // receiver, so no `receiver` field goes with it. Claiming the receiver is
 // down because we are stopping would be an observation we never made.
 await client
-  .action("worker:poll" as any, { token, heartbeatOnly: true, online: false })
+  .action(api.worker.poll, { token, heartbeatOnly: true, online: false })
   .catch(() => {});

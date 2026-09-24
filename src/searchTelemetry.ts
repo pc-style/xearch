@@ -133,6 +133,11 @@ export interface SearchTimingMetrics {
   readonly baseDurationMs: number | null;
 }
 
+export interface CommitResult {
+  readonly changed: boolean;
+  readonly firstResult: boolean;
+}
+
 export interface ConnectionDelta {
   readonly elapsedMs: number;
   readonly connectionCountDelta: number;
@@ -158,7 +163,8 @@ const defaultClock: MonotonicClock = () =>
   typeof performance === "undefined" ? Date.now() : performance.now();
 
 const defaultScheduleFrame: FrameScheduler = (callback) => {
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => callback());
+  if (typeof requestAnimationFrame === "undefined") return;
+  requestAnimationFrame(() => callback());
 };
 
 function isTerminalStatus(status: SearchResultStatus): status is SearchTerminalStatus {
@@ -175,26 +181,18 @@ function observeConnection(
 ): ConnectionObservation | null {
   if (!state) return null;
 
-  const optional = {
-    ...(state.connectionRetries === undefined
-      ? {}
-      : { connectionRetries: state.connectionRetries }),
-    ...(state.hasInflightRequests === undefined
-      ? {}
-      : { hasInflightRequests: state.hasInflightRequests }),
-    ...(state.inflightMutations === undefined
-      ? {}
-      : { inflightMutations: state.inflightMutations }),
-    ...(state.inflightActions === undefined ? {} : { inflightActions: state.inflightActions }),
-  };
-
-  return Object.freeze({
+  const observation: ConnectionObservation = {
     observedAt,
     isWebSocketConnected: state.isWebSocketConnected,
     hasEverConnected: state.hasEverConnected,
     connectionCount: state.connectionCount,
-    ...optional,
-  });
+    connectionRetries: state.connectionRetries,
+    hasInflightRequests: state.hasInflightRequests,
+    inflightMutations: state.inflightMutations,
+    inflightActions: state.inflightActions,
+  };
+
+  return Object.freeze(observation);
 }
 
 function freezeAttempt(attempt: SearchAttemptSnapshot): SearchAttemptSnapshot {
@@ -249,7 +247,7 @@ export function createSearchTelemetryStore(
   const commitResult = (
     input: ResultCommitInput,
     committedAt: number,
-  ): { changed: boolean; firstResult: boolean } => {
+  ): CommitResult => {
     if (!current || current.attemptId !== input.attemptId) {
       return { changed: false, firstResult: false };
     }

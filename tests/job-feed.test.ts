@@ -9,21 +9,28 @@ import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contract
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
-const summaryQuery = anyApi.summary.summary as unknown as FunctionReference<
+// SAFETY: `anyApi.*` references are typed as `FunctionReference<any, any, any, any>`
+// (convex/server's untyped API-builder), so every field is `any` and a
+// single assertion to the concrete signature below is a narrowing
+// TypeScript already allows structurally; convex-test rejects the reference
+// outright at call time if the module/function name does not actually exist.
+const summaryQuery = anyApi.summary.summary as FunctionReference<
   "query",
   "public",
   { now: number },
   DashboardSummary
 >;
 
-const libraryRows = anyApi.library.rows as unknown as FunctionReference<
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const libraryRows = anyApi.library.rows as FunctionReference<
   "query",
   "public",
   Record<string, never>,
   { rows: AccountLibraryRow[]; truncated: boolean }
 >;
 
-const libraryHistory = anyApi.library.history as unknown as FunctionReference<
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const libraryHistory = anyApi.library.history as FunctionReference<
   "query",
   "public",
   { accountId: Id<"accounts"> },

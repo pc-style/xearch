@@ -73,6 +73,10 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
       { kind: "none", provider: "search" },
     ]);
 
+    // SAFETY: `limitsAll` is called through `anyApi` (untyped `any`) rather
+    // than the generated `api` object — see this file's and
+    // convex/limits.ts's header comments — but the `toEqual` above just
+    // proved this exact value matches convex/limits.ts's real return shape.
     const html = renderPanel(result as ProviderLimit[]);
     console.log(
       "PART1 rendered UI contains 'today's import limit':",
@@ -164,6 +168,9 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
     expect(result).toMatchObject({ kind: "throttled", remaining: { kind: "unknown" } });
     expect(result).not.toHaveProperty("resetAt");
 
+    // SAFETY: `limitsCurrent` is called through `anyApi` (untyped `any`) —
+    // see PART1's identical note above — but the `toMatchObject` assertion
+    // just above already proved this value is a throttled ProviderLimit.
     const html = renderPanel([
       { kind: "none", provider: "xmd" },
       { kind: "none", provider: "receiver" },

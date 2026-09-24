@@ -6,11 +6,11 @@ import { ConvexError } from "convex/values";
  * plain thrown Error, whose `.message` Convex wraps as
  * "[CONVEX M(fn)] [Request ID: ...] Server Error ... Uncaught Error: <text>"
  * to avoid leaking internals. Strip that wrapper down to the original text. */
-export const describeError = (e: unknown) =>
-  e instanceof ConvexError
-    ? String(e.data)
-    : e instanceof Error
-      ? e.message.replace(/\[CONVEX[^]*?Uncaught (?:Error|ConvexError):\s*/, "").split("\n")[0]
+export const describeError = (cause: unknown) =>
+  cause instanceof ConvexError
+    ? String(cause.data)
+    : cause instanceof Error
+      ? cause.message.replace(/\[CONVEX[^]*?Uncaught (?:Error|ConvexError):\s*/, "").split("\n")[0]
       : "Something went wrong. Try again.";
 
 /** Where one task reports: a busy flag and the single line of text the
@@ -40,8 +40,8 @@ export type TaskOptions = {
  * cannot lower a `try`/`finally` written inside a component or hook. Keeping
  * the control flow here, and the state in the components, lets both be true.
  */
-export async function runTask(
-  fn: () => Promise<unknown>,
+export async function runTask<T>(
+  fn: () => Promise<T>,
   report: TaskReport,
   options: TaskOptions = {},
 ) {
@@ -66,11 +66,11 @@ export type Task = {
   message: string;
   setMessage: (message: string) => void;
   /** A bare string is shorthand for `{ success }`. */
-  run: (fn: () => Promise<unknown>, options?: string | TaskOptions) => Promise<void>;
+  run: <T>(fn: () => Promise<T>, options?: string | TaskOptions) => Promise<void>;
 };
 
-export type TaskRunner = (
-  fn: () => Promise<unknown>,
+export type TaskRunner = <T>(
+  fn: () => Promise<T>,
   options?: string | TaskOptions,
 ) => Promise<void>;
 
@@ -99,8 +99,8 @@ export function createTaskRunner(
   let inFlight = 0;
   let latest = 0;
 
-  return (fn, options = {}) => {
-    const settings: TaskOptions = typeof options === "string" ? { success: options } : options;
+  return <T>(fn: () => Promise<T>, options: string | TaskOptions = {}) => {
+    const settings: TaskOptions = options instanceof Object ? options : { success: options };
     const listening = settings.alive;
     latest += 1;
     const token = latest;

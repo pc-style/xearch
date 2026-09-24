@@ -253,6 +253,8 @@ export default function App() {
   try {
     parseQuery(raw);
   } catch (e) {
+    // SAFETY: `parseQuery` (convex/lib/search.ts) only ever throws `new
+    // Error(...)`, never a non-Error value.
     queryError = (e as Error).message;
   }
 
@@ -339,9 +341,9 @@ export default function App() {
         setSessionId(id);
         setBusy(false);
       },
-      (error: unknown) => {
+      (cause: unknown) => {
         if (latestAttempt.current !== request.attemptId) return;
-        setNotice(describeError(error));
+        setNotice(describeError(cause));
         setBusy(false);
       },
     );
@@ -631,6 +633,9 @@ export default function App() {
                       aria-label={`Search @${a.handle}`}
                       key={a._id}
                       style={
+                        // SAFETY: CSSProperties has no index signature for
+                        // custom properties, but `--left`/`--top` are consumed
+                        // only by this component's own stylesheet.
                         {
                           "--left": `${50 + 44 * Math.cos(angle)}%`,
                           "--top": `${50 + 45 * Math.sin(angle)}%`,
@@ -682,7 +687,15 @@ export default function App() {
               <select
                 aria-label="Sort results"
                 value={sort}
-                onChange={(e) => search(draft, e.target.value as Sort)}
+                onChange={(e) =>
+                  search(
+                    draft,
+                    // SAFETY: every <option> below comes from `sorts`, whose
+                    // `value`s are typed `Sort`, so the <select>'s string
+                    // value is always one of them.
+                    e.target.value as Sort,
+                  )
+                }
               >
                 {sorts.map((s) => (
                   <option value={s.value} key={s.value}>

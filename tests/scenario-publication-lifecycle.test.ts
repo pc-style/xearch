@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import schema from "../convex/schema";
 import { PUBLICATION_STATE_META } from "../src/library/format";
-import type { AccountLibraryRow } from "../convex/lib/contracts";
+import type { AccountLibraryRow, PublicationUpdateEnvelope } from "../convex/lib/contracts";
 
 // AccountRow calls useQuery/useMutation (convex/react) directly, with no
 // ConvexProvider in this render — mock the same way tests/library-ui.test.ts
@@ -45,12 +45,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function envelope(overrides: Record<string, unknown> = {}) {
+function envelope(
+  overrides: Partial<PublicationUpdateEnvelope> = {},
+): PublicationUpdateEnvelope {
   return {
     version: 1 as const,
     handle: "alice",
     providerAccountId: "111",
-    captureIds: [] as string[],
+    captureIds: [],
     generation: 1,
     reportedState: "indexing" as const,
     observedAt: Date.now(),
@@ -59,7 +61,7 @@ function envelope(overrides: Record<string, unknown> = {}) {
 }
 
 function renderedLabel(row: AccountLibraryRow): string {
-  const html = renderToStaticMarkup(createElement(AccountRow, { row } as any));
+  const html = renderToStaticMarkup(createElement(AccountRow, { row }));
 
   return html;
 }

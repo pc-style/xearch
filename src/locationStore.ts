@@ -55,7 +55,7 @@ function isSort(value: string | null): value is Sort {
 }
 
 function parseUrl(input: string | URL): Omit<LocationSnapshot, "version"> {
-  const url = typeof input === "string" ? new URL(input, "https://xearch.invalid") : input;
+  const url = input instanceof URL ? input : new URL(input, "https://xearch.invalid");
   const sortValue = url.searchParams.get("sort");
 
   return {

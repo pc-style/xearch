@@ -7,6 +7,10 @@ import {
   type SearchSessionId,
 } from "../src/searchFlow";
 
+// SAFETY: `SearchSessionId` is a branded string with no runtime
+// constructor exposed to callers outside src/searchFlow.ts; this fixture
+// only ever stands in for an opaque id `searchFlow` was given back by its
+// own dependencies, never a value this test parses from the outside.
 const sessionId = "session-1" as SearchSessionId;
 
 const request: SearchRequest = {

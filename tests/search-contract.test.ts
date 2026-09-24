@@ -112,6 +112,9 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
 
     await t.action(internal.search.execute, { sessionId });
     expect(fetcher).toHaveBeenCalledOnce();
+    // SAFETY: convex/search.ts's `execute` only ever calls `fetch` with a
+    // JSON.stringify'd string body (the only fetch call this action makes),
+    // so `body` is a string here.
     const body = JSON.parse(fetcher.mock.calls[0][1]?.body as string);
     expect(body).toEqual(DOC_SEARCH_REQUEST);
     expect((await t.run((ctx) => ctx.db.get(sessionId)))?.stats).toEqual(DOC_SEARCH_RESPONSE.stats);
@@ -237,6 +240,8 @@ describe("stale search cursor — restart search, not a generic failure", () => 
     );
 
     await t.action(internal.search.execute, { sessionId });
+    // SAFETY: same as above — convex/search.ts's `execute` only ever calls
+    // `fetch` with a JSON.stringify'd string body.
     const body = JSON.parse(fetcher.mock.calls[0][1]?.body as string);
     expect(body.cursor).toBe(opaque);
   });

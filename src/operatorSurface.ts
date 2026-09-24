@@ -27,7 +27,7 @@ import { lazy, type ComponentType } from "react";
 export const OPERATOR_BUILD: boolean = true;
 
 export type DashboardProps = {
-  ensureSession: () => Promise<unknown>;
+  ensureSession: () => Promise<void>;
   close: () => void;
 };
 

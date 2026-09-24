@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Match } from "effect";
 import { useConvexAuth, useConvexConnectionState, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
@@ -130,7 +131,7 @@ export default function Dashboard({
   ensureSession,
   close,
 }: {
-  ensureSession: () => Promise<unknown>;
+  ensureSession: () => Promise<void>;
   close: () => void;
 }) {
   const { isAuthenticated } = useConvexAuth();
@@ -196,7 +197,17 @@ export default function Dashboard({
             <h2>Start an import</h2>
             <label>
               What to download
-              <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+              <select
+                value={kind}
+                onChange={(e) =>
+                  setKind(
+                    // SAFETY: every <option> below is one of `Doc<"jobs">["kind"]`'s
+                    // literal values, so the <select>'s string value is always one
+                    // of them too.
+                    e.target.value as typeof kind,
+                  )
+                }
+              >
                 <option value="bulk">Account history</option>
                 <option value="profile">Profile</option>
                 <option value="post">Post / conversation</option>
@@ -207,19 +218,21 @@ export default function Dashboard({
               </select>
             </label>
             <label>
-              {kind === "post" ? "X post URL" : kind === "live" ? "Search query" : "X handle"}
+              {Match.value(kind).pipe(
+                Match.when("post", () => "X post URL"),
+                Match.when("live", () => "Search query"),
+                Match.orElse(() => "X handle"),
+              )}
               <input
                 id="import-input"
                 required
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={
-                  kind === "post"
-                    ? "https://x.com/…/status/…"
-                    : kind === "live"
-                      ? "convex"
-                      : "@handle"
-                }
+                placeholder={Match.value(kind).pipe(
+                  Match.when("post", () => "https://x.com/…/status/…"),
+                  Match.when("live", () => "convex"),
+                  Match.orElse(() => "@handle"),
+                )}
               />
             </label>
             {kind === "bulk" && (

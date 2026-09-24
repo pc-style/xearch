@@ -7,6 +7,7 @@ import schema from "../convex/schema";
 import type { Id } from "../convex/_generated/dataModel";
 import type { AccountLibraryRow } from "../convex/lib/contracts";
 import type { ServiceStatus } from "../convex/summary";
+import type { Value } from "convex/values";
 import OverviewStats from "../src/library/OverviewStats";
 
 /**
@@ -32,10 +33,13 @@ import OverviewStats from "../src/library/OverviewStats";
 const mockState = vi.hoisted(() => ({ responses: new Map<string, unknown>() }));
 
 vi.mock("convex/react", () => ({
-  useQuery: (ref: unknown, args: unknown) => {
+  useQuery: (
+    ref: Parameters<typeof getFunctionName>[0],
+    args: Record<string, Value> | "skip",
+  ) => {
     if (args === "skip") return undefined;
 
-    return mockState.responses.get(getFunctionName(ref as any));
+    return mockState.responses.get(getFunctionName(ref));
   },
   useMutation: () => vi.fn().mockResolvedValue(undefined),
 }));
@@ -53,7 +57,7 @@ const summaryQ = anyApi.summary.summary;
 const healthQ = anyApi.summary.health;
 
 function renderRow(row: AccountLibraryRow): string {
-  return renderToStaticMarkup(createElement(AccountRow, { row } as any));
+  return renderToStaticMarkup(createElement(AccountRow, { row }));
 }
 
 async function seedOwner(t: ReturnType<typeof convexTest>) {
@@ -98,7 +102,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     // mocked convex/react useQuery below (see file header comment).
     const history = await session.query(libraryHistory, { accountId: rows[0].accountId });
     console.log("CASE1 real library.history:", JSON.stringify(history));
-    mockState.responses = new Map([[getFunctionName(libraryHistory as any), history]]);
+    mockState.responses = new Map([[getFunctionName(libraryHistory), history]]);
 
     const html = renderRow(rows[0]);
     console.log(
@@ -303,6 +307,9 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     // "search" has no serviceHealth row at all — genuinely unknown.
 
     const now = Date.now(); // far enough past observedAt to cross SERVICE_STALE_AFTER_MS (5 min)
+    // SAFETY: `healthQ` is `anyApi.summary.health`, an untyped reference, so
+    // convex-test's result is typed `any`; convex/summary.ts's `health` query
+    // always returns a `ServiceStatus[]` — see its own return type.
     const health = (await session.query(healthQ, { now })) as ServiceStatus[];
     console.log("CASE5 summary.health:", JSON.stringify(health));
     const indexer = health.find((h) => h.service === "indexer");
@@ -318,7 +325,8 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         health,
         limits: undefined,
         connected: false,
-      } as any),
+        isAuthenticated: true,
+      }),
     );
 
     console.log(

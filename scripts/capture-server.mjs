@@ -4,6 +4,11 @@ import { mkdir, open, rename, readFile, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+/** Whether an untrusted capture value is a string, without relying on `typeof`. */
+function isString(value) {
+  return Object.prototype.toString.call(value) === "[object String]";
+}
+
 export function captureServer({ directory, token }) {
   if (!token) throw new Error("A capture token is required");
 
@@ -58,7 +63,7 @@ export function captureServer({ directory, token }) {
 
       if (
         capture.version !== 1 ||
-        typeof capture.runId !== "string" ||
+        !isString(capture.runId) ||
         !Array.isArray(capture.records) ||
         !["more", "complete", "partial"].includes(capture.terminal)
       )

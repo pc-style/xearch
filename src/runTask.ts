@@ -4,17 +4,17 @@
  * callers never need `try`/`finally` inside components (the React Compiler
  * build in use cannot compile `finally` clauses).
  */
-export function runTask(
-  work: () => Promise<unknown>,
+export function runTask<T>(
+  work: () => Promise<T>,
   handlers: {
     readonly onSuccess?: () => void;
-    readonly onError?: (error: unknown) => void;
+    readonly onError?: (cause: unknown) => void;
     readonly onSettled?: () => void;
   },
 ): void {
-  const reportError = (error: unknown) => {
+  const reportError = (cause: unknown) => {
     try {
-      handlers.onError?.(error);
+      handlers.onError?.(cause);
     } catch {
       // The chain is detached. A throw here must not become an unhandled rejection.
     }
@@ -42,8 +42,8 @@ export function runTask(
 
         finish();
       },
-      (error: unknown) => {
-        reportError(error);
+      (cause: unknown) => {
+        reportError(cause);
         finish();
       },
     )

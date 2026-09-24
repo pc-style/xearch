@@ -30,6 +30,11 @@ const APPLY = process.argv.includes("--apply");
 // from one the live path would have written.
 const HANDLE = /^[A-Za-z0-9_]{1,15}$/;
 
+/** Whether an untrusted capture value is a string, without relying on `typeof`. */
+function isString(value) {
+  return Object.prototype.toString.call(value) === "[object String]";
+}
+
 const newest = new Map();
 
 for (const name of await readdir(DIR)) {
@@ -47,7 +52,7 @@ for (const name of await readdir(DIR)) {
     const profile = record?.payload?.profile;
     const screenName = profile?.screen_name;
 
-    if (typeof screenName !== "string" || !HANDLE.test(screenName)) continue;
+    if (!isString(screenName) || !HANDLE.test(screenName)) continue;
 
     if (profile.id === undefined || profile.id === null) continue;
     const handle = screenName.toLowerCase();
@@ -55,15 +60,16 @@ for (const name of await readdir(DIR)) {
 
     if ((newest.get(handle)?.at ?? -1) >= at) continue;
     const avatar = profile.avatar_url;
-    newest.set(handle, {
-      at,
-      profile: {
-        handle,
-        userId: String(profile.id),
-        name: typeof profile.name === "string" && profile.name ? profile.name : screenName,
-        ...(typeof avatar === "string" && avatar.startsWith("https://") ? { avatar } : {}),
-      },
-    });
+
+    const recovered = {
+      handle,
+      userId: String(profile.id),
+      name: isString(profile.name) && profile.name ? profile.name : screenName,
+    };
+
+    if (isString(avatar) && avatar.startsWith("https://")) recovered.avatar = avatar;
+
+    newest.set(handle, { at, profile: recovered });
   }
 }
 

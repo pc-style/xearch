@@ -28,7 +28,12 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // tests/summary.test.ts; it resolves to the same function reference at
 // runtime. `now` is a required arg (convex/summary.ts never reads the wall
 // clock inside the handler), so every call passes it.
-const summaryQuery = anyApi.summary.summary as unknown as import("convex/server").FunctionReference<
+// SAFETY: `anyApi.summary.summary` is typed as a generic `FunctionReference<
+// any, any>` (convex/server's AnyApi), not `unknown` — this single
+// narrowing to the reference's real, hand-checked args/return shape
+// (matching convex/summary.ts's `summary` query) is what lets the call
+// below typecheck.
+const summaryQuery = anyApi.summary.summary as import("convex/server").FunctionReference<
   "query",
   "public",
   { now: number },

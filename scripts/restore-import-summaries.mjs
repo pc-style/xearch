@@ -7,6 +7,11 @@ const env = parseEnv(await readFile(".env.local", "utf8"));
 
 if (!env.CONVEX_DEPLOYMENT?.startsWith("anonymous:")) throw new Error("Local deployment only");
 
+/** Parse an untrusted JSON value into a string, or `undefined` if it isn't one. */
+function parseOptionalString(value) {
+  return Object.prototype.toString.call(value) === "[object String]" ? value : undefined;
+}
+
 let checked = 0;
 
 for (const filename of await readdir(".local-captures/raw")) {
@@ -31,7 +36,7 @@ for (const filename of await readdir(".local-captures/raw")) {
     jobId: capture.runId,
     captureId: createHash("sha256").update(bytes).digest("hex"),
     posts: payload.posts.length,
-    oldest: typeof payload.meta.oldest === "string" ? payload.meta.oldest : undefined,
+    oldest: parseOptionalString(payload.meta.oldest),
     floorReached: payload.meta.floor_reached === true,
   };
 

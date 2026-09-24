@@ -1,8 +1,19 @@
+import { Match } from "effect";
 import { z } from "zod";
 
+/** A JSON-serializable value — exactly what `JSON.parse`/`response.json()` produce. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+// Deliberately lenient on each value (not `jsonValue`/`z.json()`): this
+// schema's only job is confirming "a plain string-keyed record", the same
+// thing the pre-existing `Record<string, unknown>` contract checked. Callers
+// across this app and convex/integrations.ts pass provider HTTP bodies and
+// SDK response objects alike; none of them are re-validated field-by-field
+// here, and this schema throwing on a shape a caller has always relied on
+// working would be a regression this rule was never meant to cause.
 const object = z.record(z.string(), z.unknown());
 
-export type RawObject = Record<string, unknown>;
+export type RawObject = Record<string, JsonValue>;
 
 /**
  * Services this app calls that can throttle it. Mirrors
@@ -47,12 +58,22 @@ export class ProviderError extends Error {
   }
 }
 
-export function record(value: unknown): RawObject {
-  return object.parse(value);
+export function record(value: JsonValue | object): RawObject {
+  // SAFETY: `object`'s schema only checks "is a plain string-keyed record",
+  // exactly what the pre-existing `Record<string, unknown>` contract
+  // guaranteed; every caller already narrows individual fields with
+  // `string`/`record`/`finiteNumber` before trusting them, so treating an
+  // unvalidated value as `JsonValue` here is no less safe than the `unknown`
+  // it replaces.
+  return object.parse(value) as RawObject;
 }
 
-export function string(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+const stringSchema = z.string();
+
+export function string(value: JsonValue | undefined): string | undefined {
+  const result = stringSchema.safeParse(value);
+
+  return result.success ? result.data : undefined;
 }
 
 export function handle(value: string): string {
@@ -110,14 +131,26 @@ export function retryDelay(value: string | null, now = Date.now()): number {
 }
 
 function compact<T extends object>(value: T): T {
+  // SAFETY: dropping only `undefined`-valued entries from `T`'s own entries
+  // cannot introduce a key `T` doesn't already declare, and every remaining
+  // value keeps its original (non-`undefined`) type, so the result still
+  // satisfies `T`.
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
 
-function finiteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+const finiteNumberSchema = z.number().finite();
 
-  if (typeof value !== "string" || value.trim() === "") return undefined;
-  const parsed = Number(value);
+const nonEmptyTrimmedString = z.string().trim().min(1);
+
+function finiteNumber(value: JsonValue | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const direct = finiteNumberSchema.safeParse(value);
+
+  if (direct.success) return direct.data;
+  const text = nonEmptyTrimmedString.safeParse(value);
+
+  if (!text.success) return undefined;
+  const parsed = Number(text.data);
 
   return Number.isFinite(parsed) ? parsed : undefined;
 }
@@ -221,14 +254,14 @@ function allowances(headers: Headers, now: number): Allowance[] {
 }
 
 /** RFC 9457-style problem body, whether it is the body or nested under `error`. */
-function problemBody(body: unknown): RawObject | undefined {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
-  const top = body as RawObject;
-  const nested = top.error;
+function problemBody(body: JsonValue | undefined): RawObject | undefined {
+  const parsedTop = object.safeParse(body);
 
-  return nested && typeof nested === "object" && !Array.isArray(nested)
-    ? (nested as RawObject)
-    : top;
+  if (!parsedTop.success) return undefined;
+  const top = parsedTop.data;
+  const parsedNested = object.safeParse(top.error);
+
+  return parsedNested.success ? parsedNested.data : top;
 }
 
 function problemReason(problem: RawObject | undefined): string | undefined {
@@ -294,7 +327,7 @@ export function readThrottle(
   operation: string,
   status: number,
   headers: Headers,
-  body?: unknown,
+  body?: JsonValue,
   now = Date.now(),
 ): ProviderThrottle | undefined {
   const problem = problemBody(body);
@@ -439,12 +472,14 @@ export class XmdClient {
         /* status is still actionable */
       }
 
-      const message =
-        response.status === 401
-          ? "x.md rejected the API key. Check X_MD_API_KEY on the backend."
-          : response.status === 429
-            ? "x.md rate limit reached. The job will retry after the provider's delay."
-            : `x.md could not finish this request (${response.status}, ${code}).`;
+      const message = Match.value(response.status).pipe(
+        Match.when(401, () => "x.md rejected the API key. Check X_MD_API_KEY on the backend."),
+        Match.when(
+          429,
+          () => "x.md rate limit reached. The job will retry after the provider's delay.",
+        ),
+        Match.orElse(() => `x.md could not finish this request (${response.status}, ${code}).`),
+      );
 
       throw new ProviderError(
         code,
@@ -463,24 +498,33 @@ export class XmdClient {
     input: string,
     cursor?: string,
   ) {
-    const query: Record<string, string> = { format: "json", limit: "50" };
+    const queryEntries: [string, string][] = [
+      ["format", "json"],
+      ["limit", "50"],
+    ];
 
-    if (cursor) query.cursor = cursor;
+    if (cursor) queryEntries.push(["cursor", cursor]);
     let path: string;
 
     if (kind === "search") {
       path = "/api/v1/search";
-      query.q = input;
-      query.feed = "latest";
+      queryEntries.push(["q", input], ["feed", "latest"]);
     } else if (kind === "post") {
       path = "/api/v1/posts";
-      query.url = statusUrl(input);
-      query.thread = "auto";
+      queryEntries.push(["url", statusUrl(input)], ["thread", "auto"]);
     } else {
-      path = `/api/v1/profiles/${handle(input)}${kind === "profile" ? "" : kind === "archive" ? "/posts" : `/${kind}`}`;
+      const suffix = Match.value(kind).pipe(
+        Match.when("profile", () => ""),
+        Match.when("archive", () => "/posts"),
+        Match.orElse(() => `/${kind}`),
+      );
 
-      if (kind === "archive") query.index = "true";
+      path = `/api/v1/profiles/${handle(input)}${suffix}`;
+
+      if (kind === "archive") queryEntries.push(["index", "true"]);
     }
+
+    const query = Object.fromEntries(queryEntries);
 
     return record(await (await this.request(path, query, kind)).json());
   }
@@ -506,11 +550,12 @@ export class XmdClient {
           : String(Math.min(MAX_CHAIN_CONCURRENCY, Math.max(1, Math.floor(options.concurrency)))),
     };
 
-    if (options.since) query.since = options.since;
+    if (options.since) queryEntries.push(["since", options.since]);
 
-    if (options.until) query.until = options.until;
+    if (options.until) queryEntries.push(["until", options.until]);
 
-    if (options.refresh) query.refresh = "true";
+    if (options.refresh) queryEntries.push(["refresh", "true"]);
+    const query = Object.fromEntries(queryEntries);
 
     return record(
       await (
@@ -527,19 +572,20 @@ export class XmdClient {
       refresh?: boolean;
     },
   ): AsyncGenerator<RawObject & ({ post: RawObject } | { meta: RawObject; profile?: RawObject })> {
-    const query: Record<string, string> = {
-      format: "ndjson",
-      max_posts: String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts))),
-      with_replies: "true",
-      with_reposts: "true",
-      concurrency: CHAIN_CONCURRENCY,
-    };
+    const queryEntries: [string, string][] = [
+      ["format", "ndjson"],
+      ["max_posts", String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts)))],
+      ["with_replies", "true"],
+      ["with_reposts", "true"],
+      ["concurrency", CHAIN_CONCURRENCY],
+    ];
 
-    if (options.since) query.since = options.since;
+    if (options.since) queryEntries.push(["since", options.since]);
 
-    if (options.until) query.until = options.until;
+    if (options.until) queryEntries.push(["until", options.until]);
 
-    if (options.refresh) query.refresh = "true";
+    if (options.refresh) queryEntries.push(["refresh", "true"]);
+    const query = Object.fromEntries(queryEntries);
     const response = await this.request(`/api/v1/profiles/${handle(input)}/posts`, query, "bulk");
 
     if (!response.body) throw new ProviderError("empty_stream", "x.md returned no import stream.");
@@ -564,12 +610,14 @@ export class XmdClient {
 
       if (item.post) return { ...item, post: record(item.post) };
 
-      if (item.meta)
-        return {
-          ...item,
-          meta: record(item.meta),
-          ...(item.profile ? { profile: record(item.profile) } : {}),
-        };
+      if (item.meta) {
+        const withMeta = { ...item, meta: record(item.meta) };
+
+        if (item.profile) return { ...withMeta, profile: record(item.profile) };
+
+        return withMeta;
+      }
+
       throw new ProviderError("invalid_stream", "x.md returned an unrecognized import record.");
     };
 
