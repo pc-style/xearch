@@ -1,6 +1,6 @@
 import type { AccountLibraryRow } from "../../convex/lib/contracts";
-import { acquisitionStatusLabel } from "../jobText";
-import { acquisitionStatusTone, formatRelative } from "./format";
+import { DOWNLOAD_COMPLETE_CAVEAT, acquisitionStatusLabel } from "../jobText";
+import { acquisitionStatusTone, countWithUnit, formatRelative } from "./format";
 import { Badge } from "./format.tsx";
 
 const RECENT_LIMIT = 8;
@@ -57,7 +57,7 @@ export default function RecentActivity({
         <h2>Recent run history</h2>
         <p className="library-muted">
           The most recent runs across your library. Expand an account above for its full history and
-          receipts.
+          receipts. {DOWNLOAD_COMPLETE_CAVEAT}
         </p>
       </div>
       {recent.length === 0 ? (
@@ -75,6 +75,12 @@ export default function RecentActivity({
               <Badge tone={acquisitionStatusTone(row.latestJob.status)}>
                 {acquisitionStatusLabel(row.latestJob.status)}
               </Badge>
+              {/* /tmp/issues.md item 2: a bare "Download complete" reads as
+                  a complete archive. What is actually known and library-wide
+                  honest at this point — without inventing a number the
+                  contract does not expose here — is how many of this
+                  account's posts are confirmed searchable right now. */}
+              <span className="library-muted">{countWithUnit(row.searchablePostCount)}</span>
               <span className="library-muted">{formatRelative(row.latestJob.updatedAt)}</span>
             </div>
           ))}

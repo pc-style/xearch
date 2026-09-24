@@ -83,19 +83,14 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
       html.includes("today's import limit"),
     );
     console.log(
-      "PART1 rendered UI has a 'No throttling reported' badge for each of xmd/receiver/search:",
-      html.includes("x.md:") &&
-        html.includes("Raw-capture receiver:") &&
-        html.includes("Search backend:"),
+      "PART1 rendered UI renders nothing at all — nothing has ever actually been throttled (B2):",
+      html === "",
     );
     expect(html).not.toContain("today's import limit");
-    // One badge per provider, each reading "No throttling reported" (a 4th,
-    // non-badge occurrence of the same phrase is the panel's own explanatory
-    // footer sentence — expected, not a duplicate badge).
-    expect(html.match(/No throttling reported/g) ?? []).toHaveLength(4);
-    expect(html).toContain("x.md:");
-    expect(html).toContain("Raw-capture receiver:");
-    expect(html).toContain("Search backend:");
+    // B2 "hide provider limits unless something is actually throttled": with
+    // every provider reading "none", the panel renders nothing at all —
+    // never a permanent row of "No throttling reported" badges.
+    expect(html).toBe("");
   });
 
   it("part 2: a live throttle with full provider data shows the real reason and a computed retry time", async () => {

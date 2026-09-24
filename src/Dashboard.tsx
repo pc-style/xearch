@@ -166,6 +166,19 @@ export default function Dashboard({
   // the indexed-people list (live search, single post, profile, followers,
   // following, archive). The split is applied server-side via `scope`.
 
+  // B7: "Show runs I've cleared" is only worth showing once something has
+  // actually run — otherwise it's a checkbox that can never do anything.
+  // When `showDismissed` is already true this is the exact same query+args
+  // as `jobs` above (a shared subscription, not a second read); when it's
+  // false, this is the one extra bounded read that lets the toggle know
+  // whether flipping it would reveal anything.
+  const everJobs = useQuery(
+    api.jobs.list,
+    isAuthenticated && !showDismissed ? { includeDismissed: true, scope: "other" } : "skip",
+  );
+
+  const everRan = showDismissed ? (jobs?.length ?? 0) > 0 : (everJobs?.length ?? 0) > 0;
+
   const start = useMutation(api.jobs.start);
 
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
@@ -177,11 +190,30 @@ export default function Dashboard({
 
   return (
     <main className="control-room">
+      {/* B7: the dashboard used to drop the site's own header entirely and
+          show only "Back to search" — this restores the logo half of that
+          header (reusing style.css's global .topbar/.wordmark, already
+          loaded for the whole app) without touching src/App.tsx, which owns
+          the real nav (search, saved searches, bookmarks) that has no
+          meaning on this page. */}
+      <header className="topbar">
+        <button type="button" className="wordmark" onClick={close} aria-label="Xearch home">
+          xearch<span className="wordmark-dot">.</span>
+        </button>
+      </header>
       <header className="control-header">
         <div>
           <button onClick={close}>Back to search</button>
-          <h1>Import your posts</h1>
-          <p>Choose an account. We'll download its available history.</p>
+          {/* CodeRabbit (PR #48): the heading used to always say "Import an
+              account" even once the Advanced disclosure had a non-bulk kind
+              selected, so the submit button started a different job than
+              the heading described. */}
+          <h1>{kind === "bulk" ? "Import an account" : "Start an import"}</h1>
+          <p>
+            {kind === "bulk"
+              ? "Choose an account. We'll download its available history."
+              : "Choose the input for the selected job. We'll run that job."}
+          </p>
         </div>
         <span className={connected ? "control-online" : "control-error"}>
           {connected ? "Live connection" : "Reconnecting…"}
@@ -205,58 +237,46 @@ export default function Dashboard({
             }}
           >
             <h2>Start an import</h2>
-            <label>
-              What to download
-              <select
-                value={kind}
-                onChange={(e) =>
-                  setKind(
-                    // SAFETY: every <option> below is one of `Doc<"jobs">["kind"]`'s
-                    // literal values, so the <select>'s string value is always one
-                    // of them too.
-                    e.target.value as typeof kind,
-                  )
-                }
-              >
-                <option value="bulk">Account history</option>
-                <option value="profile">Profile</option>
-                <option value="post">Post / conversation</option>
-                <option value="live">Live X search</option>
-                <option value="archive">Inspect x.md archive</option>
-                <option value="followers">Followers</option>
-                <option value="following">Following</option>
-              </select>
-            </label>
-            <label>
+            {/* B5: one import form. The header's own "Import an account"
+                modal (src/App.tsx) only ever offers the common case — a
+                handle, an optional start date, and a submit button — so
+                that's what this form leads with too, using the same field
+                order and copy. The other job kinds this dashboard can also
+                start (profile/post/live search/archive/followers/following)
+                are operator tools that never feed search (see the note
+                below the account library), so they move behind a disclosure
+                instead of sitting in front of every visitor by default. */}
+            <label htmlFor="import-input">
               {Match.value(kind).pipe(
                 Match.when("post", () => "X post URL"),
                 Match.when("live", () => "Search query"),
                 Match.orElse(() => "X handle"),
               )}
-              <input
-                id="import-input"
-                required
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={Match.value(kind).pipe(
-                  Match.when("post", () => "https://x.com/…/status/…"),
-                  Match.when("live", () => "convex"),
-                  Match.orElse(() => "@handle"),
-                )}
-              />
             </label>
+            <input
+              id="import-input"
+              required
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={Match.value(kind).pipe(
+                Match.when("post", () => "https://x.com/…/status/…"),
+                Match.when("live", () => "convex"),
+                Match.orElse(() => "@handle"),
+              )}
+            />
             {kind === "bulk" && (
               <>
-                <label>
-                  History since (optional, YYYY-MM-DD)
-                  <input
-                    inputMode="numeric"
-                    pattern="\d{4}-\d{2}-\d{2}"
-                    placeholder="YYYY-MM-DD"
-                    value={since}
-                    onChange={(e) => setSince(e.target.value)}
-                  />
+                <label htmlFor="since">
+                  History since <small>Optional, YYYY-MM-DD</small>
                 </label>
+                <input
+                  id="since"
+                  inputMode="numeric"
+                  pattern="\d{4}-\d{2}-\d{2}"
+                  placeholder="YYYY-MM-DD"
+                  value={since}
+                  onChange={(e) => setSince(e.target.value)}
+                />
                 <label className="control-check">
                   <input
                     type="checkbox"
@@ -267,58 +287,50 @@ export default function Dashboard({
                 </label>
               </>
             )}
+            <details className="control-advanced">
+              <summary>Advanced: import something else</summary>
+              <label>
+                What to download
+                <select
+                  value={kind}
+                  onChange={(e) => {
+                    setKind(
+                      // SAFETY: every <option> below is one of
+                      // `Doc<"jobs">["kind"]`'s literal values, so the
+                      // <select>'s string value is always one of them too.
+                      e.target.value as typeof kind,
+                    );
+                    setInput("");
+                  }}
+                >
+                  <option value="bulk">Account history</option>
+                  <option value="profile">Profile</option>
+                  <option value="post">Post / conversation</option>
+                  <option value="live">Live X search</option>
+                  <option value="archive">Inspect x.md archive</option>
+                  <option value="followers">Followers</option>
+                  <option value="following">Following</option>
+                </select>
+              </label>
+            </details>
             <button type="submit" className="control-start" disabled={busy || !config?.indexing}>
-              {busy
-                ? "Starting..."
-                : kind === "bulk"
-                  ? "Import available history"
-                  : "Start download"}
+              {busy ? "Starting..." : kind === "bulk" ? "Import posts" : "Start download"}
             </button>
             {config && !config.indexing && (
               <p role="status">{indexingUnavailableMessage(config)}</p>
             )}
             <p role="status">{message}</p>
           </form>
-          <section className="control-connections">
-            <h2>Connections</h2>
-            {(
-              [
-                ["x.md", config?.xmd],
-                [
-                  config?.collectorMode === "outbound" ? "Download worker" : "Local file saving",
-                  config?.handoff,
-                ],
-                ["Search backend", config?.search],
-                ["Firecrawl", config?.firecrawl],
-                ["OpenAI", config?.openai],
-                ["AgentMail", config?.email],
-              ] as const
-            ).map(([name, ready]) => (
-              <div key={name}>
-                <span>{name}</span>
-                {/* Three different "we don't know" states, and none of them
-                    may be rendered as "Not connected": no session means we
-                    never asked, `undefined` means the query is in flight or
-                    the socket is down, and only a resolved `false` is a fact
-                    about configuration. Collapsing them is the
-                    configuration-versus-connectivity conflation to-do.md P0
-                    calls out. */}
-                <span>
-                  {!isAuthenticated
-                    ? "Sign in to view"
-                    : !config
-                      ? "Checking…"
-                      : ready
-                        ? "Configured"
-                        : "Not connected"}
-                </span>
-              </div>
-            ))}
-            <p>Configuration status, not a live health check. Provider keys stay on the backend.</p>
-          </section>
         </aside>
         <div className="control-main">
-          <Library ensureSession={ensureSession} />
+          {/* CodeRabbit (PR #48): pass this component's own `config`/`liveNow`
+              down instead of letting <Library> start a second, independent
+              `useLiveNow()` tick and a second `operator` query — two
+              separately-ticking clocks would send slightly different `now`
+              values, so the two queries would not actually share one Convex
+              subscription the way the comment near this file's own `config`
+              declaration claims. */}
+          <Library ensureSession={ensureSession} config={config} liveNow={liveNow} />
           <section className="control-feed" aria-label="Other imports">
             <h2>Other imports</h2>
             <p className="control-feed-note">
@@ -326,7 +338,10 @@ export default function Dashboard({
               account history imports, so they don't create or update a row in the account library
               above.
             </p>
-            {isAuthenticated && (
+            {/* B7: a checkbox that can never reveal anything is not worth
+                showing — only offer it once something has actually run
+                (dismissed or not). */}
+            {isAuthenticated && everRan && (
               <label className="control-feed-toggle">
                 <input
                   type="checkbox"
@@ -351,14 +366,15 @@ export default function Dashboard({
             ) : !jobs ? (
               <p>Loading jobs…</p>
             ) : jobs.length === 0 ? (
-              <div className="control-empty">
-                <h3>{showDismissed ? "Nothing here" : "No other imports yet"}</h3>
-                <p>
-                  {showDismissed
-                    ? "You haven't cleared any runs, and there are no others to show."
-                    : "Live searches, single posts, and profile/follower lookups will show up here."}
-                </p>
-              </div>
+              // B7: one compact line, same shape as the other three "nothing
+              // here yet" states this dashboard can show at once (account
+              // library, active queue, recent run history) — not its own
+              // bigger headline.
+              <p className="library-muted">
+                {showDismissed
+                  ? "You haven't cleared any runs, and there are no others to show."
+                  : "Nothing else has run yet. Live searches, single posts, and profile/follower lookups will show up here."}
+              </p>
             ) : (
               jobs.map((job) => <Job key={job._id} job={job} />)
             )}

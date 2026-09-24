@@ -28,6 +28,8 @@ describe("signed-out panels never impersonate a loading state", () => {
         summary: undefined,
         health: undefined,
         limits: undefined,
+        config: undefined,
+        liveNow: Date.now(),
         connected: true,
         ...signedOut,
       }),
@@ -49,13 +51,12 @@ describe("signed-out panels never impersonate a loading state", () => {
     }
   });
 
-  it("Provider limits badges say connect, not loading", () => {
+  it("Provider limits render nothing at all while signed out — there is nothing to report yet, not a loading state (B2)", () => {
     const html = renderToStaticMarkup(
       createElement(ProviderLimits, { limits: undefined, ...signedOut }),
     );
 
-    expect(html).not.toMatch(/loading…/);
-    expect(html).toMatch(/connect to view/);
+    expect(html).toBe("");
   });
 
   it("still shows a real loading state to a signed-in caller whose query is in flight", () => {

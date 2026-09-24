@@ -1,3 +1,4 @@
+import type { FunctionReturnType } from "convex/server";
 import { useConvexAuth, useConvexConnectionState, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { summaryQuery, healthQuery } from "./summaryApi";
@@ -8,6 +9,8 @@ import AccountLibrary from "./AccountLibrary";
 import RecentActivity from "./RecentActivity";
 import "../dashboard.css";
 import { useDashboardClock } from "./clock";
+
+type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
 
 // convex/summary.ts's `summary`/`health` queries take `now` as a REQUIRED
 // arg (a query must never read the wall clock itself) and expect the caller
@@ -29,8 +32,25 @@ import { useDashboardClock } from "./clock";
  * stay wherever the integrator's own Dashboard/App code already renders
  * them. `ensureSession` mirrors Dashboard.tsx's existing prop so the
  * integrator can wire it the same way.
+ *
+ * CodeRabbit (PR #48): `config`/`liveNow` are the integrator's own — never
+ * a second, independent `useLiveNow()` tick and `operator` query started
+ * here. Two separately-ticking clocks would send slightly different `now`
+ * values on every render, so Dashboard.tsx's own `operator` query (for its
+ * import-form gating) and this one would not actually share a Convex
+ * subscription despite matching query names — they'd just be two queries
+ * with almost-but-not-quite-equal args. Taking the same values Dashboard.tsx
+ * already computed is what makes them the exact same query.
  */
-export default function Library({ ensureSession }: { ensureSession: () => Promise<void> }) {
+export default function Library({
+  ensureSession,
+  config,
+  liveNow,
+}: {
+  ensureSession: () => Promise<void>;
+  config: OperatorConfig | undefined;
+  liveNow: number;
+}) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
   const now = useDashboardClock();
@@ -56,6 +76,8 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
         summary={summary}
         health={health}
         limits={limits}
+        config={config}
+        liveNow={liveNow}
         connected={connected}
         isAuthenticated={isAuthenticated}
       />

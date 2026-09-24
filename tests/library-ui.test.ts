@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { getFunctionName } from "convex/server";
-import type { UserIdentityAttributes } from "convex/server";
+import type { FunctionReturnType, UserIdentityAttributes } from "convex/server";
 import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
 import type { ConvexReactClientOptions } from "convex/react";
 import type { Value } from "convex/values";
@@ -46,10 +46,30 @@ import Library from "../src/library/Library";
  * each assertion.
  */
 
-const mockState = {
+type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
+
+// Named (not anonymous) so a mutable field like `config` keeps its full
+// declared union — an inferred/`satisfies` literal type would instead pin
+// it to `undefined`, the only value the initializer below actually uses,
+// and reject every later `mockState.config = {...}` fixture assignment.
+interface MockState {
+  isAuthenticated: boolean;
+  connected: boolean;
+  responses: Map<string, unknown>;
+  // CodeRabbit (PR #48): <Library> no longer queries `api.integrations.operator`
+  // itself — the integrator (src/Dashboard.tsx) passes its own `config`/
+  // `liveNow` down as props instead, so this fixture feeds those directly
+  // rather than through the `responses` map `setQuery` populates.
+  config: OperatorConfig | undefined;
+  liveNow: number;
+}
+
+const mockState: MockState = {
   isAuthenticated: true,
   connected: true,
   responses: new Map<string, unknown>(),
+  config: undefined,
+  liveNow: Date.now(),
 };
 
 /**
@@ -219,6 +239,8 @@ function reset() {
   mockState.isAuthenticated = true;
   mockState.connected = true;
   mockState.responses = new Map();
+  mockState.config = undefined;
+  mockState.liveNow = Date.now();
 }
 
 function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
@@ -240,7 +262,11 @@ function renderLibrary(): string {
             fetchAccessToken: () => Promise.resolve(null),
           }),
         },
-        createElement(Library, { ensureSession: () => Promise.resolve() }),
+        createElement(Library, {
+          ensureSession: () => Promise.resolve(),
+          config: mockState.config,
+          liveNow: mockState.liveNow,
+        }),
       ),
     );
   });
@@ -342,7 +368,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     expect(html).not.toContain("No accounts imported yet");
   });
 
-  it("renders provider limits honestly: none observed vs. a real throttle fact, never jobs.error", () => {
+  it("shows a real throttle fact, never jobs.error, and never a permanent 'no throttling' row (B2)", () => {
     reset();
     setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
@@ -364,20 +390,183 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(limitsAllQuery, limits);
     const html = renderLibrary();
     expect(html).toContain("Provider limits");
-    expect(html).toContain("No throttling reported");
     expect(html).toContain("Throttled on handoff");
     expect(html).toContain("Too many requests");
     expect(html).toContain("remaining allowance unknown");
+    // Only the actually-throttled provider gets a row — the two clear
+    // providers are not shown as a permanent "all fine" badge (B2 "hide
+    // provider limits unless something is actually throttled").
+    expect(html).not.toContain("No throttling reported");
   });
 
-  it("shows the provider-limits panel as loading, distinctly, before that query resolves", () => {
+  it("shows no provider-limits panel at all once nothing is throttled or while it is still loading (B2)", () => {
     reset();
     setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    // limitsAllQuery deliberately left unset in mockState.responses.
+    setQuery(limitsAllQuery, [
+      { kind: "none", provider: "xmd" },
+      { kind: "none", provider: "receiver" },
+      { kind: "none", provider: "search" },
+    ]);
+    const resolvedClear = renderLibrary();
+    expect(resolvedClear).not.toContain("Provider limits");
+
+    // limitsAllQuery deliberately left unset for this render -> still loading.
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const stillLoading = renderLibrary();
+    expect(stillLoading).not.toContain("Provider limits");
+  });
+
+  it("renders one merged status block with connections, health, and no env var names (B2)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
     const html = renderLibrary();
-    expect(html).toContain("Provider limits");
-    expect(html).toContain("x.md: loading…");
+    expect(html).toContain("Status");
+    expect(html).toContain("x.md");
+    expect(html).toContain("AgentMail");
+    expect(html).not.toContain("SEARCH_API_URL");
+    expect(html).not.toContain("X_MD_API_KEY");
+    expect(html).not.toContain("AGENTMAIL_API_KEY");
+    // The old duplicated disclaimer paragraphs (B1) are gone.
+    expect(html).not.toContain("Health is an observed fact");
+    expect(html).not.toContain("Configuration status, not a live health check");
+  });
+
+  it("labels the download worker by liveness, never by 'Configured'/'Not configured' (coordinator follow-up)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+
+    const baseConfig = {
+      indexing: true,
+      search: true,
+      firecrawl: true,
+      openai: true,
+      email: true,
+      xmd: true,
+      collectorMode: "outbound" as const,
+    };
+
+    mockState.config = {
+      ...baseConfig,
+      handoff: true,
+      handoffState: { kind: "live" as const, lastSeenAt: Date.now() },
+    };
+    const online = renderLibrary();
+    expect(online).toContain("Online");
+    expect(online).not.toContain("Not configured");
+
+    const lastSeenAt = Date.now() - 5 * 60_000;
+    mockState.config = {
+      ...baseConfig,
+      handoff: false,
+      handoffState: { kind: "live" as const, lastSeenAt },
+    };
+    const offline = renderLibrary();
+    // CodeRabbit (PR #48): `workerLastSeenAt` is the last heartbeat
+    // observed, not the moment the worker went offline — "last seen", not
+    // "since".
+    expect(offline).toContain("Offline");
+    expect(offline).toContain("last seen");
+    expect(offline).not.toContain("Offline since");
+    // A real configuration fact (x.md's key being set) must still say
+    // "Configured" — only the worker's own liveness row switches vocabulary.
+    expect(offline).toContain("Configured");
+    expect(offline).not.toContain("Not connected");
+
+    // CodeRabbit (PR #48): only the stable status word sits inside the
+    // polite live region — the still-ticking "last seen Xm ago" detail
+    // must be outside it, or a 30s clock refresh alone would re-announce an
+    // unchanged connection status to a screen reader.
+    const workerRowMatch = offline.match(
+      /Download worker<\/span><span class="library-muted">(.*?)<\/span><\/div>/,
+    );
+
+    expect(workerRowMatch).not.toBeNull();
+    const workerRowHtml = workerRowMatch![1];
+    expect(workerRowHtml).toContain('<span aria-live="polite">Offline</span>');
+    expect(workerRowHtml).not.toMatch(/aria-live="polite">[^<]*last seen/);
+  });
+
+  it("keeps a service's ticking 'last success' detail outside its polite live region (coordinator follow-up)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+
+    const health: ServiceStatus[] = [
+      {
+        service: "indexer",
+        kind: "known",
+        healthy: true,
+        stale: false,
+        observedAt: Date.now(),
+        lastSuccessAt: Date.now() - 3 * 60_000,
+      },
+      { service: "receiver", kind: "unknown" },
+      { service: "search", kind: "unknown" },
+    ];
+
+    setQuery(healthQuery, health);
+    const html = renderLibrary();
+    // CodeRabbit (PR #48): only the service's actual result ("Search
+    // indexer: Healthy") sits in the live region — "(last success 3m ago)"
+    // is recomputed on every `liveNow` re-render whether or not health
+    // changed, so it must sit outside the region or it re-announces
+    // unchanged status text every few seconds.
+    expect(html).toContain('<span aria-live="polite">Search indexer: Healthy</span>');
+    expect(html).not.toMatch(/aria-live="polite">[^<]*last success/);
+    expect(html).toContain("(last success");
+  });
+
+  it("hides a queued-work tile until the indexer actually reports that unit, and shows it once it does (A4)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(healthQuery, makeHealth());
+    // Default fixture: every providerQueuedWork unit is "unknown" — nothing
+    // has ever reported pendingWork. None of the three tiles should render.
+    setQuery(summaryQuery, makeSummary());
+    const hidden = renderLibrary();
+    expect(hidden).not.toContain("Queued posts");
+    expect(hidden).not.toContain("Queued captures");
+    expect(hidden).not.toContain("Queued indexer jobs");
+    expect(hidden).not.toContain("not yet known");
+
+    // Once one unit is actually reported (even as a known 0), only that
+    // tile appears — the other two, still never reported, stay hidden.
+    setQuery(
+      summaryQuery,
+      makeSummary({
+        providerQueuedWork: {
+          posts: { kind: "known", unit: "posts", value: 12 },
+          captures: { kind: "unknown", unit: "captures" },
+          jobs: { kind: "unknown", unit: "jobs" },
+        },
+      }),
+    );
+    const oneKnown = renderLibrary();
+    expect(oneKnown).toContain("Queued posts");
+    expect(oneKnown).not.toContain("Queued captures");
+    expect(oneKnown).not.toContain("Queued indexer jobs");
+  });
+
+  it("never repeats a stat tile's own number on a second line (A3)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(healthQuery, makeHealth());
+    setQuery(
+      summaryQuery,
+      makeSummary({ indexedPosts: { kind: "known", unit: "posts", value: 9_006 } }),
+    );
+    const html = renderLibrary();
+    // The big number appears exactly once — not once as the tile's value and
+    // again as a "9,006 posts" sub-line underneath it.
+    expect(html.match(/9,006/g) ?? []).toHaveLength(1);
   });
 });

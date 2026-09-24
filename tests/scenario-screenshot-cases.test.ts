@@ -221,6 +221,10 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(html).toContain("Searchable");
     expect(html).toContain("512 posts");
     expect(html).not.toContain("library-row-failure");
+    // /tmp/issues.md item 2: "Download complete" must never stand alone as
+    // if it meant the account's entire X history was retrieved.
+    expect(html).toContain("Download complete");
+    expect(html).toContain("means x.md finished handing over what it had for this run");
   });
 
   it("case 3: empty corpus — real zero from summary, empty account list, no invented numbers", async () => {
@@ -370,6 +374,8 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         summary: undefined,
         health,
         limits: undefined,
+        config: undefined,
+        liveNow: Date.now(),
         connected: false,
         isAuthenticated: true,
       }),

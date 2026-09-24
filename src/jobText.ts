@@ -95,6 +95,20 @@ export function acquisitionStatusLabel(status: JobStatus): string {
 }
 
 /**
+ * /tmp/issues.md item 2: "Download complete" reads like a claim that this
+ * account's ENTIRE X history is now in the index — a person can have tens
+ * of thousands of posts on X and still see this exact label after a run
+ * that only ever got through a few thousand of them. It only ever means one
+ * run of the acquisition job finished handing over whatever x.md returned
+ * for it, which is "everything x.md could give" for that run, never "all of
+ * X" for that account. Shared by every place that shows the "Download
+ * complete" badge for an account-history job, so the caveat reads the same
+ * way everywhere it appears.
+ */
+export const DOWNLOAD_COMPLETE_CAVEAT =
+  '"Download complete" means x.md finished handing over what it had for this run — not that every post on X was retrieved.';
+
+/**
  * One coherent sentence describing a single acquisition run's outcome: the
  * failure (verbatim, when there is one) plus how much was actually
  * retained. Never returns a bare internal progress string like "Saving raw

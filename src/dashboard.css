@@ -20,7 +20,6 @@
 .control-room small,
 .control-caveats p,
 .control-form p,
-.control-connections p,
 .control-feed-note {
   color: #b3b3b3;
   font-size: 13px;
@@ -54,6 +53,24 @@
   display: grid;
   gap: 8px;
   font-size: 13px;
+}
+/* B5: the form now matches the header modal's markup — a <label htmlFor>
+   next to its <input>, as siblings, not a label wrapping its input — so
+   pull each field's input back up against its own label instead of the
+   full 16px .control-form row gap. */
+.control-form label + input,
+.control-form label + select {
+  margin-top: -8px;
+}
+.control-advanced {
+  font-size: 13px;
+}
+.control-advanced summary {
+  cursor: pointer;
+  color: #b3b3b3;
+}
+.control-advanced label {
+  margin-top: 12px;
 }
 .control-form input,
 .control-form select {
@@ -93,26 +110,13 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* B5/B7: matches the header modal's ".primary" button (style.css) —
+   var(--accent) — instead of its own, slightly darker one-off color. */
 .control-form .control-start {
-  background: #edb998;
+  background: var(--accent);
   color: #151515;
-  border-color: #edb998;
+  border-color: var(--accent);
   font-weight: 600;
-}
-.control-connections {
-  margin-top: 32px;
-  border-top: 1px solid #333;
-  padding-top: 24px;
-}
-.control-connections > div {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  padding: 9px 0;
-  gap: 10px;
-}
-.control-connections > div span:last-child {
-  color: #bdbdbd;
 }
 .control-job {
   padding: 24px 0;
@@ -196,17 +200,8 @@
   margin-top: 6px;
   color: #aaa;
 }
-.control-empty {
-  padding: 42px 0;
-  border-top: 1px solid #333;
-  max-width: 440px;
-}
 .control-feed-note {
   margin: -8px 0 20px;
-}
-.control-empty p {
-  color: #bdbdbd;
-  line-height: 1.6;
 }
 .control-caveats {
   margin-bottom: 16px;
@@ -274,6 +269,17 @@
   color: #eee;
   display: grid;
   gap: 36px;
+}
+/* B7: <Library> also renders standalone (its own page-width block, hence
+   the padding above), but inside the dashboard it sits in
+   .control-main — which already inherits .control-room's own 28px side
+   padding — so its own horizontal padding was double-applying and pushing
+   it ~28px out of alignment with the "Other imports" section beside it.
+   Zero it out only in that nested context. */
+.control-main .library {
+  padding: 0;
+  max-width: none;
+  margin: 0;
 }
 .library-offline-banner {
   border: 1px solid #776149;
@@ -384,6 +390,21 @@
   text-decoration: underline;
   text-decoration-color: #565656;
   text-underline-offset: 3px;
+}
+/* B2: the merged Connections/Dependency health/Provider limits block. */
+.library-status {
+  display: grid;
+  gap: 10px;
+}
+.library-status-connections {
+  display: grid;
+  gap: 4px;
+}
+.library-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
 }
 .library-health-row {
   display: flex;

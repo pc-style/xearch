@@ -1,10 +1,12 @@
+import type { FunctionReturnType } from "convex/server";
+import { api } from "../../convex/_generated/api";
 import type { DashboardSummary } from "../../convex/lib/contracts";
 import type { ServiceStatus } from "../../convex/summary";
 import type { ProviderLimit } from "../../convex/limits";
-import { SERVICE_DISPLAY_NAME, serviceHealthLabel } from "../integrationStatus";
-import { countValue, countWithUnit, formatRelative } from "./format";
-import { Badge } from "./format.tsx";
-import ProviderLimits from "./ProviderLimits";
+import { countValue, formatRelative } from "./format";
+import StatusBlock from "./StatusBlock";
+
+type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
 
 /**
  * "Indexed posts", "Indexed people", the queue breakdown, and service
@@ -30,12 +32,20 @@ export default function OverviewStats({
   summary,
   health,
   limits,
+  config,
+  liveNow,
   connected,
   isAuthenticated,
 }: {
   summary: DashboardSummary | undefined;
   health: ServiceStatus[] | undefined;
   limits: ProviderLimit[] | undefined;
+  config: OperatorConfig | undefined;
+  // The exact, unbucketed clock `config` was fetched against — see
+  // src/library/clock.ts's `useLiveNow` comment for why the worker-liveness
+  // fields on `config` can never be re-derived against the coarser,
+  // bucketed `useDashboardClock` this component's other props use.
+  liveNow: number;
   connected: boolean;
   isAuthenticated: boolean;
 }) {
@@ -76,63 +86,31 @@ export default function OverviewStats({
           {/* The indexer's own backlog for the shared accounts, one tile per unit
               it can report in (convex/lib/contracts.ts
               providerQueuedWorkValidator). Never added together: a capture
-              is a file and a job is a run, and neither is a post. A unit no
-              account has reported reads "not yet known" — an indexer that
-              has said nothing is not an indexer with nothing left to do. */}
-          <Stat
-            label="Queued posts"
-            count={summary.providerQueuedWork.posts}
-            caveat="reported by the indexer; work reported in other units is in its own tile"
-          />
-          <Stat
-            label="Queued captures"
-            count={summary.providerQueuedWork.captures}
-            caveat="files the indexer has still to process — not a count of posts"
-          />
-          <Stat
-            label="Queued indexer jobs"
-            count={summary.providerQueuedWork.jobs}
-            caveat="runs outstanding on the indexer's side, not downloads on ours"
-          />
+              is a file and a job is a run, and neither is a post. The indexer
+              has never sent `pendingWork` in practice, so these three stay
+              "unknown" indefinitely today — rather than show that as a
+              permanent, unexplained "unknown" tile (A4), each one renders
+              nothing until the indexer actually reports a unit, and reappears
+              on its own the moment it does. */}
+          {summary.providerQueuedWork.posts.kind === "known" && (
+            <Stat label="Queued posts" count={summary.providerQueuedWork.posts} />
+          )}
+          {summary.providerQueuedWork.captures.kind === "known" && (
+            <Stat label="Queued captures" count={summary.providerQueuedWork.captures} />
+          )}
+          {summary.providerQueuedWork.jobs.kind === "known" && (
+            <Stat label="Queued indexer jobs" count={summary.providerQueuedWork.jobs} />
+          )}
           <Stat label="Failed & retryable" count={summary.queue.failedRetryable} />
         </div>
       )}
-      <div>
-        <h3 className="library-subhead">Dependency health</h3>
-        <div className="library-health-row" role="status">
-          {!health
-            ? (["indexer", "receiver", "search"] as const).map((service) => (
-                <Badge key={service} tone="neutral">
-                  {SERVICE_DISPLAY_NAME[service]}:{" "}
-                  {isAuthenticated ? "loading…" : "connect to view"}
-                </Badge>
-              ))
-            : health.map((status) => {
-                const tone =
-                  status.kind === "unknown"
-                    ? "neutral"
-                    : status.stale
-                      ? "warning"
-                      : status.healthy
-                        ? "positive"
-                        : "danger";
-
-                return (
-                  <Badge key={status.service} tone={tone}>
-                    {SERVICE_DISPLAY_NAME[status.service]}: {serviceHealthLabel(status)}
-                    {status.kind === "known" && status.lastSuccessAt !== undefined
-                      ? ` (last success ${formatRelative(status.lastSuccessAt)})`
-                      : ""}
-                  </Badge>
-                );
-              })}
-        </div>
-        <p className="library-muted">
-          Health is an observed fact with a timestamp, separate from whether a service is
-          configured. A stale reading is labelled stale, never shown as a fresh live zero.
-        </p>
-      </div>
-      <ProviderLimits limits={limits} isAuthenticated={isAuthenticated} />
+      <StatusBlock
+        config={config}
+        health={health}
+        limits={limits}
+        liveNow={liveNow}
+        isAuthenticated={isAuthenticated}
+      />
     </section>
   );
 }
@@ -141,25 +119,23 @@ function Stat({
   label,
   count,
   href,
-  caveat,
 }: {
   label: string;
   count: DashboardSummary["indexedPosts"];
   /** When set, the whole tile becomes a real link (an `<a>`, not a JS-only
    * click handler) to that in-page section — e.g. the account library. */
   href?: string;
-  /** An extra, always-visible line of honest scope context — never hidden
-   * in a `title` attribute — shown under the usual unit line. */
-  caveat?: string;
 }) {
   const unknown = count.kind === "unknown";
 
+  // A3: the tile used to repeat its own number on a second line ("9,006 /
+  // INDEXED POSTS / 9,006 posts"). The label already says what unit this is,
+  // so the value alone is the whole tile now — nothing invented to replace
+  // the redundant line with.
   const body = (
     <>
       <span className={`value${unknown ? " unknown" : ""}`}>{countValue(count)}</span>
       <span className="label">{label}</span>
-      <span className="sub">{unknown ? "not yet known" : countWithUnit(count)}</span>
-      {caveat && <span className="library-stat-caveat">{caveat}</span>}
     </>
   );
 
