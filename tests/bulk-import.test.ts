@@ -14,7 +14,7 @@ import {
   type RawObject,
 } from "../convex/lib/xmd";
 import { collectXmd, splitHistoryPage, type CollectionRequest } from "../convex/lib/collect";
-import { CAPTURE_MAX_BYTES, deliverCapture, type Capture } from "../convex/lib/handoff";
+import { CAPTURE_MAX_BYTES, deliverCapture, utf8Bytes, type Capture } from "../convex/lib/handoff";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
   return input instanceof Request ? input.url : input.toString();
@@ -593,6 +593,7 @@ describe("only a refusal caused by a limit counts as throttling", () => {
 describe("a history page the provider is slow to deliver", () => {
   const timeout = () =>
     new DOMException("The operation was aborted due to timeout", "TimeoutError");
+
   it("is reported as a retryable provider timeout, not a generic interruption", async () => {
     const xmd = new XmdClient("test-key", async () => {
       throw timeout();
@@ -601,9 +602,14 @@ describe("a history page the provider is slow to deliver", () => {
     const failure = await xmd.history("theo", { maxPosts: 5000 }).catch((cause: unknown) => cause);
 
     expect(failure).toBeInstanceOf(ProviderError);
-    expect((failure as ProviderError).code).toBe("provider_timeout");
-    expect((failure as ProviderError).retryable).toBe(true);
-    expect((failure as ProviderError).message).toContain("900 seconds");
+
+    // SAFETY: the assertion immediately above proves `failure` is a
+    // `ProviderError`; every code path this test exercises rejects with one.
+    const providerFailure = failure as ProviderError;
+
+    expect(providerFailure.code).toBe("provider_timeout");
+    expect(providerFailure.retryable).toBe(true);
+    expect(providerFailure.message).toContain("900 seconds");
   });
   it("gives history and bulk requests the long timeout and everything else the short one", () => {
     expect(timeoutFor("history")).toBe(HISTORY_TIMEOUT_MS);
@@ -663,13 +669,17 @@ describe("a history page the provider is slow to deliver", () => {
   });
   it("asks for the same full page again on the next attempt rather than a smaller one", async () => {
     const asked: string[] = [];
+
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(requestUrl(input));
+
       if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
       asked.push(url.searchParams.get("max_posts") ?? "");
       throw timeout();
     });
+
     const store = receiver();
+
     const failure = await collectXmd(
       new XmdClient("test-key", fetcher),
       request,
@@ -677,7 +687,12 @@ describe("a history page the provider is slow to deliver", () => {
         deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
       async () => {},
       () => NOW,
-    ).catch((error: unknown) => error);
+    ).catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(ProviderError);
+
+    // SAFETY: the assertion immediately above proves `failure` is a
+    // `ProviderError`; every code path this test exercises rejects with one.
     expect((failure as ProviderError).code).toBe("provider_timeout");
     // The second ask (more chains) still wants the full page.
     expect(asked).toEqual(["5000", "5000"]);

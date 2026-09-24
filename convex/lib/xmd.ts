@@ -404,6 +404,7 @@ const CHAIN_CONCURRENCY = "8";
 export const MAX_CHAIN_CONCURRENCY = 32;
 /** How long an ordinary x.md request may take before it is reported as `provider_timeout`. */
 export const REQUEST_TIMEOUT_MS = 120_000;
+
 /**
  * History pages get far longer. x.md's cost for a continuation page is in
  * walking the timeline back to `until`, not in the page size: in production
@@ -414,10 +415,12 @@ export const REQUEST_TIMEOUT_MS = 120_000;
  * `expire`).
  */
 export const HISTORY_TIMEOUT_MS = 900_000;
+
 /** The request timeout for one x.md call, by the operation it is reported under. */
 export function timeoutFor(operation: string): number {
   return operation === "history" || operation === "bulk" ? HISTORY_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 }
+
 export class XmdClient {
   readonly origin: string;
   constructor(
@@ -456,10 +459,7 @@ export class XmdClient {
 
     try {
       response = await this.fetcher(url, {
-        headers: {
-          Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
-          ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}),
-        },
+        headers,
         signal: signal ?? AbortSignal.timeout(timeoutFor(operation)),
         redirect: "error",
       });

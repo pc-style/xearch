@@ -458,13 +458,17 @@ export const pinIdentity = internalMutation({
     await ctx.db.patch(job._id, { expectedUserId: args.userId });
   },
 });
+
 /** How long a running job may go without any worker report before it is presumed dead. */
 export const EXPIRE_GRACE_MS = 180_000;
+
 export const expire = internalMutation({
   args: { jobId: v.id("jobs"), attempt: v.number() },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
+
     if (job?.status !== "running" || job.attempt !== args.attempt) return;
+
     // A worker that is still reporting progress (convex/worker.ts `report`
     // touches `updatedAt`; the VM worker pings its phase every minute during
     // a long fetch) is alive, however long x.md takes for one history page
@@ -472,8 +476,10 @@ export const expire = internalMutation({
     // for EXPIRE_GRACE_MS is presumed dead.
     if (Date.now() - job.updatedAt < EXPIRE_GRACE_MS) {
       await ctx.scheduler.runAfter(EXPIRE_GRACE_MS, internal.jobs.expire, args);
+
       return;
     }
+
     await ctx.db.patch(job._id, {
       status: job.count ? "partial" : "failed",
       error: "Collection timed out. Only acknowledged captures are recorded; retry to continue.",
@@ -568,6 +574,7 @@ export const finish = internalMutation({
     // job requeues itself.
     const wantsMoreUntil =
       !args.error && job.kind === "bulk" && job.autoContinue && !!args.nextUntil;
+
     const wantsMoreCursor = !args.error && job.kind !== "bulk" && !!args.nextCursor;
 
     const stalledUntil =
