@@ -1,9 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
-import { internal } from "../convex/_generated/api";
+import { api, internal } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { addDaysUTC, computeWindow } from "../convex/lib/historyWindow";
+
+// Every scenario below inserts a history-window job, and `insertHistoryWindowJob`
+// (convex/jobs.ts) schedules `internal.importer.run` via
+// `ctx.scheduler.runAfter(0, ...)`. `convex-test` runs scheduled functions
+// through a real `setTimeout`, so without fake timers that action can start
+// running (and, absent X_MD_API_KEY/RAW_CAPTURE_URL in this test's
+// environment, immediately fail and mutate the SAME account's
+// `historyBackfills` row) while this file's own `await t.run(...)`
+// assertions are still in flight — an intermittent race, not a real bug in
+// the code under test. Fake timers never advance on their own, so that
+// scheduled call simply never fires during these tests.
+beforeEach(() => vi.useFakeTimers());
+
+afterEach(() => vi.useRealTimers());
 
 /**
  * The deep-history backfill (convex/jobs.ts, convex/lib/historyWindow.ts):
@@ -137,7 +151,10 @@ describe("jobs.finish schedules the deep-history backfill", () => {
 
     expect(account).not.toBeNull();
     const backfill = await backfillFor(t, account!._id);
-    const expectedWindow = computeWindow("2021-01-01", 30, FLOOR)!;
+    // The first window's `until` starts one day after the bulk import's
+    // `oldest` — x.md's `until:` is exclusive, so `until: oldest` would skip
+    // whatever the bulk import didn't reach earlier on that same day.
+    const expectedWindow = computeWindow(addDaysUTC("2021-01-01", 1), 30, FLOOR)!;
 
     expect(backfill).toMatchObject({
       status: "running",
@@ -375,4 +392,67 @@ describe("a history-window job's own finish drives the backfill forward", () => 
     });
     expect(await historyJobsFor(t, accountId)).toHaveLength(1);
   });
+});
+
+describe("manual retry/cancel on a history-window job", () => {
+  // tests/setupEnv.ts lists this address on OPERATOR_EMAILS.
+  async function operatorSetup() {
+    const t = convexTest(schema, modules);
+
+    const owner = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        isAnonymous: false,
+        email: "operator@test.xearch",
+        emailVerificationTime: Date.now(),
+      }),
+    );
+
+    return { t, owner, operator: t.withIdentity({ subject: `${owner}|s` }) };
+  }
+
+  it("refuses to retry a stopped history-window job on its own", async () => {
+    const { t, owner, operator } = await operatorSetup();
+    const accountId = await insertAccount(t);
+    const jobId = await insertWindowJob(t, owner, accountId, "2020-11-02", "2020-12-02");
+
+    await t.run((ctx) => ctx.db.patch(jobId, { status: "failed" }));
+    await expect(operator.mutation(api.jobs.retry, { jobId })).rejects.toThrow(
+      "not retried on its own",
+    );
+  });
+
+  it("stops the backfill when its current window job is cancelled", async () => {
+    const { t, owner, operator } = await operatorSetup();
+    const { backfillId, jobId } = await seedBackfillFixture(t, owner);
+
+    await operator.mutation(api.jobs.cancel, { jobId });
+    const backfill = await t.run((ctx) => ctx.db.get(backfillId));
+
+    expect(backfill).toMatchObject({ status: "stopped", error: "Stopped by request." });
+  });
+
+  async function seedBackfillFixture(
+    t: Awaited<ReturnType<typeof setup>>["t"],
+    owner: Id<"users">,
+  ) {
+    const accountId = await insertAccount(t);
+
+    const backfillId = await t.run((ctx) =>
+      ctx.db.insert("historyBackfills", {
+        accountId,
+        handle: "theo",
+        owner,
+        since: FLOOR,
+        cursorUntil: "2020-12-02",
+        windowDays: 30,
+        postsFound: 0,
+        status: "running",
+        updatedAt: Date.now(),
+      }),
+    );
+
+    const jobId = await insertWindowJob(t, owner, accountId, "2020-11-02", "2020-12-02");
+
+    return { accountId, backfillId, jobId };
+  }
 });

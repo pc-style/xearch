@@ -146,13 +146,18 @@ export const rows = query({
     // Same shape of concurrency as the publications lookup above: one
     // indexed `by_account` read per candidate account, issued together
     // rather than one row at a time. Most accounts have never needed a
-    // backfill, so `.unique()` resolving to `null` is the common case.
+    // backfill, so `.first()` resolving to `null` is the common case. Not
+    // `.unique()`: this index carries no uniqueness constraint (see the
+    // comment beside `currentPublication`'s own `.first()` a few lines up
+    // for the same rule applied to accountPublications) — inside
+    // `Promise.all`, one throw here would fail this whole query and show no
+    // rows at all.
     const backfills = await Promise.all(
       candidates.map(([accountId]) =>
         ctx.db
           .query("historyBackfills")
           .withIndex("by_account", (q) => q.eq("accountId", accountId))
-          .unique(),
+          .first(),
       ),
     );
 

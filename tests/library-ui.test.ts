@@ -379,7 +379,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(healthQuery, makeHealth());
     const runningHtml = renderLibrary();
     expect(runningHtml).toContain(
-      "Older history: 12,340 posts found so far · searching back to 2019-03-01 (joined 2011-06-01)",
+      "Older history: 12,340 posts downloaded so far · downloading back to 2019-03-01 (joined 2011-06-01)",
     );
 
     reset();
@@ -395,7 +395,9 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
     const completeHtml = renderLibrary();
-    expect(completeHtml).toContain("Older history complete: 61,208 posts found");
+    expect(completeHtml).toContain(
+      "Older history download complete: 61,208 posts downloaded; search publication is separate",
+    );
 
     reset();
 

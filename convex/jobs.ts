@@ -14,6 +14,7 @@ import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 import {
   DEFAULT_JOIN_FLOOR,
   INITIAL_WINDOW_DAYS,
+  addDaysUTC,
   computeWindow,
   historyWindowQuery,
   isFinalWindow,
@@ -510,6 +511,29 @@ export const cancel = mutation({
       updatedAt: Date.now(),
     });
 
+    // A cancelled history-window job never reaches `jobs.finish` (see its own
+    // guard: only a "running" job can finish), so `onHistoryWindowFinished`
+    // never runs for it — without this, the backfill would stay "running"
+    // forever with no job behind it, since `maybeStartHistoryBackfill`'s
+    // "never twice" rule means nothing would ever start another one. By
+    // construction there is only ever ONE history-window job in flight per
+    // account (`launchNextWindow` only ever creates the next one after the
+    // previous one's own `finish` runs), so a cancelled history job is
+    // always the backfill's current one — no staleness check needed.
+    if (job.origin === "history" && job.historyFor) {
+      const backfill = await ctx.db
+        .query("historyBackfills")
+        .withIndex("by_account", (q) => q.eq("accountId", job.historyFor!))
+        .first();
+
+      if (backfill && backfill.status !== "complete" && backfill.status !== "stopped")
+        await ctx.db.patch(backfill._id, {
+          status: "stopped",
+          error: "Stopped by request.",
+          updatedAt: Date.now(),
+        });
+    }
+
     return null;
   },
 });
@@ -522,6 +546,23 @@ export const retry = mutation({
 
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
+
+    // A history-window job's own stop is also the backfill's stop
+    // (`onHistoryWindowFinished` marks the `historyBackfills` row "stopped"
+    // in the same `finish` call, or `cancel` above does it directly). That
+    // row's `postsFound` already folded in whatever this exact job attempt
+    // received before it stopped; retrying this one job in place and letting
+    // it complete would re-report that same total into `postsFound` a
+    // second time (jobs.ts `finish`'s `postsReceived` is cumulative on the
+    // job document across attempts, not a per-attempt delta), and would also
+    // need to know which job is still "current" for a backfill that no
+    // longer tracks one. A stopped backfill has no supported "resume one
+    // window" path — see `historyBackfills.status` (there is no "queued
+    // again" state for an already-stopped backfill).
+    if (job.origin === "history")
+      throw new ConvexError(
+        "This history window stopped along with its backfill; it is not retried on its own.",
+      );
 
     // A provider 4xx like "invalid_thread"/"not_found" fails the exact same
     // way on every attempt — src/JobRow.tsx already hides the Retry button
@@ -1196,7 +1237,14 @@ async function maybeStartHistoryBackfill(
   const existing = await ctx.db
     .query("historyBackfills")
     .withIndex("by_account", (q) => q.eq("accountId", account._id))
-    .unique();
+    // Not `.unique()`: this index carries no uniqueness constraint (Convex
+    // never enforces one on any index), so a duplicate row — however it got
+    // there — would make `.unique()` throw and fail the whole bulk job's
+    // `finish`. `.first()` picks the oldest by Convex's default
+    // `_creationTime` order, which is exactly the one this function itself
+    // guarantees is the only one, by never inserting a second row once one
+    // exists.
+    .first();
 
   if (existing) return;
 
@@ -1204,12 +1252,23 @@ async function maybeStartHistoryBackfill(
 
   if (oldest <= floor) return; // Nothing older than the bulk import already covered.
 
+  // x.md's search `until:` is exclusive of that whole day. The bulk import's
+  // own `oldest` is the OLDEST post it actually returned, which can land
+  // anywhere in that day — a first window with `until: oldest` would ask
+  // for nothing on or after `oldest`'s day at all, silently skipping
+  // whatever came earlier that same day (the bulk import only ever fetched
+  // down to the single oldest post, never "the rest of its day"). Starting
+  // one day later closes that gap; any overlap with the bulk import itself
+  // is on the indexer's side to dedupe, the same as every other window
+  // boundary already relies on.
+  const startUntil = addDaysUTC(oldest, 1);
+
   const backfillId = await ctx.db.insert("historyBackfills", {
     accountId: account._id,
     handle: account.handle,
     owner,
     since: floor,
-    cursorUntil: oldest,
+    cursorUntil: startUntil,
     windowDays: INITIAL_WINDOW_DAYS,
     postsFound: 0,
     status: "queued",
@@ -1222,7 +1281,7 @@ async function maybeStartHistoryBackfill(
     owner,
     account._id,
     account.handle,
-    oldest,
+    startUntil,
     INITIAL_WINDOW_DAYS,
     floor,
   );
@@ -1250,7 +1309,11 @@ async function onHistoryWindowFinished(
   const backfill = await ctx.db
     .query("historyBackfills")
     .withIndex("by_account", (q) => q.eq("accountId", accountId))
-    .unique();
+    // `.first()`, not `.unique()` — same reasoning as `maybeStartHistoryBackfill`
+    // above: this index has no uniqueness constraint, so `.unique()` would
+    // throw (and fail the whole window job's `finish`) if a duplicate row
+    // ever existed.
+    .first();
 
   // No backfill row, or it already stopped/completed: nothing to update. A
   // stray finish on an already-terminal backfill should never resurrect it.

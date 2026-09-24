@@ -169,21 +169,25 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
  * The account library row's one summary line for its deep-history backfill
  * (convex/jobs.ts, convex/lib/historyWindow.ts) — never more than one line,
  * and never a second post count competing with `row.searchablePostCount`
- * above (this is the backfill's own running total of posts it found across
- * every window job it has scheduled, a different number from the indexer's
- * committed searchable count).
+ * above. `postsFound` counts posts x.md handed over during the backfill —
+ * DOWNLOADED, not indexed — so this always says "downloaded", never "found"
+ * or a bare count that could be misread as this many are now searchable;
+ * whether they are is the indexer's own separate job (see
+ * DOWNLOAD_COMPLETE_CAVEAT above, which makes the same distinction for the
+ * ordinary bulk-download badge).
  */
 function backfillSummary(backfill: NonNullable<AccountLibraryRow["backfill"]>): string {
-  const found = `${backfill.postsFound.toLocaleString()} post${backfill.postsFound === 1 ? "" : "s"}`;
+  const downloaded = `${backfill.postsFound.toLocaleString()} post${backfill.postsFound === 1 ? "" : "s"} downloaded`;
 
-  if (backfill.status === "complete") return `Older history complete: ${found} found`;
+  if (backfill.status === "complete")
+    return `Older history download complete: ${downloaded}; search publication is separate`;
 
   if (backfill.status === "stopped")
     return `Older history stopped: ${backfill.error ?? "an unreported error"}`;
 
   const joined = backfill.joined ? ` (joined ${backfill.joined})` : "";
 
-  return `Older history: ${found} found so far · searching back to ${backfill.cursorUntil}${joined}`;
+  return `Older history: ${downloaded} so far · downloading back to ${backfill.cursorUntil}${joined}`;
 }
 
 // No "continue" case: acquisition never waits on a person to ask for the
