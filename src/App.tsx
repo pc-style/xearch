@@ -302,6 +302,10 @@ export default function App() {
   // --- Data -----------------------------------------------------------------
   const accountResults = useQuery(api.search.accounts, () => ({}));
   const accounts = () => accountResults() ?? [];
+
+  const accountAvatar = (handle: string) =>
+    accounts().find((a) => a.handle.toLowerCase() === handle.toLowerCase())?.avatar;
+
   // Decoration: a failing wall read leaves the posts column out, nothing more.
   const wallPosts = useQuery(api.wall.posts, () => ({}), { soft: true });
   // `configured.indexing` decays with real time (worker liveness), so it is
@@ -1230,6 +1234,7 @@ export default function App() {
                   frontendStats={frontendStats()}
                   statsForNerds={statsForNerds()}
                   isOperator={isOperator()}
+                  avatarFor={accountAvatar}
                 />
               </Show>
             </div>
