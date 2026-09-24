@@ -10,6 +10,7 @@ import { user, requireOperator } from "./access";
 import { activeThrottleUntil, loadProviderLimit } from "./limits";
 import { handle, statusUrl } from "./lib/xmd";
 import { canonicalQuery } from "./lib/search";
+import { capturePostHog, sanitizeError } from "./lib/posthog";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 import {
   DEFAULT_JOIN_FLOOR,
@@ -315,6 +316,11 @@ export const start = mutation({
     });
 
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+    await capturePostHog(ctx, {
+      distinctId: owner,
+      event: "job_started",
+      properties: { job_id: id, kind: args.kind, origin: previous?.origin ?? "manual" },
+    });
 
     return id;
   },
@@ -418,8 +424,10 @@ export const startDiscovered = internalMutation({
     // rather than trusting the caller.
     if (candidates.length > 0) return null;
 
+    const owner = await discoveryOwner(ctx);
+
     const id = await ctx.db.insert("jobs", {
-      owner: await discoveryOwner(ctx),
+      owner,
       kind: "bulk",
       input,
       refresh: false,
@@ -436,6 +444,11 @@ export const startDiscovered = internalMutation({
     });
 
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+    await capturePostHog(ctx, {
+      distinctId: owner,
+      event: "job_started",
+      properties: { job_id: id, kind: "bulk", origin: "discovered" },
+    });
 
     return id;
   },
@@ -948,6 +961,35 @@ export const finish = internalMutation({
     }
 
     await ctx.db.patch(job._id, patch);
+    await capturePostHog(ctx, {
+      distinctId: job.owner,
+      event: "job_attempt_finished",
+      properties: {
+        job_id: job._id,
+        kind: job.kind,
+        origin: job.origin ?? "manual",
+        provider: "x.md",
+        stage: job.phase ?? "unknown",
+        status: patch.status ?? "unknown",
+        attempt: args.attempt,
+        duration_ms: Date.now() - job.updatedAt,
+        records: patch.count ?? job.count,
+        error: args.error ? sanitizeError(args.error) : "",
+      },
+    });
+
+    if (patch.status === "failed" || patch.status === "partial")
+      await capturePostHog(ctx, {
+        distinctId: job.owner,
+        event: "job_failed",
+        properties: {
+          job_id: job._id,
+          kind: job.kind,
+          status: patch.status,
+          provider: "x.md",
+          duration_ms: Date.now() - job._creationTime,
+        },
+      });
 
     if (continueImport)
       await ctx.scheduler.runAfter(2000, internal.importer.run, {
@@ -1182,6 +1224,11 @@ async function insertHistoryWindowJob(
   });
 
   await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+  await capturePostHog(ctx, {
+    distinctId: owner,
+    event: "job_started",
+    properties: { job_id: id, kind: "live", origin: "history" },
+  });
 
   return id;
 }

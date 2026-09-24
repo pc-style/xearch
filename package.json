@@ -20,7 +20,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "deploy": "bunx @convex-dev/static-hosting deploy",
-    "deploy:prod": "CONVEX_DEPLOYMENT=prod:utmost-kudu-321 NODE_OPTIONS=--max-old-space-size=3072 bunx @convex-dev/static-hosting deploy --build-command 'bun run build'",
+    "deploy:prod": "CONVEX_DEPLOYMENT=prod:utmost-kudu-321 NODE_OPTIONS=--max-old-space-size=3072 bash scripts/with-posthog-build-env.sh bunx @convex-dev/static-hosting deploy --build-command 'bun run build'",
     "react-doctor": "npx react-doctor@latest src --no-supply-chain",
     "build:operator": "tsc --noEmit && VITE_XEARCH_OPERATOR=1 vite build --outDir dist-operator --emptyOutDir"
   },
@@ -29,9 +29,11 @@
     "@convex-dev/auth": "latest",
     "@convex-dev/static-hosting": "latest",
     "@firecrawl/firecrawl-convex": "latest",
+    "@posthog/convex": "^2.1.5",
     "convex": "^1.45.0",
     "effect": "4.0.0-rc.112",
     "lucide-react": "latest",
+    "posthog-js": "^1.434.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.0.0"
@@ -39,6 +41,7 @@
   "devDependencies": {
     "@effect/tsgo": "0.44.0",
     "@oxlint/plugins": "1.82.0",
+    "@posthog/rollup-plugin": "^1.6.0",
     "@types/node": "^26.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

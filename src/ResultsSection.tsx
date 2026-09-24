@@ -22,6 +22,7 @@ import { OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { OPERATOR_BUILD } from "./operatorSurface";
 import type { SearchAttemptSnapshot } from "./searchTelemetry";
 import { ModalKind, ViewMode } from "./uiState";
+import { capture, redactEmail } from "./posthog";
 
 type SessionResult = Doc<"sessions">;
 
@@ -226,7 +227,18 @@ export function PostCard({
           <button type="button" disabled={!isOperator} onClick={onThread}>
             Fetch conversation from X
           </button>
-          <a href={post.url} target="_blank" rel="noreferrer">
+          <a
+            href={post.url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => {
+              capture("result_opened", {
+                query: redactEmail(query),
+                result_url: redactEmail(post.url),
+              });
+              capture("search_success", { method: "opened", query: redactEmail(query) });
+            }}
+          >
             Open on X <ArrowUpRight size={14} />
           </a>
         </div>

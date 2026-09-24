@@ -80,6 +80,7 @@ export const me = query({
   returns: v.union(
     v.null(),
     v.object({
+      id: v.id("users"),
       isAnonymous: v.boolean(),
       email: v.union(v.string(), v.null()),
       emailVerified: v.boolean(),
@@ -94,6 +95,7 @@ export const me = query({
     if (!account) return null;
 
     return {
+      id,
       isAnonymous: account.isAnonymous ?? false,
       email: account.email ?? null,
       emailVerified: !!account.emailVerificationTime,

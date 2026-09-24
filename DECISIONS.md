@@ -217,3 +217,23 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
 - **Reviews.** CodeRabbit reviews every push; when it reported "rate
   limited" on #41's final head, codex reviewed the diff instead, per the
   house rule.
+
+# PostHog setup (2026-09-24)
+
+- Use EU project 283153 for production search and operator activity. A useful
+  search ends when someone opens or bookmarks a result, or AgentMail confirms
+  the results email was sent. The funnel starts at form submission.
+- Record queries, result URLs, job IDs, stages, provider, duration, status, and
+  sanitized errors. Never send email addresses. Identify only non-anonymous
+  users by stable ID and role. Replay all sessions while traffic is small;
+  show the search field and mask other inputs.
+- Keep separate search journey and operator health dashboards. New exceptions
+  and terminal failed jobs go to Discord immediately. In-app/email insight
+  alerts run hourly because PostHog's real-time insight alerts require
+  Scale/Enterprise. Performance thresholds wait for a production baseline.
+- The personal API key for source-map upload is in the private VM file
+  `~/xearch-data/posthog-build.env`; both build variants uploaded source maps
+  successfully. The frontend and Convex code is prepared but is not published
+  by this branch. Native Convex
+  exception forwarding requires Convex Pro and has no documented redaction
+  hook, so it is not enabled while the no-email-address rule applies.

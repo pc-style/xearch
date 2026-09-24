@@ -217,8 +217,9 @@ describe("email sign-in journey", () => {
   it("reports identity through auth.me before and after verification", async () => {
     const t = setup();
     expect(await t.query(api.auth.me, {})).toBeNull();
-    const { identity } = await signInWithEmail(t, "me@example.com");
+    const { identity, userId } = await signInWithEmail(t, "me@example.com");
     expect(await identity.query(api.auth.me, {})).toEqual({
+      id: userId,
       isAnonymous: false,
       email: "me@example.com",
       emailVerified: true,

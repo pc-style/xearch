@@ -13,6 +13,7 @@ import { decodeSearchResponse } from "./lib/results";
 import { serviceToken } from "./lib/serviceAuth";
 import { summaryScopeValidator } from "./lib/contracts";
 import { user } from "./access";
+import { capturePostHog } from "./lib/posthog";
 import type { Doc } from "./_generated/dataModel";
 
 /** Wire request body for the external search service (docs/integration-contract.md). */
@@ -327,6 +328,7 @@ export const execute = internalAction({
     const session: Doc<"sessions"> | null = await ctx.runQuery(internal.search.get, { sessionId });
 
     if (!session || session.status !== "queued") return null;
+    const startedAt = Date.now();
 
     try {
       const parsed = parseQuery(session.raw);
@@ -359,12 +361,33 @@ export const execute = internalAction({
 
       if (attempt.kind === "ok") {
         await ctx.runMutation(internal.search.complete, { sessionId, ...attempt.result });
+        await capturePostHog(ctx, {
+          distinctId: session.owner,
+          event: "search_service_completed",
+          properties: {
+            session_id: sessionId,
+            result_count: attempt.result.rows.length,
+            duration_ms: Date.now() - startedAt,
+            retried,
+            sort: session.sort,
+          },
+        });
       } else {
         await ctx.runMutation(internal.search.complete, {
           sessionId,
           rows: [],
           warnings: [],
           error: failureMessage(attempt.failure, retried),
+        });
+        await capturePostHog(ctx, {
+          distinctId: session.owner,
+          event: "search_service_failed",
+          properties: {
+            session_id: sessionId,
+            failure_kind: attempt.failure.kind,
+            duration_ms: Date.now() - startedAt,
+            retried,
+          },
         });
       }
     } catch {
@@ -378,6 +401,16 @@ export const execute = internalAction({
         warnings: [],
         error:
           "The search service could not return a valid result page. Try again or check its connection.",
+      });
+      await capturePostHog(ctx, {
+        distinctId: session.owner,
+        event: "search_service_failed",
+        properties: {
+          session_id: sessionId,
+          failure_kind: "unexpected",
+          duration_ms: Date.now() - startedAt,
+          retried: false,
+        },
       });
     }
 
@@ -458,7 +491,7 @@ export const bookmarks = query({
 
 export const bookmark = mutation({
   args: { tweetId: v.string(), sessionId: v.optional(v.id("sessions")) },
-  returns: v.null(),
+  returns: v.boolean(),
   handler: async (ctx, { tweetId, sessionId }) => {
     const owner = await user(ctx);
 
@@ -470,7 +503,7 @@ export const bookmark = mutation({
     if (existing) {
       await ctx.db.delete(existing._id);
 
-      return null;
+      return false;
     }
 
     const session = sessionId ? await ctx.db.get(sessionId) : null;
@@ -489,6 +522,6 @@ export const bookmark = mutation({
       throw new ConvexError("Remove a bookmark before saving another.");
     await ctx.db.insert("bookmarks", { owner, post });
 
-    return null;
+    return true;
   },
 });

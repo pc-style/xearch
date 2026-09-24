@@ -11,6 +11,8 @@ const allowed = [
   "X_MD_API_KEY",
   "X_MD_BASE_URL",
   "FIRECRAWL_API_KEY",
+  "POSTHOG_PROJECT_TOKEN",
+  "POSTHOG_HOST",
   "OPENAI_API_KEY",
   "OPENAI_MODEL",
   "AGENTMAIL_API_KEY",
@@ -23,8 +25,14 @@ const allowed = [
   "DATA_SERVICE_TOKEN",
 ];
 
+// The component requires these values, but local activity must never reach PostHog.
+const localOnly = {
+  POSTHOG_PROJECT_TOKEN: "disabled",
+  POSTHOG_HOST: "https://eu.i.posthog.com",
+};
+
 for (const name of allowed) {
-  const value = env[name];
+  const value = name in localOnly ? localOnly[name] : env[name];
 
   if (!value?.trim()) continue;
 
