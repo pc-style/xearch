@@ -5,7 +5,8 @@ import {
   internalQuery,
   internalAction,
 } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
+import { PostHog } from "@posthog/convex";
 import { v, ConvexError } from "convex/values";
 import schema, { postFields, searchStatsFields, sortValidator } from "./schema";
 import { parseQuery, assertAuthorizedScope, STALE_CURSOR_STATUS } from "./lib/search";
@@ -14,6 +15,8 @@ import { serviceToken } from "./lib/serviceAuth";
 import { summaryScopeValidator } from "./lib/contracts";
 import { user } from "./access";
 import type { Doc } from "./_generated/dataModel";
+
+const posthog = new PostHog(components.posthog);
 
 /** Wire request body for the external search service (docs/integration-contract.md). */
 type SearchRequestBody = {
@@ -327,6 +330,7 @@ export const execute = internalAction({
     const session: Doc<"sessions"> | null = await ctx.runQuery(internal.search.get, { sessionId });
 
     if (!session || session.status !== "queued") return null;
+    const startedAt = Date.now();
 
     try {
       const parsed = parseQuery(session.raw);
@@ -359,12 +363,33 @@ export const execute = internalAction({
 
       if (attempt.kind === "ok") {
         await ctx.runMutation(internal.search.complete, { sessionId, ...attempt.result });
+        await posthog.capture(ctx, {
+          distinctId: session.owner,
+          event: "search_service_completed",
+          properties: {
+            session_id: sessionId,
+            result_count: attempt.result.rows.length,
+            duration_ms: Date.now() - startedAt,
+            retried,
+            sort: session.sort,
+          },
+        });
       } else {
         await ctx.runMutation(internal.search.complete, {
           sessionId,
           rows: [],
           warnings: [],
           error: failureMessage(attempt.failure, retried),
+        });
+        await posthog.capture(ctx, {
+          distinctId: session.owner,
+          event: "search_service_failed",
+          properties: {
+            session_id: sessionId,
+            failure_kind: attempt.failure.kind,
+            duration_ms: Date.now() - startedAt,
+            retried,
+          },
         });
       }
     } catch {
@@ -378,6 +403,16 @@ export const execute = internalAction({
         warnings: [],
         error:
           "The search service could not return a valid result page. Try again or check its connection.",
+      });
+      await posthog.capture(ctx, {
+        distinctId: session.owner,
+        event: "search_service_failed",
+        properties: {
+          session_id: sessionId,
+          failure_kind: "unexpected",
+          duration_ms: Date.now() - startedAt,
+          retried: false,
+        },
       });
     }
 

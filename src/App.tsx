@@ -2,6 +2,7 @@ import {
   Profiler,
   Suspense,
   useDeferredValue,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -72,6 +73,7 @@ import { ModalKind, ViewMode } from "./uiState";
 import { isAlreadySaved, sortChangeQuery, sortLabel, sorts } from "./sortOptions";
 import { ringAvatarUrl } from "./avatarUrl";
 import { splitRing } from "./ring";
+import { capture, captureError, identifyUser, redactEmail } from "./posthog";
 
 type SearchRequest = FlowSearchRequest & {
   readonly attemptId: SearchAttemptId;
@@ -461,6 +463,11 @@ export default function App() {
   // notice waits for a confirmed `false` so an operator never sees it flash.
   const isOperator = useQuery(api.access.isOperator, isAuthenticated ? operatorArgs() : "skip");
 
+  useEffect(() => {
+    if (me && !me.isAnonymous && isOperator !== undefined)
+      identifyUser(me.id, isOperator ? "operator" : "user");
+  }, [me, isOperator]);
+
   let queryError = "";
 
   try {
@@ -537,8 +544,11 @@ export default function App() {
   // the real completion once the new page actually lands (`commitResult`
   // never re-marks a terminal attempt).
   const sessionAttemptRef = useRef<number | null>(null);
+  const searchStartedAt = useRef(new Map<number, number>());
+  const capturedResults = useRef(new Set<number>());
 
   function runSearch(request: SearchRequest): boolean {
+    searchStartedAt.current.set(request.attemptId, performance.now());
     telemetry.startAttempt({
       attemptId: request.attemptId,
       trigger: request.trigger,
@@ -569,6 +579,12 @@ export default function App() {
       },
       (cause: unknown) => {
         if (latestAttempt.current !== request.attemptId) return;
+        captureError(cause instanceof Error ? cause : new Error(describeError(cause)), "search");
+        capture("search_failed", {
+          query: redactEmail(request.raw),
+          trigger: request.trigger,
+          sort: request.sort,
+        });
         setNotice(describeError(cause));
         setBusy(false);
       },
@@ -625,6 +641,21 @@ export default function App() {
     if (sessionAttemptRef.current !== req.attemptId) return;
 
     if (result.status === "complete" || result.status === "failed") {
+      if (!capturedResults.current.has(req.attemptId)) {
+        capturedResults.current.add(req.attemptId);
+        capture(result.status === "complete" ? "search_results_loaded" : "search_failed", {
+          query: redactEmail(req.raw),
+          trigger: req.trigger,
+          sort: req.sort,
+          result_count: result.rows.length,
+          duration_ms: Math.round(
+            performance.now() - (searchStartedAt.current.get(req.attemptId) ?? performance.now()),
+          ),
+          session_id: result._id,
+        });
+        searchStartedAt.current.delete(req.attemptId);
+      }
+
       telemetry.markTerminal({
         attemptId: req.attemptId,
         status: result.status === "complete" ? SearchStatus.Complete : SearchStatus.Failed,
@@ -746,11 +777,14 @@ export default function App() {
   const runSave = async () => {
     await ensureSession();
     await save({ raw, sort });
+    capture("search_saved", { query: redactEmail(raw), sort });
   };
 
   const runBookmark = async (post: ResultPost) => {
     await ensureSession();
     await bookmark({ tweetId: post.tweetId, sessionId: sessionId ?? undefined });
+    capture("result_bookmarked", { query: redactEmail(raw), result_url: redactEmail(post.url) });
+    capture("search_success", { method: "bookmarked", query: redactEmail(raw) });
   };
 
   const runRemoveSaved = async (id: Id<"saved">) => {
@@ -819,6 +853,7 @@ export default function App() {
   const search = (query: string, nextSort?: Sort) => {
     const trimmed = query.trim();
     const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort);
+
     appendModeRef.current = false;
     // No explicit liveImportJob reset needed here: its query is compared
     // against `raw` at the point of use (below), so a stale job from a
@@ -1121,7 +1156,10 @@ export default function App() {
             onSubmit={(e) => {
               e.preventDefault();
 
-              if (draft.trim()) search(draft);
+              if (draft.trim()) {
+                capture("search_submitted", { query: redactEmail(draft.trim()), sort });
+                search(draft);
+              }
             }}
           >
             <label htmlFor="query">Search posts</label>

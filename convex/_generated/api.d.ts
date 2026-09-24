@@ -24,6 +24,7 @@ import type * as lib_collect from "../lib/collect.js";
 import type * as lib_contracts from "../lib/contracts.js";
 import type * as lib_handoff from "../lib/handoff.js";
 import type * as lib_historyWindow from "../lib/historyWindow.js";
+import type * as lib_posthog from "../lib/posthog.js";
 import type * as lib_results from "../lib/results.js";
 import type * as lib_search from "../lib/search.js";
 import type * as lib_serviceAuth from "../lib/serviceAuth.js";
@@ -31,6 +32,7 @@ import type * as lib_xmd from "../lib/xmd.js";
 import type * as library from "../library.js";
 import type * as limits from "../limits.js";
 import type * as publication from "../publication.js";
+import type * as queue from "../queue.js";
 import type * as search from "../search.js";
 import type * as summary from "../summary.js";
 import type * as worker from "../worker.js";
@@ -58,6 +60,7 @@ declare const fullApi: ApiFromModules<{
   "lib/contracts": typeof lib_contracts;
   "lib/handoff": typeof lib_handoff;
   "lib/historyWindow": typeof lib_historyWindow;
+  "lib/posthog": typeof lib_posthog;
   "lib/results": typeof lib_results;
   "lib/search": typeof lib_search;
   "lib/serviceAuth": typeof lib_serviceAuth;
@@ -65,6 +68,7 @@ declare const fullApi: ApiFromModules<{
   library: typeof library;
   limits: typeof limits;
   publication: typeof publication;
+  queue: typeof queue;
   search: typeof search;
   summary: typeof summary;
   worker: typeof worker;
@@ -100,4 +104,5 @@ export declare const components: {
   firecrawl: import("@firecrawl/firecrawl-convex/_generated/component.js").ComponentApi<"firecrawl">;
   agentmail: import("@agentmail/convex/_generated/component.js").ComponentApi<"agentmail">;
   staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
+  posthog: import("@posthog/convex/_generated/component.js").ComponentApi<"posthog">;
 };

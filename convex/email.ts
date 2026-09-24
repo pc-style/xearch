@@ -1,12 +1,16 @@
-import { mutation, query } from "./_generated/server";
-import { components } from "./_generated/api";
+import { mutation, query, internalAction, internalQuery } from "./_generated/server";
+import { components, internal } from "./_generated/api";
 import { AgentMail, vOutboundStatus, type OutboundId } from "@agentmail/convex";
+import { PostHog } from "@posthog/convex";
 import { v, ConvexError } from "convex/values";
 import { user } from "./access";
 import schema from "./schema";
 import type { Doc } from "./_generated/dataModel";
+import { redactEmail } from "./lib/posthog";
 
 const mail = new AgentMail(components.agentmail);
+
+const posthog = new PostHog(components.posthog);
 
 const DIGEST_ROW_LIMIT = 10;
 
@@ -94,7 +98,59 @@ export const send = mutation({
       text,
     });
 
-    await ctx.db.insert("deliveries", { owner, outboundId, query: result.raw });
+    const deliveryId = await ctx.db.insert("deliveries", { owner, outboundId, query: result.raw });
+    await ctx.scheduler.runAfter(15_000, internal.email.checkDelivery, { deliveryId, attempt: 0 });
+
+    return null;
+  },
+});
+
+export const deliveryState = internalQuery({
+  args: { deliveryId: v.id("deliveries") },
+  returns: v.union(
+    v.null(),
+    v.object({ owner: v.id("users"), query: v.string(), status: vOutboundStatus }),
+  ),
+  handler: async (ctx, { deliveryId }) => {
+    const delivery = await ctx.db.get(deliveryId);
+
+    if (!delivery) return null;
+    // SAFETY: `send` stores only AgentMail's branded OutboundId in this field;
+    // the schema uses a plain string because it cannot validate that brand.
+    const status = await mail.status(ctx, delivery.outboundId as OutboundId);
+
+    return status ? { owner: delivery.owner, query: delivery.query, status: status.status } : null;
+  },
+});
+
+export const checkDelivery = internalAction({
+  args: { deliveryId: v.id("deliveries"), attempt: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const state = await ctx.runQuery(internal.email.deliveryState, { deliveryId: args.deliveryId });
+
+    if (!state) return null;
+
+    if (state.status === "sent" || state.status === "delivered") {
+      await posthog.capture(ctx, {
+        distinctId: state.owner,
+        event: "results_email_sent",
+        properties: { delivery_id: args.deliveryId, query: redactEmail(state.query) },
+      });
+      await posthog.capture(ctx, {
+        distinctId: state.owner,
+        event: "search_success",
+        properties: { method: "emailed", query: redactEmail(state.query) },
+      });
+
+      return null;
+    }
+
+    if (state.status === "pending" && args.attempt < 20)
+      await ctx.scheduler.runAfter(15_000, internal.email.checkDelivery, {
+        deliveryId: args.deliveryId,
+        attempt: args.attempt + 1,
+      });
 
     return null;
   },

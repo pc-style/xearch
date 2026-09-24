@@ -29,9 +29,11 @@
     "@convex-dev/auth": "latest",
     "@convex-dev/static-hosting": "latest",
     "@firecrawl/firecrawl-convex": "latest",
+    "@posthog/convex": "^2.1.5",
     "convex": "^1.45.0",
     "effect": "4.0.0-rc.112",
     "lucide-react": "latest",
+    "posthog-js": "^1.434.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.0.0"
@@ -39,6 +41,7 @@
   "devDependencies": {
     "@effect/tsgo": "0.44.0",
     "@oxlint/plugins": "1.82.0",
+    "@posthog/rollup-plugin": "^1.6.0",
     "@types/node": "^26.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

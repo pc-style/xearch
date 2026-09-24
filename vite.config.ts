@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import posthog from "@posthog/rollup-plugin";
 
 // Which of the two sites this build produces. The public one — the default,
 // and what Convex static hosting deploys — resolves `./operatorSurface` to a
@@ -29,6 +30,18 @@ export default defineConfig({
     react({
       compiler: { target: "19" },
     }),
+    ...(process.env.POSTHOG_CLI_API_KEY &&
+    process.env.POSTHOG_CLI_PROJECT_ID &&
+    process.env.POSTHOG_CLI_HOST
+      ? [
+          posthog({
+            personalApiKey: process.env.POSTHOG_CLI_API_KEY,
+            projectId: process.env.POSTHOG_CLI_PROJECT_ID,
+            host: process.env.POSTHOG_CLI_HOST,
+            sourcemaps: { enabled: true, deleteAfterUpload: true },
+          }),
+        ]
+      : []),
   ],
   resolve: {
     alias: operator

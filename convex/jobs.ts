@@ -1,15 +1,17 @@
 import { Match } from "effect";
+import { PostHog } from "@posthog/convex";
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import { kindValidator, throttleProviderValidator, discoveredFromValidator } from "./schema";
 import schema from "./schema";
 import { user, requireOperator } from "./access";
 import { activeThrottleUntil, loadProviderLimit } from "./limits";
 import { handle, statusUrl } from "./lib/xmd";
 import { canonicalQuery } from "./lib/search";
+import { sanitizeError } from "./lib/posthog";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 import {
   DEFAULT_JOIN_FLOOR,
@@ -21,6 +23,8 @@ import {
   isValidDate,
   nextWindowDays,
 } from "./lib/historyWindow";
+
+const posthog = new PostHog(components.posthog);
 
 // Every filter a caller cares about is applied BEFORE the limit, by streaming
 // every job newest-first and stopping once enough eligible ones are found.
@@ -315,6 +319,11 @@ export const start = mutation({
     });
 
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+    await posthog.capture(ctx, {
+      distinctId: owner,
+      event: "job_started",
+      properties: { job_id: id, kind: args.kind, origin: previous?.origin ?? "manual" },
+    });
 
     return id;
   },
@@ -418,8 +427,10 @@ export const startDiscovered = internalMutation({
     // rather than trusting the caller.
     if (candidates.length > 0) return null;
 
+    const owner = await discoveryOwner(ctx);
+
     const id = await ctx.db.insert("jobs", {
-      owner: await discoveryOwner(ctx),
+      owner,
       kind: "bulk",
       input,
       refresh: false,
@@ -436,6 +447,11 @@ export const startDiscovered = internalMutation({
     });
 
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+    await posthog.capture(ctx, {
+      distinctId: owner,
+      event: "job_started",
+      properties: { job_id: id, kind: "bulk", origin: "discovered" },
+    });
 
     return id;
   },
@@ -948,6 +964,35 @@ export const finish = internalMutation({
     }
 
     await ctx.db.patch(job._id, patch);
+    await posthog.capture(ctx, {
+      distinctId: job.owner,
+      event: "job_attempt_finished",
+      properties: {
+        job_id: job._id,
+        kind: job.kind,
+        origin: job.origin ?? "manual",
+        provider: "x.md",
+        stage: job.phase ?? "unknown",
+        status: patch.status ?? "unknown",
+        attempt: args.attempt,
+        duration_ms: Date.now() - job.updatedAt,
+        records: patch.count ?? job.count,
+        error: args.error ? sanitizeError(args.error) : "",
+      },
+    });
+
+    if (patch.status === "failed" || patch.status === "partial")
+      await posthog.capture(ctx, {
+        distinctId: job.owner,
+        event: "job_failed",
+        properties: {
+          job_id: job._id,
+          kind: job.kind,
+          status: patch.status,
+          provider: "x.md",
+          duration_ms: Date.now() - job._creationTime,
+        },
+      });
 
     if (continueImport)
       await ctx.scheduler.runAfter(2000, internal.importer.run, {
@@ -1182,6 +1227,11 @@ async function insertHistoryWindowJob(
   });
 
   await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+  await posthog.capture(ctx, {
+    distinctId: owner,
+    event: "job_started",
+    properties: { job_id: id, kind: "live", origin: "history" },
+  });
 
   return id;
 }

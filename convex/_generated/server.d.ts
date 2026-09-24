@@ -33,6 +33,8 @@ type Env = {
   readonly FIRECRAWL_API_KEY: string;
   readonly OPERATOR_TOKEN: string | undefined;
   readonly OPERATOR_TOKEN_PREVIOUS: string | undefined;
+  readonly POSTHOG_HOST: string;
+  readonly POSTHOG_PROJECT_TOKEN: string;
 };
 
 /**
