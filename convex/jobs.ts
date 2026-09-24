@@ -73,10 +73,12 @@ export const list = query({
     await user(ctx);
     const scope = args.scope ?? "all";
 
-    const limit = Math.max(
-      1,
-      Math.min(JOB_FEED_MAX_LIMIT, Math.floor(args.limit ?? JOB_FEED_LIMIT)),
-    );
+    // v.number() lets NaN and Infinity through; either would slip past the
+    // page-size guard below, so they fall back to the default.
+    const requested =
+      args.limit !== undefined && Number.isFinite(args.limit) ? args.limit : JOB_FEED_LIMIT;
+
+    const limit = Math.max(1, Math.min(JOB_FEED_MAX_LIMIT, Math.floor(requested)));
 
     const out: Doc<"jobs">[] = [];
     let scanned = 0;

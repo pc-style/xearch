@@ -140,6 +140,21 @@ describe("ops.accounts", () => {
   });
 });
 
+describe("jobs.list", () => {
+  it("falls back to the default page size for a limit that is not a finite number", async () => {
+    const t = setup();
+    const { a, userId } = await operator(t);
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 25; i += 1) await ctx.db.insert("jobs", jobFields(userId, {}));
+    });
+
+    expect((await a.query(api.jobs.list, { limit: Number.NaN })).jobs).toHaveLength(20);
+    expect((await a.query(api.jobs.list, { limit: Infinity })).jobs).toHaveLength(20);
+    expect((await a.query(api.jobs.list, { limit: 3 })).jobs).toHaveLength(3);
+  });
+});
+
 describe("ops.activity", () => {
   it("counts the last day's downloads per hour, searches, runs and x.md limits", async () => {
     const t = setup();
@@ -161,6 +176,18 @@ describe("ops.activity", () => {
         receiptId: "r2",
         records: 1,
       });
+
+      // One query, and its "Load more" page, which is not a second query.
+      for (const cursor of [undefined, "page2"])
+        await ctx.db.insert("sessions", {
+          owner: userId,
+          raw: "convex",
+          sort: "newest",
+          cursor,
+          status: "complete",
+          rows: [],
+          warnings: [],
+        });
       await ctx.db.insert("providerThrottleEvents", {
         provider: "xmd",
         operation: "history",
@@ -185,7 +212,7 @@ describe("ops.activity", () => {
       failed: 1,
       truncated: false,
     });
-    expect(result.search).toMatchObject({ queries: 0, failed: 0, timedSample: 0 });
+    expect(result.search).toMatchObject({ queries: 1, failed: 0, timedSample: 0 });
     expect(result.search.medianMs).toBeUndefined();
     expect(result.throttles).toEqual({ xmd: 1, truncated: false });
 

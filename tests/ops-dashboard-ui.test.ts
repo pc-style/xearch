@@ -71,6 +71,27 @@ describe("ops shell", () => {
     ops.click(".who button", "Public site");
     expect(ops.openSearch).toEqual([""]);
   });
+
+  it("Reload re-reads every clock-bound query with a new clock", async () => {
+    const ops = await open("overview");
+
+    const clocks = () => {
+      ops.html();
+
+      return ops.reads.filter((r) => r.name === "summary:summary").map((r) => Number(r.args.now));
+    };
+
+    const before = Math.max(...clocks());
+
+    ops.click("button[aria-label='Reload data']");
+    await vi.waitFor(() => expect(Math.max(...clocks())).toBeGreaterThan(before));
+
+    const reloaded = Math.max(...clocks());
+
+    ops.click("button[aria-label='Reload data']");
+    await vi.waitFor(() => expect(Math.max(...clocks())).toBeGreaterThan(reloaded));
+    expect(ops.find(".toast").textContent).toContain("Reloaded");
+  });
 });
 
 describe("overview", () => {
@@ -284,6 +305,22 @@ describe("accounts", () => {
       oldestCollected: "2019-02-03",
     }),
   ];
+
+  it("says unknown, not 0, for a searchable account the indexer has not counted", async () => {
+    const uncounted = account(4, {
+      handle: "uncounted",
+      publication: { state: "searchable", updatedAt: Date.now() },
+    });
+
+    const ops = await open("accounts", { accounts: [uncounted] });
+    const row = ops.find("tr[data-account='uncounted']");
+
+    expect(row.querySelector("td.num")?.textContent).toBe("unknown");
+    expect(
+      row.querySelector<HTMLButtonElement>("button[aria-label='Search @uncounted’s posts']")
+        ?.disabled,
+    ).toBe(false);
+  });
 
   it("filters by segment and by text", async () => {
     const ops = await open("accounts", { accounts: accounts() });

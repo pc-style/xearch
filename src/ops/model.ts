@@ -106,6 +106,13 @@ export function lastRefresh(a: OpsAccount): number | undefined {
 
 export const searchable = (a: OpsAccount) => a.publication?.searchablePostCount ?? 0;
 
+/** Searchable, but the indexer has not reported how many posts. */
+export const searchableUncounted = (a: OpsAccount) =>
+  a.publication?.state === "searchable" && a.publication.searchablePostCount === undefined;
+
+/** Has posts in the index, counted or not. */
+export const hasSearchable = (a: OpsAccount) => searchable(a) > 0 || searchableUncounted(a);
+
 const activeRun = (a: OpsAccount) =>
   [a.latestRun, a.historyRun].find((r) => r?.status === "queued" || r?.status === "running");
 
@@ -131,6 +138,8 @@ export function accountState(a: OpsAccount, now: number): StatusLabel {
   if (state === "failed") return { s: "crit", t: "Indexing failed" };
 
   if (state === "indexing") return { s: "run", t: "Indexing new posts" };
+
+  if (!state && !hasRunRecord(a)) return { s: "wait", t: "Nothing collected yet" };
 
   if (!state || state === "downloaded" || state === "waiting_for_indexing")
     return { s: "wait", t: "Awaiting indexing" };
@@ -236,7 +245,7 @@ export function coverage(accounts: OpsAccount[], now: number) {
   let unrecorded = 0;
 
   for (const a of accounts) {
-    if (!searchable(a)) none += 1;
+    if (!hasSearchable(a)) none += 1;
     else if (needsHistory(a)) history += 1;
     else if (needsNewer(a, now)) newer += 1;
     else if (!hasRunRecord(a)) unrecorded += 1;
@@ -575,7 +584,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       detail: `Nothing newer than ${day(refreshed)} has been collected. Searches for recent ${a.name} posts return nothing after that.`,
       actions: [
         { kind: "refresh", label: "Refresh now", primary: true, handle: a.handle },
-        ...(searchable(a) > 0
+        ...(hasSearchable(a)
           ? [{ kind: "search" as const, label: "Search posts", handle: a.handle }]
           : []),
       ],

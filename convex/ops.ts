@@ -299,6 +299,8 @@ async function downloadsByHour(ctx: QueryCtx, now: number) {
   const receipts = await ctx.db
     .query("receipts")
     .withIndex("by_creation_time", (q) => q.gte("_creationTime", since))
+    // Newest first, so a day over the cap drops its oldest batches.
+    .order("desc")
     .take(MAX_RECEIPTS_24H + 1);
 
   const truncated = receipts.length > MAX_RECEIPTS_24H;
@@ -348,9 +350,13 @@ async function searchActivity(ctx: QueryCtx, now: number) {
     .map((us) => us / 1000)
     .sort((a, b) => a - b);
 
+  // "Load more" starts another session with a page cursor; only a session
+  // without one is a new query.
+  const firstPages = sample.filter((s) => s.cursor === undefined);
+
   return {
-    queries: sample.length,
-    failed: sample.filter((s) => s.status === "failed").length,
+    queries: firstPages.length,
+    failed: firstPages.filter((s) => s.status === "failed").length,
     timedSample: timings.length,
     medianMs: percentile(timings, 50),
     p95Ms: percentile(timings, 95),

@@ -32,6 +32,8 @@ export type Call = { name: string; args: Record<string, Value> };
 
 export type MountedOps = Mounted & {
   calls: Call[];
+  /** Every query read, with the arguments it was read with. */
+  reads: Call[];
   openSearch: string[];
   click(selector: string, text?: string): void;
   find(selector: string, text?: string): HTMLElement;
@@ -60,10 +62,15 @@ export async function mountOps(tab: OpsTab, fixtures: OpsFixtures = {}): Promise
   const isAnswered = (name: string): name is keyof typeof answers => Object.hasOwn(answers, name);
 
   const calls: Call[] = [];
+  const reads: Call[] = [];
   const openSearch: string[] = [];
 
   const convex = fakeConvex({
-    query: (name) => (isAnswered(name) ? toValue(answers[name]) : undefined),
+    query: (name, args) => {
+      reads.push({ name, args });
+
+      return isAnswered(name) ? toValue(answers[name]) : undefined;
+    },
     mutation: (name, args) => {
       calls.push({ name, args });
 
@@ -100,6 +107,7 @@ export async function mountOps(tab: OpsTab, fixtures: OpsFixtures = {}): Promise
   return {
     ...mounted,
     calls,
+    reads,
     openSearch,
     find,
     click: (selector, text) => find(selector, text).click(),

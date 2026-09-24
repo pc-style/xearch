@@ -441,10 +441,10 @@
   color: var(--muted);
   margin-top: 2px;
 }
-.ops .st .d.w {
+.ops .st .d .w {
   color: var(--warn);
 }
-.ops .st .d.c {
+.ops .st .d .c {
   color: var(--crit);
 }
 .ops .st .arrow {

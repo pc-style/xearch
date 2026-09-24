@@ -17,6 +17,7 @@ import {
   downloadTotals,
   dt,
   dur,
+  hasSearchable,
   hourLabel,
   isActiveJob,
   isStale,
@@ -35,6 +36,7 @@ import {
   searchable,
   searchablePosts,
   searchableTotal,
+  searchableUncounted,
   shortId,
   sortJobs,
   throttledUntil,
@@ -1017,7 +1019,15 @@ export function AccountsPage(props: Props) {
                           </Show>
                         </td>
                         <td class="num">
-                          {searchable(a) ? n(searchable(a)) : <span class="faint">0</span>}
+                          {searchableUncounted(a) ? (
+                            <span class="faint" title="The indexer has not reported a count">
+                              unknown
+                            </span>
+                          ) : searchable(a) ? (
+                            n(searchable(a))
+                          ) : (
+                            <span class="faint">0</span>
+                          )}
                         </td>
                         <td class="num">
                           {pendingLabel(a) ? (
@@ -1046,7 +1056,7 @@ export function AccountsPage(props: Props) {
                               class="ib2"
                               title={`Search @${a.handle}’s posts`}
                               aria-label={`Search @${a.handle}’s posts`}
-                              disabled={!searchable(a)}
+                              disabled={!hasSearchable(a)}
                               onClick={() => ops.openSearch(`@${a.handle}`)}
                             >
                               <Icon name="search" size={15} />

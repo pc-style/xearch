@@ -47,6 +47,17 @@ describe("account status", () => {
 
     expect(accountState(stale, now)).toEqual({ s: "warn", t: "Stale · 9 d" });
     expect(accountState(account(5), now)).toEqual({ s: "ok", t: "Up to date" });
+
+    const neverRun = account(6, {
+      publication: null,
+      latestRun: undefined,
+      lastCompletedAt: undefined,
+    });
+
+    expect(accountState(neverRun, now)).toEqual({ s: "wait", t: "Nothing collected yet" });
+    expect(accountState({ ...neverRun, latestRun: account(6).latestRun }, now).t).toBe(
+      "Awaiting indexing",
+    );
   });
 
   it("counts missing history only on evidence: an unfinished backfill or x.md's floor", () => {
@@ -104,6 +115,12 @@ describe("totals", () => {
         now,
       ),
     ).toEqual({ total: 5, complete: 1, history: 1, newer: 1, none: 1, unrecorded: 1 });
+  });
+
+  it("does not call a searchable account with no indexer count empty", () => {
+    const uncounted = account(1, { publication: { state: "searchable", updatedAt: now } });
+
+    expect(coverage([uncounted], now).none).toBe(0);
   });
 });
 

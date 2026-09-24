@@ -1,4 +1,4 @@
-import { createSignal, Errored, For, Match, onSettled, Show, Switch } from "solid-js";
+import { createMemo, createSignal, Errored, For, Match, onSettled, Show, Switch } from "solid-js";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { useConvex, useMutation, useQuery } from "../data/convex";
@@ -56,14 +56,22 @@ function useOps(props: DashboardProps) {
   const { isAuthenticated } = useConvex();
   const clockNow = useDashboardClock();
   const liveNow = useLiveNow();
-  // "Reload" moves the clock to this instant; the 30-second tick carries on.
+  // "Reload" nudges the query clock past its current value so every
+  // clock-bound query resubscribes; the 30-second tick carries on.
   const [reloadedAt, setReloadedAt] = createSignal(0);
   // Queries take the 30-second clock, so they resubscribe twice a minute,
   // not every 5 seconds. What the page derives from them (ages, stalls,
   // whether a rate limit has lifted) reads the exact clock: the bucketed
   // one runs up to 30 seconds ahead.
   const queryNow = () => Math.max(clockNow(), reloadedAt());
-  const now = () => Math.max(liveNow(), reloadedAt());
+  const now = () => liveNow();
+
+  // The real time the query clock last moved, for "Updated".
+  const updatedAt = createMemo(() => {
+    queryNow();
+
+    return Date.now();
+  });
 
   const signedIn = () => isAuthenticated();
   const operator = () => (signedIn() ? operatorArgs() : "skip");
@@ -141,6 +149,7 @@ function useOps(props: DashboardProps) {
   return {
     now,
     queryNow,
+    updatedAt,
     tab: () => props.tab,
     go,
     me,
@@ -165,7 +174,7 @@ function useOps(props: DashboardProps) {
     setImportKind,
     openSearch: props.openSearch,
     reload: () => {
-      setReloadedAt(Date.now());
+      setReloadedAt(Math.max(Date.now(), queryNow() + 1));
       say("Reloaded");
     },
     retry: (job: Job, label: string) =>
@@ -243,7 +252,7 @@ function Nav(props: { ops: OpsContext }) {
         )}
       </For>
       <span class="sp" />
-      <span class="now">Updated {clock(props.ops.queryNow())} · auto-refresh 30 s</span>
+      <span class="now">Updated {clock(props.ops.updatedAt())} · auto-refresh 30 s</span>
       <button type="button" class="b s" aria-label="Reload data" onClick={() => props.ops.reload()}>
         ↻ Reload
       </button>
