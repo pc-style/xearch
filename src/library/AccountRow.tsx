@@ -33,15 +33,13 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   // A failed/partial latest job's own `phase` field is stale progress text
   // left over from before it stopped (convex/jobs.ts finish never clears it
   // on failure) — never the actual failure. The real error/retained-count
-  // only exist on the matching HistoryRun, so fetch history eagerly (not
-  // only on manual expand) whenever there is a failure to explain. This is
-  // still exclusively convex/library.ts's `history` query.
+  // only exist on the matching HistoryRun. That detail now renders only
+  // inside the expanded row (QA finding 5 moved it behind "Show history"),
+  // so the query is expanded-only too — still exclusively
+  // convex/library.ts's `history` query.
   const needsFailureDetail = !!job && (job.status === "failed" || job.status === "partial");
 
-  const history = useQuery(
-    api.library.history,
-    expanded || needsFailureDetail ? { accountId: row.accountId } : "skip",
-  );
+  const history = useQuery(api.library.history, expanded ? { accountId: row.accountId } : "skip");
 
   const retry = useMutation(api.jobs.retry);
   const cancel = useMutation(api.jobs.cancel);
@@ -161,7 +159,7 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
                 ? "Loading failure details…"
                 : currentRun
                   ? describeRunOutcome(currentRun)
-                  : "Download failed. Expand history below for details."}
+                  : "Download failed. See the run history below for details."}
             </p>
           )}
           <AccountHistory history={history} />
