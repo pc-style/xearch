@@ -126,6 +126,7 @@ export default function Dashboard({
   // above is unrelated (a retry-countdown display, not a liveness check)
   // and can stay on the coarser, shared clock.
   const liveNow = useLiveNow();
+
   // `useStableQuery`: `liveNow` ticks every 5s and a bare `useQuery` would
   // hand every consumer `undefined` on each tick (see src/library/stableQuery.ts).
   const config = useStableQuery(
