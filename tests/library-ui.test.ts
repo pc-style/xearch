@@ -264,7 +264,7 @@ function renderLibrary(): string {
  * (QA finding 5, /tmp/issues-t3-dashboard-current.md #5's row-compaction
  * fix).
  */
-function renderLibraryToContainer(): { container: HTMLElement; unmount: () => void } {
+function renderLibraryToContainer(otherImports?: ReturnType<typeof createElement>) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -285,6 +285,7 @@ function renderLibraryToContainer(): { container: HTMLElement; unmount: () => vo
           config: mockState.config,
           liveNow: mockState.liveNow,
           onOpenQueue: () => {},
+          otherImports,
         }),
       ),
     );
@@ -678,5 +679,151 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     // The big number appears exactly once — not once as the tile's value and
     // again as a "9,006 posts" sub-line underneath it.
     expect(html.match(/9,006/g) ?? []).toHaveLength(1);
+  });
+});
+
+// QA finding 5 (/tmp/issues-t3-dashboard-current.md #5): "The dashboard
+// remains a very long unpaginated job wall at real data volume... Put
+// current work before the library and compact or paginate the library."
+describe("Library section order, row compaction, and library pagination (QA finding 5)", () => {
+  it("puts the active queue and other imports ahead of the account library, which renders last", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+
+    const { container, unmount } = renderLibraryToContainer(
+      createElement(
+        "section",
+        { "aria-label": "Other imports" },
+        createElement("h2", null, "Other imports"),
+      ),
+    );
+
+    const html = container.innerHTML;
+    const queueAt = html.indexOf("Active queue");
+    const otherImportsAt = html.indexOf("Other imports");
+    const recentAt = html.indexOf("Recent run history");
+    const libraryAt = html.indexOf("Account library");
+
+    expect(queueAt).toBeGreaterThan(-1);
+    expect(otherImportsAt).toBeGreaterThan(-1);
+    expect(recentAt).toBeGreaterThan(-1);
+    expect(libraryAt).toBeGreaterThan(-1);
+    // Active queue leads, other imports comes directly after it, and the
+    // (potentially 49-row) account library is last — never buried above
+    // the current-work sections the way it used to sit.
+    expect(queueAt).toBeLessThan(otherImportsAt);
+    expect(otherImportsAt).toBeLessThan(recentAt);
+    expect(recentAt).toBeLessThan(libraryAt);
+    unmount();
+  });
+
+  it("renders an account row as one compact line by default, with details behind 'Show history'", () => {
+    reset();
+
+    const row = makeRow({
+      accountId: accountId("acct-compact"),
+      handle: "compact",
+      name: "Compact Co",
+      publicationState: "failed",
+      searchablePostCount: { kind: "known", unit: "posts", value: 42 },
+      lastPublishedAt: Date.now(),
+      lastError: { message: "publish rejected: timeout", observedAt: Date.now() },
+      backfill: { status: "running", postsFound: 100, cursorUntil: "2020-01-01" },
+      latestJob: { jobId: jobId("job-compact"), status: "complete", updatedAt: Date.now() },
+    });
+
+    setQuery(api.library.rows, { rows: [row], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+
+    const { container, unmount } = renderLibraryToContainer();
+    const collapsedHtml = container.innerHTML;
+
+    // Always visible: identity, status badges, searchable count.
+    expect(collapsedHtml).toContain("@compact");
+    expect(collapsedHtml).toContain("Publication failed");
+    expect(collapsedHtml).toContain("42 posts");
+    // Publication notes stay collapsed until "Show history" is clicked.
+    expect(collapsedHtml).not.toContain("Last published");
+    expect(collapsedHtml).not.toContain("publish rejected: timeout");
+    expect(collapsedHtml).not.toContain("Older history");
+    expect(collapsedHtml).toContain("Show history");
+
+    expandAllRows(container);
+    const expandedHtml = container.innerHTML;
+
+    expect(expandedHtml).toContain("Last published");
+    expect(expandedHtml).toContain("publish rejected: timeout");
+    expect(expandedHtml).toContain("Older history");
+    expect(expandedHtml).toContain("Hide history");
+    unmount();
+  });
+
+  it("shows the completion caveat once above the list, not once per completed account", () => {
+    reset();
+
+    const rows = [
+      makeRow({
+        accountId: accountId("acct-a"),
+        handle: "aaa",
+        latestJob: { jobId: jobId("job-a"), status: "complete", updatedAt: Date.now() },
+      }),
+      makeRow({
+        accountId: accountId("acct-b"),
+        handle: "bbb",
+        latestJob: { jobId: jobId("job-b"), status: "complete", updatedAt: Date.now() },
+      }),
+      makeRow({
+        accountId: accountId("acct-c"),
+        handle: "ccc",
+        latestJob: { jobId: jobId("job-c"), status: "failed", updatedAt: Date.now() },
+      }),
+    ];
+
+    setQuery(api.library.rows, { rows, truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const html = renderLibrary();
+    // RecentActivity already carries its own copy of this note (a separate
+    // section, unaffected by this row-level dedupe) — the account library
+    // section itself must show it exactly once, not once per completed row.
+    const inAccountLibrary = html.slice(html.indexOf('id="account-library"'));
+
+    expect(
+      inAccountLibrary.match(
+        /"Download complete" means x\.md finished handing over what it had for this run/g,
+      ) ?? [],
+    ).toHaveLength(1);
+  });
+
+  it("paginates the account library to 20 rows by default, revealing more via 'Show more'", () => {
+    reset();
+
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      makeRow({
+        accountId: accountId(`acct-${i}`),
+        handle: `user${i}`,
+        name: `User ${i}`,
+      }),
+    );
+
+    setQuery(api.library.rows, { rows, truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+
+    const { container, unmount } = renderLibraryToContainer();
+    expect(container.querySelectorAll(".library-row").length).toBe(20);
+    const showMore = container.querySelector<HTMLButtonElement>(".library-show-more");
+
+    expect(showMore).not.toBeNull();
+    expect(showMore!.textContent).toContain("5 more");
+
+    act(() => showMore!.click());
+
+    expect(container.querySelectorAll(".library-row").length).toBe(25);
+    expect(container.querySelector(".library-show-more")).toBeNull();
+    unmount();
   });
 });
