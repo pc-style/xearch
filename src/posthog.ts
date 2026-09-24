@@ -15,7 +15,7 @@ export function initPostHog(): void {
   posthog.init(key, {
     api_host: host,
     autocapture: false,
-    capture_pageview: false,
+    capture_pageview: true,
     capture_pageleave: false,
     capture_exceptions: true,
     capture_performance: true,
