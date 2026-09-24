@@ -10,11 +10,22 @@ export const DASHBOARD_CLOCK_INTERVAL_MS = 30_000;
 // one millisecond would each mint a distinct `now`, so a query built to cut
 // per-client churn on the `collector` row (see convex/worker.ts's
 // `isWorkerLive`) would still recompute and re-send once per browser
-// instead of once per bucket. Bucketing costs nothing here: the bucket is
-// still <= DASHBOARD_CLOCK_INTERVAL_MS wide, well under the 45s liveness
-// window it feeds.
+// instead of once per bucket.
+//
+// Rounds UP (`Math.ceil`), never down. Every consumer of this clock treats
+// `now` as "time elapsed since some earlier, server-written timestamp"
+// (`isWorkerLive`'s `now - lastSeen < 45_000`, and convex/summary.ts's own
+// `now - observedAt` staleness checks) — rounding down would understate
+// that elapsed time by up to one whole `DASHBOARD_CLOCK_INTERVAL_MS`, which
+// on the 45s worker-liveness window is a ~30s window in which a worker that
+// actually went offline would still read as live. Rounding up instead means
+// the bucketed value is never behind the real clock, so an expiry is never
+// reported late — at worst a few seconds early, which a live worker's own
+// 5-8s heartbeat cadence keeps from ever mattering in practice. This is the
+// same "never claim fresher than reality" bias the rest of this codebase
+// already applies to staleness (see convex/summary.ts's Count comments).
 export function bucketNow(value: number): number {
-  return Math.floor(value / DASHBOARD_CLOCK_INTERVAL_MS) * DASHBOARD_CLOCK_INTERVAL_MS;
+  return Math.ceil(value / DASHBOARD_CLOCK_INTERVAL_MS) * DASHBOARD_CLOCK_INTERVAL_MS;
 }
 
 const initialNow = bucketNow(Date.now());
