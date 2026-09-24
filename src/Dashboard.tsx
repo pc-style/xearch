@@ -10,7 +10,11 @@ import { JobRow } from "./JobRow";
 import Library from "./library/Library";
 import { useDashboardClock, useLiveNow } from "./library/clock";
 
-function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean }) {
+// Exported so tests/dashboard-job-ui.test.ts can render this row in
+// isolation (the fake-Convex-client harness pattern tests/library-ui.test.ts
+// and tests/jobRow-ui.test.ts already use) without standing up the rest of
+// the dashboard page's queries.
+export function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean }) {
   // convex/_generated/ai/guidelines.md "Do not read the wall clock inside a
   // query" applies just as much to a render body: a bare `Date.now()` here
   // would freeze at whatever instant last re-rendered this row instead of
@@ -24,6 +28,14 @@ function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean }) {
     retry = useMutation(api.jobs.retry),
     dismiss = useMutation(api.jobs.dismiss),
     restore = useMutation(api.jobs.restore);
+
+  // Cancel/Retry/Dismiss all run through JobRow's own `useTask`, which shows
+  // a failure in a `role="alert"` line. "Bring back" is rendered by THIS
+  // component instead (it's a dashboard-only extra JobRow doesn't know
+  // about — see `extraActions` below), so it needs its own `useTask` or a
+  // failed restore (session expired, connection lost) would throw into an
+  // unhandled rejection with nothing shown to the operator.
+  const restoreTask = useTask();
 
   const dismissed = job.dismissedAt !== undefined;
 
@@ -59,14 +71,21 @@ function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean }) {
       // treatment as JobRow's own actions rather than a silent ConvexError.
       extraActions={
         !["queued", "running"].includes(job.status) && dismissed ? (
-          <button
-            type="button"
-            disabled={!isOperator}
-            title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
-            onClick={() => restore({ jobId: job._id })}
-          >
-            Bring back
-          </button>
+          <>
+            <button
+              type="button"
+              disabled={!isOperator || restoreTask.busy}
+              title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
+              onClick={() => void restoreTask.run(() => restore({ jobId: job._id }))}
+            >
+              Bring back
+            </button>
+            {restoreTask.message && (
+              <span role="alert" className="config-warning">
+                {restoreTask.message}
+              </span>
+            )}
+          </>
         ) : undefined
       }
     />
@@ -265,12 +284,21 @@ export default function Dashboard({
                 </select>
               </label>
             </details>
-            <button type="submit" className="control-start" disabled={busy || !config?.indexing}>
+            <button
+              type="submit"
+              className="control-start"
+              disabled={busy || !config?.indexing || !isOperator}
+            >
               {busy ? "Starting..." : kind === "bulk" ? "Import posts" : "Start download"}
             </button>
             {config && !config.indexing && (
               <p role="status">{indexingUnavailableMessage(config)}</p>
             )}
+            {/* `jobs.start` is requireOperator-gated server-side
+                (convex/access.ts) the same as Cancel/Retry/Dismiss/Restore
+                above — a signed-in-but-not-operator caller sees why the
+                button is disabled instead of hitting a bare ConvexError. */}
+            {isAuthenticated && !isOperator && <p role="status">{OPERATOR_SIGN_IN_NOTICE}</p>}
             <p role="status">{message}</p>
           </form>
         </aside>

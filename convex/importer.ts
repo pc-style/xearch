@@ -132,8 +132,16 @@ export const run = internalAction({
           error instanceof ProviderError && error.retryable ? error.retryAfter : undefined,
         // Not a ProviderError at all (a bug, a network primitive throwing) is
         // treated as retryable=true: unlike a provider 4xx, there is no
-        // reason to believe trying again would fail the same way.
-        retryable: error instanceof ProviderError ? error.retryable : true,
+        // reason to believe trying again would fail the same way. A
+        // "configuration" ProviderError (missing X_MD_API_KEY/RAW_CAPTURE_URL)
+        // is also never permanent even though `retryable` defaults to
+        // `false` on it — it is an operator setup problem, not a provider
+        // fact about this input, so once the operator fixes the deployment's
+        // env a manual Retry must still be possible. It stays out of
+        // AUTOMATIC retry (retryAfter above), which would just hammer x.md
+        // with the same missing key every backoff interval.
+        retryable:
+          !(error instanceof ProviderError) || error.retryable || error.code === "configuration",
       });
     }
   },

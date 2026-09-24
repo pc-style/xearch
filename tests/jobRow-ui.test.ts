@@ -233,7 +233,7 @@ describe("JobRow (src/JobRow.tsx) rendered output", () => {
     permanent.unmount();
   });
 
-  it("does not offer Retry for an unclassified stopped job (no ProviderError.retryable recorded)", () => {
+  it("still offers Retry for an unclassified stopped job (no ProviderError.retryable recorded)", () => {
     // `retryable` is `undefined` for any job that predates this field, or
     // that stopped for a reason that never went through `ProviderError` —
     // isPermanentFailure() only ever treats an EXPLICIT `retryable: false`
