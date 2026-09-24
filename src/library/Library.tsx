@@ -7,7 +7,7 @@ import ActiveQueue from "./ActiveQueue";
 import AccountLibrary from "./AccountLibrary";
 import RecentActivity from "./RecentActivity";
 import "../dashboard.css";
-import { useDashboardClock } from "./clock";
+import { useDashboardClock, useLiveNow } from "./clock";
 
 // convex/summary.ts's `summary`/`health` queries take `now` as a REQUIRED
 // arg (a query must never read the wall clock itself) and expect the caller
@@ -40,8 +40,18 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
   // Feeds the merged Connections/Dependency health/Provider limits status
   // block (B2 "one status block"). `Dashboard.tsx` also reads this same
   // query for its own import-form gating — Convex serves identical
-  // query+args as one shared subscription, so this is not a second read.
-  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
+  // query+args as one shared subscription, so this is not a second read,
+  // as long as both pass the same `now` bucket; that's `liveNow` below, not
+  // `now` above — see its own comment.
+  //
+  // `useLiveNow`, not `useDashboardClock`: `config.handoff`/`config.indexing`
+  // gate convex/worker.ts's tight 45s `isWorkerLive` window, which a
+  // bucketed `now` corrupts in either rounding direction (src/library/
+  // clock.ts's `bucketNow` comment). `now` above stays on the coarser,
+  // shared clock because summary/health's staleness displays have no such
+  // tight window.
+  const liveNow = useLiveNow();
+  const config = useQuery(api.integrations.operator, isAuthenticated ? { now: liveNow } : "skip");
   // Unfiltered rows for the active-queue strip, independent of whatever
   // search/status filter is set inside <AccountLibrary>below. Same
   // convex/library.ts `rows` query, just a second live subscription with
@@ -62,6 +72,7 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
         health={health}
         limits={limits}
         config={config}
+        liveNow={liveNow}
         connected={connected}
         isAuthenticated={isAuthenticated}
       />

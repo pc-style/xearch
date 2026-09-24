@@ -33,6 +33,7 @@ export default function OverviewStats({
   health,
   limits,
   config,
+  liveNow,
   connected,
   isAuthenticated,
 }: {
@@ -40,6 +41,11 @@ export default function OverviewStats({
   health: ServiceStatus[] | undefined;
   limits: ProviderLimit[] | undefined;
   config: OperatorConfig | undefined;
+  // The exact, unbucketed clock `config` was fetched against — see
+  // src/library/clock.ts's `useLiveNow` comment for why the worker-liveness
+  // fields on `config` can never be re-derived against the coarser,
+  // bucketed `useDashboardClock` this component's other props use.
+  liveNow: number;
   connected: boolean;
   isAuthenticated: boolean;
 }) {
@@ -102,6 +108,7 @@ export default function OverviewStats({
         config={config}
         health={health}
         limits={limits}
+        liveNow={liveNow}
         isAuthenticated={isAuthenticated}
       />
     </section>

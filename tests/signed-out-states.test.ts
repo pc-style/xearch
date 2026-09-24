@@ -29,6 +29,7 @@ describe("signed-out panels never impersonate a loading state", () => {
         health: undefined,
         limits: undefined,
         config: undefined,
+        liveNow: Date.now(),
         connected: true,
         ...signedOut,
       }),

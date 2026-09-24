@@ -375,6 +375,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         health,
         limits: undefined,
         config: undefined,
+        liveNow: Date.now(),
         connected: false,
         isAuthenticated: true,
       }),

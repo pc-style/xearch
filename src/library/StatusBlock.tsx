@@ -11,7 +11,6 @@ import {
 } from "../integrationStatus";
 import { formatRelative } from "./format";
 import { Badge } from "./format.tsx";
-import { useDashboardClock } from "./clock";
 import ProviderLimits from "./ProviderLimits";
 
 type OperatorConfig = FunctionReturnType<typeof api.integrations.operator>;
@@ -29,18 +28,26 @@ export default function StatusBlock({
   config,
   health,
   limits,
+  liveNow,
   isAuthenticated,
 }: {
   config: OperatorConfig | undefined;
   health: ServiceStatus[] | undefined;
   limits: ProviderLimit[] | undefined;
+  // The SAME exact, unbucketed clock `config` was fetched with (a prop, not
+  // its own `useDashboardClock()`/`useLiveNow()` call): convex/integrations.ts's
+  // `operator` requires `now` to compute `config.handoff` against
+  // convex/worker.ts's tight 45s `isWorkerLive` window, and `handoffReady`
+  // below re-derives that same liveness fact against a ticking clock so the
+  // reading keeps decaying between query re-runs — see src/library/clock.ts's
+  // `useLiveNow` comment for why a bucketed `now` cannot feed either of those
+  // safely, and src/operator/Connections.tsx for the same one-clock pattern.
+  liveNow: number;
   isAuthenticated: boolean;
 }) {
-  const now = useDashboardClock();
-
   const connections: Connection[] = [
     { name: "x.md", ready: config?.xmd, purpose: "Account histories, live search, conversations" },
-    receiverConnection(config?.collectorMode, handoffReady(config?.handoffState, now)),
+    receiverConnection(config?.collectorMode, handoffReady(config?.handoffState, liveNow)),
     { name: "Search backend", ready: config?.search, purpose: "Finds posts in the library" },
     { name: "Firecrawl", ready: config?.firecrawl, purpose: "Reads pages linked in posts" },
     { name: "OpenAI", ready: config?.openai, purpose: "Turns a question into a clearer search" },
@@ -78,7 +85,7 @@ export default function StatusBlock({
                     the connection's actual state changes, never on its own
                     just because the clock ticked. */}
                 <span aria-live="polite">{word}</span>
-                {detail && ` · last seen ${formatRelative(detail, now)}`}
+                {detail && ` · last seen ${formatRelative(detail, liveNow)}`}
               </span>
             </div>
           );
@@ -140,9 +147,10 @@ function connectionStatus(
     // CodeRabbit (PR #48): a real fix for "never observed" vs. "observed
     // offline" needs `convex/integrations.ts` to stop collapsing "no
     // worker record has ever existed" into the same `lastSeenAt: null` it
-    // uses for "observed, and not currently online" — out of scope here
-    // (convex/ is owned by other work landing separately; see PR #44). This
-    // still reports the honest, weaker claim available from what the
+    // uses for "observed, and not currently online" (still true as of #44 —
+    // that PR reworked worker-liveness plumbing but kept this exact
+    // collapse) — out of scope here, since convex/ is owned by other work.
+    // This still reports the honest, weaker claim available from what the
     // backend sends today: a real last-heartbeat time when there is one,
     // "Offline" with no invented time when there isn't. A domain check
     // (nullish, not `typeof`) is enough: `workerLastSeenAt` is already
