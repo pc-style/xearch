@@ -58,11 +58,13 @@ export function mergeSearchPages<T extends { tweetId: string }>(
   const start = mode === "append" ? base : [];
   const seen = new Set(start.map((post) => post.tweetId));
   const merged = start.slice();
+
   for (const post of incoming) {
     if (seen.has(post.tweetId)) continue;
     seen.add(post.tweetId);
     merged.push(post);
   }
+
   return merged;
 }
 

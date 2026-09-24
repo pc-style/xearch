@@ -89,6 +89,7 @@ describe("truncateSegments", () => {
       { type: "text", value: "a".repeat(10) },
       { type: "link", href: "https://example.com/long/path", label: "example.com/long/path" },
     ];
+
     const result = truncateSegments(segments, 5);
     expect(result).toEqual([
       { type: "text", value: "aaaaa" },
@@ -101,6 +102,7 @@ describe("truncateSegments", () => {
       { type: "text", value: "see " },
       { type: "link", href: "https://example.com/a-very-long-path", label: "example.com/a-very" },
     ];
+
     const result = truncateSegments(segments, 4);
     expect(result).toEqual([
       { type: "text", value: "see " },
@@ -113,6 +115,7 @@ describe("truncateSegments", () => {
     const segments: LinkifySegment[] = [
       { type: "link", href: "https://x.com/a", label: "x.com/a" },
     ];
+
     expect(truncateSegments(segments, "x.com/a".length)).toEqual(segments);
   });
 });

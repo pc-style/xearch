@@ -21,6 +21,7 @@ describe("previewPatch", () => {
     const withBookmarks = previewPatch("https://xearch.invalid/?q=theo", {
       view: ViewMode.Bookmarks,
     });
+
     expect(withBookmarks).toBe("/?q=theo&view=bookmarks");
 
     const backToSearch = previewPatch(withBookmarks, { view: ViewMode.Search });
@@ -32,6 +33,7 @@ describe("previewPatch", () => {
       dashboard: true,
       raw: "",
     });
+
     expect(dashboardUrl).toBe("/?sort=relevance&dashboard=1");
   });
 

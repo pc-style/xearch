@@ -103,6 +103,7 @@ function connectionObservation(connection: {
 function isAccountOnlyQuery(raw: string): boolean {
   try {
     const { author, text } = parseQuery(raw);
+
     return Boolean(author) && text.length === 0;
   } catch {
     return false;
@@ -176,9 +177,11 @@ function WebContextPage({
   onExpand: () => void;
 }) {
   const paragraphs = parseWebContextMarkdown(page.text);
+
   const { shown, truncated } = expanded
     ? { shown: paragraphs, truncated: false }
     : truncateWebContextParagraphs(paragraphs, WEB_CONTEXT_PREVIEW_CHARS);
+
   return (
     <div className="page-text">
       <strong>{page.title}</strong>
@@ -261,6 +264,7 @@ export default function App() {
   const [rows, setRows] = useState<ResultPost[]>([]);
   const appendModeRef = useRef(false);
   const mergedSessionRef = useRef<Id<"sessions"> | null>(null);
+
   const [view, setView] = useState<ViewMode>(initialRoute.view),
     [modal, setModal] = useState<ModalKind | null>(null);
 
@@ -268,6 +272,7 @@ export default function App() {
     [busy, setBusy] = useState(false),
     [accountInput, setAccountInput] = useState(""),
     [since, setSince] = useState("");
+
   // Job ids for imports kicked off directly from a result (Conversation /
   // Find on X). Those are real x.md fetches, not previews, so the inline
   // status line below reads live from `jobs.list` instead of just firing a
@@ -282,8 +287,10 @@ export default function App() {
     query: string;
     jobId: Id<"jobs">;
   } | null>(null);
+
   const [threadJobs, setThreadJobs] = useState<Record<string, Id<"jobs">>>({});
   const pushedDashboardEntry = useRef(false);
+
   const [page, setPage] = useState<{
     title: string;
     text: string;
@@ -294,9 +301,11 @@ export default function App() {
   const [contextPages, setContextPages] = useState<
     { title: string; text: string; url: string; collectedAt: number }[] | null
   >(null);
+
   // Which Web context pages (by url) the reader has expanded past the
   // initial preview cap — see `WEB_CONTEXT_PREVIEW_CHARS` below.
   const [expandedContextPages, setExpandedContextPages] = useState<Set<string>>(new Set());
+
   const [reading, setReading] = useState(false),
     [proposal, setProposal] = useState<{
       query: string;
@@ -569,10 +578,12 @@ export default function App() {
   const runLoadLive = async () => {
     await ensureSession();
     const query = raw;
+
     const jobId = await start({
       kind: "live",
       input: query.replace(/(^|\s)@([\w]+)/g, "$1from:$2"),
     });
+
     setLiveImportJob({ query, jobId });
   };
 
@@ -591,6 +602,7 @@ export default function App() {
     setContextPages(await webContext({ query: raw }));
     setExpandedContextPages(new Set());
   };
+
   const runThread = async (post: ResultPost) => {
     await ensureSession();
     const jobId = await start({ kind: "post", input: post.url });
@@ -607,6 +619,7 @@ export default function App() {
     // terminal state, so further commits for it are ignored — see
     // `searchTelemetry.ts` `commitResult`'s `terminalCommitAt` guard).
     const attemptId = allocateAttempt();
+
     const request: SearchRequest = {
       raw,
       sort,
@@ -615,6 +628,7 @@ export default function App() {
       attemptId,
       trigger: SearchTrigger.NextPage,
     };
+
     // No scrollTo: "Load more" appends to the current list, so the reader's
     // place in what they've already read is preserved (see
     // `kickPendingRef`'s merge into `rows`, which is what actually makes
@@ -645,6 +659,7 @@ export default function App() {
     e.preventDefault();
     void task(submitImport(), "Indexing started. Raw captures are handed to your data service.");
   };
+
   // The inline status line already says the fetch is running (see the
   // "Import from X" toolbar button below), so there's nothing left for the
   // dismissible top notice to add here.
@@ -669,6 +684,7 @@ export default function App() {
     // below for the matching Back-button fix).
     pushLocation({ dashboard: true, raw: "" });
   };
+
   const search = (query: string, nextSort?: Sort) => {
     const trimmed = query.trim();
     const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort);
@@ -717,6 +733,7 @@ export default function App() {
       attemptId,
       trigger: SearchTrigger.Retry,
     };
+
     appendModeRef.current = false;
     setSessionId(null);
     setRows([]);

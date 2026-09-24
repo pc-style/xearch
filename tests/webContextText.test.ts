@@ -28,6 +28,7 @@ describe("parseWebContextMarkdown", () => {
     const paragraphs = parseWebContextMarkdown(
       "See [our announcement](https://anthropic.com/news)",
     );
+
     const link = paragraphs[0].segments.find((s) => s.type === "link");
     expect(link).toEqual({
       type: "link",
@@ -40,6 +41,7 @@ describe("parseWebContextMarkdown", () => {
     const paragraphs = parseWebContextMarkdown(
       "See [article](https://en.wikipedia.org/wiki/Mercury_(planet)) for more.",
     );
+
     expect(paragraphs[0].segments).toEqual([
       { type: "text", value: "See " },
       {
@@ -73,6 +75,7 @@ describe("parseWebContextMarkdown", () => {
     const paragraphs = parseWebContextMarkdown("[](https://anthropic.com/news/announcement)");
     const link = paragraphs[0].segments.find((s) => s.type === "link");
     expect(link?.type).toBe("link");
+
     if (link?.type === "link") expect(link.label).toBe("anthropic.com/news/announcement");
   });
 
@@ -94,6 +97,7 @@ describe("parseWebContextMarkdown", () => {
     const paragraphs = parseWebContextMarkdown(
       "See https://en.wikipedia.org/wiki/Mercury_(planet) for more.",
     );
+
     const link = paragraphs[0].segments.find((s) => s.type === "link");
     expect(link).toEqual({
       type: "link",
@@ -172,6 +176,7 @@ describe("paragraphLength", () => {
         { type: "link", href: "https://example.com/a/very/long/path", label: "example.com/a" },
       ],
     };
+
     expect(paragraphLength(paragraph)).toBe("see ".length + "example.com/a".length);
   });
 });

@@ -6,6 +6,10 @@ import {
   type SearchSessionId,
 } from "../src/searchTelemetry";
 
+// SAFETY: `SearchSessionId` is a branded string with no runtime constructor
+// exposed to callers outside src/searchFlow.ts; this fixture only ever
+// stands in for an opaque id the telemetry store was told about by its
+// caller, never a value this test parses from the outside.
 const sessionId = (n: number) => `session-${n}` as SearchSessionId;
 
 describe("searchTelemetry / Load more attempts", () => {
@@ -39,6 +43,7 @@ describe("searchTelemetry / Load more attempts", () => {
       rowCount: 40,
       sessionId: sessionId(2),
     });
+
     expect(changed).toBe(false);
     expect(store.getSnapshot()?.terminalRowCount).toBe(20);
   });

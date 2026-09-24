@@ -117,12 +117,14 @@ export function acquisitionStatusLabel(status: JobStatus): string {
 // and some provider error strings have none, so joining them straight to
 // "See Recent imports" runs two sentences together with no separator.
 const SENTENCE_END = /[.!?…]$/;
+
 function withSentenceEnd(text: string): string {
   return SENTENCE_END.test(text) ? text : `${text}.`;
 }
 
 export function inlineImportStatus(job: Doc<"jobs"> | undefined): string | null {
   if (!job) return null;
+
   // "Downloading", not "Fetching…results" — this only reports the x.md
   // download landing in Recent imports, a different state from the
   // download later becoming searchable (see docs/publication-contract.md);
@@ -131,8 +133,10 @@ export function inlineImportStatus(job: Doc<"jobs"> | undefined): string | null 
   // job waits its turn.
   if (job.status === "queued")
     return "Waiting to download from X… Progress appears in Recent imports.";
+
   if (job.status === "running") return "Downloading from X… Progress appears in Recent imports.";
   const detail = job.error ?? jobSummary(job);
+
   return `${jobLabel(job)} — ${withSentenceEnd(detail)} See Recent imports for details.`;
 }
 

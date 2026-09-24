@@ -28,6 +28,7 @@ const SORT_VALUES: ReadonlySet<string> = new Set([
   "newest",
   "oldest",
 ]);
+
 const VIEW_VALUES: ReadonlySet<string> = new Set([ViewMode.Search, ViewMode.Bookmarks]);
 
 const SERVER_SNAPSHOT: LocationSnapshot = Object.freeze({
@@ -67,6 +68,7 @@ function parseUrl(input: string | URL): Omit<LocationSnapshot, "version"> {
   const url = input instanceof URL ? input : new URL(input, "https://xearch.invalid");
   const sortValue = url.searchParams.get("sort");
   const viewValue = url.searchParams.get("view");
+
   return {
     raw: url.searchParams.get("q") ?? "",
     sort: isSort(sortValue) ? sortValue : DEFAULT_SORT,
@@ -167,8 +169,9 @@ export function getServerSnapshot(): LocationSnapshot {
  * exercised through the app, not unit tests.
  */
 export function previewPatch(input: string | URL, patch: LocationPatch): string {
-  const url = typeof input === "string" ? new URL(input, "https://xearch.invalid") : new URL(input);
+  const url = input instanceof URL ? new URL(input) : new URL(input, "https://xearch.invalid");
   applyPatch(url, patch);
+
   return `${url.pathname}${url.search}`;
 }
 
@@ -189,6 +192,7 @@ function applyPatch(url: URL, patch: LocationPatch): void {
     if (patch.dashboard) url.searchParams.set("dashboard", "1");
     else url.searchParams.delete("dashboard");
   }
+
   if (patch.view !== undefined) {
     if (patch.view === ViewMode.Search) url.searchParams.delete("view");
     else url.searchParams.set("view", patch.view);

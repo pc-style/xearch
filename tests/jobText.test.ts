@@ -1,22 +1,41 @@
 import { describe, expect, it } from "vitest";
-import type { Doc } from "../convex/_generated/dataModel";
+import type { Doc, Id } from "../convex/_generated/dataModel";
 import { inlineImportStatus } from "../src/jobText";
 
+function jobId(id: string) {
+  // SAFETY: `Id<"jobs">` is `string & { __tableName: "jobs" }`, a subtype of
+  // `string`; this fixture helper attaches that brand to a test-authored id.
+  return id as Id<"jobs">;
+}
+
+function userId(id: string) {
+  // SAFETY: `Id<"users">` is `string & { __tableName: "users" }`, a subtype
+  // of `string`; this fixture helper attaches that brand to a test-authored
+  // id.
+  return id as Id<"users">;
+}
+
 function job(overrides: Partial<Doc<"jobs">>): Doc<"jobs"> {
-  return {
-    _id: "job-1" as Doc<"jobs">["_id"],
+  const base = {
+    _id: jobId("job-1"),
     _creationTime: 0,
-    owner: "user-1" as Doc<"jobs">["owner"],
-    kind: "post",
+    owner: userId("user-1"),
+    kind: "post" as const,
     input: "https://x.com/theo/status/1",
     refresh: false,
-    status: "queued",
+    status: "queued" as const,
     count: 0,
     attempt: 0,
     warnings: [],
     updatedAt: 0,
     ...overrides,
-  } as Doc<"jobs">;
+  };
+
+  // SAFETY: `base` covers every required field of `Doc<"jobs">` (the fixture
+  // literal above lists them all); `overrides` only ever narrows optional or
+  // same-shaped fields, so this is a plain upcast to the full document type,
+  // not a lie about its shape.
+  return base as Doc<"jobs">;
 }
 
 describe("inlineImportStatus", () => {

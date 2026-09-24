@@ -107,9 +107,11 @@ export function PostCard({
   // relinkifying the cut string turns the remainder (with the "…" appended)
   // into part of the href, pointing at a broken address.
   const allSegments = trimmedText ? linkifyText(trimmedText) : [];
+
   const keyedSegments = keyLinkifySegments(
     !expanded && trimmedText.length > 700 ? truncateSegments(allSegments, 700) : allSegments,
   );
+
   return (
     <article className="post">
       <header>
