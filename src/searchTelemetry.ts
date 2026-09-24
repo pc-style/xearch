@@ -222,6 +222,7 @@ export function createSearchTelemetryStore(
     // iterator, and a component doing that on every notification would keep
     // this loop running. The copy is deliberate, not a useless spread.
     const snapshot = [...listeners];
+
     for (const listener of snapshot) listener();
   };
 
