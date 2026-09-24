@@ -5,6 +5,14 @@
  * parsing can be unit-tested without mounting the modal in `src/App.tsx`
  * that renders it.
  */
+// Reused from src/linkify.ts rather than duplicated: a fix to one copy (the
+// balanced-parenthesis handling there, for example) would otherwise never
+// reach this file's copy.
+import {
+  restoreBalancedParens,
+  shortenUrlForDisplay as shortenUrl,
+  TRAILING_PUNCTUATION,
+} from "./linkify";
 
 export interface WebContextTextSegment {
   readonly type: "text";
@@ -22,9 +30,18 @@ export interface WebContextParagraph {
   readonly segments: WebContextSegment[];
 }
 
-const TRAILING_PUNCTUATION = /[.,;:!?'")\]]+$/;
+/** Shorten a URL for display: hostname + path, capped, no scheme/query noise. */
+export function shortenUrlForDisplay(href: string, maxLength = 60): string {
+  return shortenUrl(href, maxLength);
+}
+
 // Markdown link `[label](https://…)` or a bare URL, whichever comes first.
-const INLINE_PATTERN = /\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s)]+)/g;
+// The markdown-link href excludes ")" — it's bounded by the link syntax's
+// own closing paren. The bare-URL alternative matches the same charset as
+// `src/linkify.ts`'s `URL_PATTERN` (parens included), so a URL like
+// `…/Mercury_(planet)` is captured whole and `restoreBalancedParens` below
+// can tell a URL-owned ")" apart from one closing surrounding prose.
+const INLINE_PATTERN = /\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"']+)/g;
 const HEADING_PREFIX = /^#{1,6}\s+/;
 const BULLET_PREFIX = /^(?:[-*+]|\d+\.)\s+/;
 const BLOCKQUOTE_PREFIX = /^>+\s?/;
@@ -33,24 +50,10 @@ const IMAGE_MARKDOWN = /!\[[^\]]*\]\([^)]*\)/g;
 // (Firecrawl does this for dates like `2024\-01\-15`); unescape all of them.
 const ESCAPED_PUNCTUATION = /\\([\\`*_{}[\]()#+\-.!>])/g;
 
-/** Shorten a URL for display: hostname + path, capped, no scheme/query noise. */
-export function shortenUrlForDisplay(href: string, maxLength = 60): string {
-  let display: string;
-  try {
-    const url = new URL(href);
-    display = `${url.hostname}${url.pathname}`.replace(/\/$/, "");
-  } catch {
-    display = href.replace(/^https?:\/\//, "");
-  }
-  if (display.length <= maxLength) return display;
-  return `${display.slice(0, maxLength - 1)}…`;
-}
-
 function stripBlockMarkers(block: string): string {
   let text = block.replace(HEADING_PREFIX, "");
   const bulletMatch = text.match(BULLET_PREFIX);
   if (bulletMatch) text = `• ${text.slice(bulletMatch[0].length)}`;
-  text = text.replace(BLOCKQUOTE_PREFIX, "");
   return text;
 }
 
@@ -64,7 +67,10 @@ function splitBlocks(markdown: string): string[] {
     current = [];
   };
   for (const rawLine of lines) {
-    const line = rawLine.trim();
+    // Stripped per line, not just at the start of the joined block: a
+    // multi-line blockquote ("> first\n> second") would otherwise keep the
+    // ">" on every line after the first once the lines are joined with " ".
+    const line = rawLine.trim().replace(BLOCKQUOTE_PREFIX, "").trim();
     if (line === "") {
       flush();
       continue;
@@ -95,7 +101,11 @@ function parseInlineSegments(text: string): WebContextSegment[] {
       if (trailingMatch) {
         trailing = trailingMatch[0];
         href = bareHref.slice(0, bareHref.length - trailing.length);
-        matchedLength -= trailing.length;
+        // Keep a closing ")" that the URL's own path needs, e.g.
+        // `…/Mercury_(planet)` — otherwise it's stripped as trailing
+        // punctuation and the link points at a URL that doesn't exist.
+        ({ raw: href, trailing } = restoreBalancedParens(href, trailing));
+        matchedLength = whole.length - trailing.length;
       }
       label = shortenUrlForDisplay(href);
     }

@@ -57,6 +57,24 @@ describe("parseWebContextMarkdown", () => {
     expect(plainText(paragraphs[0])).toBe("Posted on 2024-01-15.");
   });
 
+  it("keeps a closing paren the URL's own path needs (shared with src/linkify.ts)", () => {
+    const paragraphs = parseWebContextMarkdown(
+      "See https://en.wikipedia.org/wiki/Mercury_(planet) for more.",
+    );
+    const link = paragraphs[0].segments.find((s) => s.type === "link");
+    expect(link).toEqual({
+      type: "link",
+      href: "https://en.wikipedia.org/wiki/Mercury_(planet)",
+      label: "en.wikipedia.org/wiki/Mercury_(planet)",
+    });
+  });
+
+  it("strips blockquote markers from every line, not just the first", () => {
+    const paragraphs = parseWebContextMarkdown("> first\n> second");
+    expect(paragraphs).toHaveLength(1);
+    expect(plainText(paragraphs[0])).toBe("first second");
+  });
+
   it("converts a bullet list item into a bullet-prefixed paragraph", () => {
     const paragraphs = parseWebContextMarkdown("- first item\n- second item");
     expect(paragraphs.map(plainText)).toEqual(["• first item", "• second item"]);

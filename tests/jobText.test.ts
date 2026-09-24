@@ -24,21 +24,21 @@ describe("inlineImportStatus", () => {
     expect(inlineImportStatus(undefined)).toBeNull();
   });
 
-  it("reports an in-flight fetch for queued jobs", () => {
+  it("reports an in-flight download for queued jobs", () => {
     expect(inlineImportStatus(job({ status: "queued" }))).toBe(
-      "Fetching from X… results land in Recent imports.",
+      "Downloading from X… Progress appears in Recent imports.",
     );
   });
 
-  it("reports an in-flight fetch for running jobs", () => {
+  it("reports an in-flight download for running jobs", () => {
     expect(inlineImportStatus(job({ status: "running", phase: "Saving raw capture" }))).toBe(
-      "Fetching from X… results land in Recent imports.",
+      "Downloading from X… Progress appears in Recent imports.",
     );
   });
 
   it("reports a completed job with the job's own summary", () => {
     expect(inlineImportStatus(job({ status: "complete" }))).toBe(
-      "Downloaded — Response saved See Recent imports for details.",
+      "Downloaded — Response saved. See Recent imports for details.",
     );
   });
 
@@ -47,6 +47,12 @@ describe("inlineImportStatus", () => {
       inlineImportStatus(
         job({ status: "failed", error: "x.md could not finish this request (400)" }),
       ),
-    ).toBe("Failed — x.md could not finish this request (400) See Recent imports for details.");
+    ).toBe("Failed — x.md could not finish this request (400). See Recent imports for details.");
+  });
+
+  it("does not add a redundant period when the detail already ends a sentence", () => {
+    expect(inlineImportStatus(job({ status: "failed", error: "The request timed out." }))).toBe(
+      "Failed — The request timed out. See Recent imports for details.",
+    );
   });
 });

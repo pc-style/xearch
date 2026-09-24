@@ -13,7 +13,7 @@ import {
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
-import { keyLinkifySegments, linkifyText } from "./linkify";
+import { keyLinkifySegments, linkifyText, truncateSegments } from "./linkify";
 import type { ResultPost } from "../convex/lib/results";
 import type { Sort } from "../convex/lib/search";
 import { NerdStatsPanel } from "./library/NerdStatsPanel";
@@ -102,9 +102,14 @@ export function PostCard({
   const createdAt = post.createdAt === undefined ? null : new Date(post.createdAt);
   const hasValidDate = createdAt !== null && !Number.isNaN(createdAt.getTime());
   const trimmedText = post.text.trim();
-  const displayText =
-    !expanded && trimmedText.length > 700 ? `${trimmedText.slice(0, 700)}…` : trimmedText;
-  const keyedSegments = keyLinkifySegments(trimmedText ? linkifyText(displayText) : []);
+  // Linkify the full text first, then truncate the *segments* — slicing the
+  // raw string at a fixed character count first can cut a URL in half, and
+  // relinkifying the cut string turns the remainder (with the "…" appended)
+  // into part of the href, pointing at a broken address.
+  const allSegments = trimmedText ? linkifyText(trimmedText) : [];
+  const keyedSegments = keyLinkifySegments(
+    !expanded && trimmedText.length > 700 ? truncateSegments(allSegments, 700) : allSegments,
+  );
   return (
     <article className="post">
       <header>

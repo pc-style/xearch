@@ -113,12 +113,24 @@ export function acquisitionStatusLabel(status: JobStatus): string {
  * `jobSummary` for the terminal wording so this never drifts from what the
  * Recent imports list itself says about the same job.
  */
+// Only `.`, `!`, `?`, and `…` read as a sentence ending; `jobSummary` values
+// and some provider error strings have none, so joining them straight to
+// "See Recent imports" runs two sentences together with no separator.
+const SENTENCE_END = /[.!?…]$/;
+function withSentenceEnd(text: string): string {
+  return SENTENCE_END.test(text) ? text : `${text}.`;
+}
+
 export function inlineImportStatus(job: Doc<"jobs"> | undefined): string | null {
   if (!job) return null;
   if (job.status === "queued" || job.status === "running")
-    return "Fetching from X… results land in Recent imports.";
+    // "Downloading", not "Fetching…results" — this only reports the x.md
+    // download landing in Recent imports, a different state from the
+    // download later becoming searchable (see docs/publication-contract.md);
+    // "results" here read as search results, which this is not.
+    return "Downloading from X… Progress appears in Recent imports.";
   const detail = job.error ?? jobSummary(job);
-  return `${jobLabel(job)} — ${detail} See Recent imports for details.`;
+  return `${jobLabel(job)} — ${withSentenceEnd(detail)} See Recent imports for details.`;
 }
 
 export function describeRunOutcome(run: {

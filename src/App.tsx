@@ -337,7 +337,13 @@ export default function App() {
             }
           : null,
       );
-      setView(ViewMode.Search);
+      // Use route.view, not a hardcoded Search: a query change from
+      // Back/Forward can land on a URL that still carries `?view=bookmarks`
+      // (e.g. the user was on `/?q=a&view=bookmarks`, searched `b`, then
+      // pressed Back to `/?q=a&view=bookmarks` again), and `parseUrl`
+      // already defaults to Search when the URL has no `view` at all — so
+      // this is never less correct than hardcoding it.
+      setView(route.view);
       setProposal(null);
     } else if (route.view !== view) {
       // Same query, only the view changed underneath it — e.g. Back/Forward
@@ -657,6 +663,10 @@ export default function App() {
     const trimmed = query.trim();
     const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort);
     appendModeRef.current = false;
+    // A "Find on X" job belongs to the query that started it; a new search
+    // must not keep showing that old job's inline status as if it were
+    // about the new one.
+    setLiveImportJobId(null);
     const attemptId = allocateAttempt();
 
     const request: SearchRequest = {
@@ -766,7 +776,13 @@ export default function App() {
             onClick={() => {
               const nextView = view === ViewMode.Bookmarks ? ViewMode.Search : ViewMode.Bookmarks;
               setView(nextView);
-              pushLocation({ view: nextView });
+              // Carry the current `statsForNerds` value along: the "Stats
+              // for nerds" checkbox never itself pushes a location, so if
+              // it drifted from the URL's `stats` param, leaving it out
+              // here would make the next route sync see includeStats as
+              // "changed" — misreading this view toggle as a query change,
+              // which resets rows/session and reverts the checkbox.
+              pushLocation({ view: nextView, includeStats: statsForNerds });
             }}
           >
             <Bookmark size={15} />

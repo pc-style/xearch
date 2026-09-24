@@ -23,9 +23,32 @@ export type LinkifySegment = LinkifyTextSegment | LinkifyLinkSegment;
 // Trailing characters that are almost always punctuation closing a
 // sentence/parenthetical rather than part of the URL itself. Left out of
 // the match so "see https://example.com." links to example.com, not
-// example.com. (with the period).
-const TRAILING_PUNCTUATION = /[.,;:!?'")\]]+$/;
+// example.com. (with the period). Exported so `src/webContextText.ts` uses
+// this exact set rather than its own copy that could drift.
+export const TRAILING_PUNCTUATION = /[.,;:!?'")\]]+$/;
 const URL_PATTERN = /https?:\/\/[^\s<>"']+/g;
+
+/**
+ * Put back a stripped closing ")" for every unmatched "(" still inside the
+ * URL — a Wikipedia-style link like `…/Mercury_(planet)` would otherwise
+ * lose its closing paren to `TRAILING_PUNCTUATION` and point at a URL that
+ * doesn't exist (`…/Mercury_(planet`).
+ */
+export function restoreBalancedParens(
+  raw: string,
+  trailing: string,
+): { raw: string; trailing: string } {
+  let restoredRaw = raw;
+  let remainingTrailing = trailing;
+  while (remainingTrailing.startsWith(")")) {
+    const opens = (restoredRaw.match(/\(/g) ?? []).length;
+    const closes = (restoredRaw.match(/\)/g) ?? []).length;
+    if (opens <= closes) break;
+    restoredRaw += ")";
+    remainingTrailing = remainingTrailing.slice(1);
+  }
+  return { raw: restoredRaw, trailing: remainingTrailing };
+}
 
 /** Shorten a URL for display: hostname + path, capped, no scheme/query noise. */
 export function shortenUrlForDisplay(href: string, maxLength = 40): string {
@@ -72,6 +95,7 @@ export function linkifyText(text: string): LinkifySegment[] {
     if (trailingMatch) {
       trailing = trailingMatch[0];
       raw = raw.slice(0, raw.length - trailing.length);
+      ({ raw, trailing } = restoreBalancedParens(raw, trailing));
     }
     if (!raw) continue;
     if (start > cursor) segments.push({ type: "text", value: text.slice(cursor, start) });
@@ -84,4 +108,34 @@ export function linkifyText(text: string): LinkifySegment[] {
   }
   if (cursor < text.length) segments.push({ type: "text", value: text.slice(cursor) });
   return segments;
+}
+
+/**
+ * Truncate already-linkified segments to roughly `maxChars` of plain text
+ * without cutting through a link segment. Cutting a `href` mid-string (as
+ * slicing the raw text before linkifying would do whenever a URL crosses
+ * the cutoff) turns a real link into a broken one; this only ever shortens
+ * a `text` segment, and appends "…" as one more text segment.
+ */
+export function truncateSegments(
+  segments: readonly LinkifySegment[],
+  maxChars: number,
+): LinkifySegment[] {
+  const out: LinkifySegment[] = [];
+  let used = 0;
+  for (const segment of segments) {
+    const length = segment.type === "link" ? segment.label.length : segment.value.length;
+    if (used + length <= maxChars) {
+      out.push(segment);
+      used += length;
+      continue;
+    }
+    if (segment.type === "text") {
+      const remaining = maxChars - used;
+      if (remaining > 0) out.push({ type: "text", value: segment.value.slice(0, remaining) });
+    }
+    out.push({ type: "text", value: "…" });
+    return out;
+  }
+  return out;
 }
