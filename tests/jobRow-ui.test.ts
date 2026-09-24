@@ -197,6 +197,33 @@ describe("JobRow (src/JobRow.tsx) rendered output", () => {
     unmount();
   });
 
+  // /tmp/issues.md item 3: several failed "Conversation on @handle's post"
+  // rows can share the same label and the same rounded relative age — this
+  // is the other half of that job's identity (the post id is the other,
+  // already covered by jobKindLabel itself), and the raw URL that never
+  // belongs in the main label stays available under "Technical details".
+  it("shows a post job's exact start time and its raw status URL only behind Technical details", () => {
+    const post = job({
+      kind: "post",
+      input: "https://x.com/theo/status/12345",
+      _creationTime: Date.UTC(2026, 0, 1, 9, 5),
+    });
+
+    const { html, unmount } = renderRow({ job: post, now: Date.UTC(2026, 0, 1, 9, 10) });
+
+    expect(html).toContain("started");
+    expect(html).toContain("https://x.com/theo/status/12345");
+    unmount();
+  });
+
+  it("never shows a raw status URL for a non-post job", () => {
+    const bulk = job({ kind: "bulk", input: "theo" });
+    const { html, unmount } = renderRow({ job: bulk });
+
+    expect(html).not.toContain("started");
+    unmount();
+  });
+
   it("labels a live-search job with its query, not a raw kind string", () => {
     const live = job({ kind: "live", input: "@theo convex" });
     const { html, unmount } = renderRow({ job: live });
