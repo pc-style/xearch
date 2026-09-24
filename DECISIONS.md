@@ -198,8 +198,10 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
   page-size changes, huggingface (4th page) and lauren_tan (1st page) still
   failed: x.md answers 504 at its own ~2-minute gateway limit at 8 chains, and
   503 `upstream_rate_limited` at 32. Both ran their 10 automatic attempts and
-  stopped with the provider's error. Nothing client-side changes that; they
-  get re-queued when x.md has headroom.
+  stopped with the provider's error. Nothing client-side changes that. A
+  failure under the 10-attempt limit is re-queued automatically; a job that
+  reaches it is terminal (partial/failed) and a person re-queues it by hand
+  once x.md has headroom.
 - **Paid actions require an operator; search stays public.** Anyone could
   start x.md imports and Firecrawl/OpenAI calls with an anonymous session.
   `requireOperator` (convex/access.ts) checks the caller's verified email
