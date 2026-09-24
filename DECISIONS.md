@@ -191,3 +191,29 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
   nothing republished it; `scripts/vm-update.sh` now does when application
   code changed. Re-enabling `xearch-update.timer` and restarting the worker
   stay manual, per docs/production.md.
+
+# Later the same day (PRs #44–#52)
+
+- **x.md, not us, is the ceiling for some accounts.** After the timeout and
+  page-size changes, huggingface (4th page) and lauren_tan (1st page) still
+  failed: x.md answers 504 at its own ~2-minute gateway limit at 8 chains, and
+  503 `upstream_rate_limited` at 32. Both ran their 10 automatic attempts and
+  stopped with the provider's error. Nothing client-side changes that. A
+  failure under the 10-attempt limit is re-queued automatically; a job that
+  reaches it is terminal (partial/failed) and a person re-queues it by hand
+  once x.md has headroom.
+- **Paid actions require an operator; search stays public.** Anyone could
+  start x.md imports and Firecrawl/OpenAI calls with an anonymous session.
+  `requireOperator` (convex/access.ts) checks the caller's verified email
+  against `OPERATOR_EMAILS`; no quota or rate limit was added. Set on prod
+  to the operator's address before #50 merged.
+- **The operator publish guard follows the dashboard.** The updater refused
+  every build after #48 removed the "Dependency health" heading it grepped
+  for. The guard and `check-public-bundle.mjs` now share the same marker.
+- **One job row, everywhere.** The header modal's "Recent imports" was a
+  second job manager with its own bugs (raw URLs, duplicate rows, Retry on
+  permanent failures). `src/JobRow.tsx` serves both surfaces; `jobs.retryable`
+  is persisted so a permanent provider failure is never offered a retry.
+- **Reviews.** CodeRabbit reviews every push; when it reported "rate
+  limited" on #41's final head, codex reviewed the diff instead, per the
+  house rule.
