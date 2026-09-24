@@ -778,7 +778,8 @@ dialog::backdrop {
   padding: 15px 0;
   border-top: 1px solid var(--line);
 }
-.job > div {
+.job > div,
+.job-row-heading {
   display: flex;
   gap: 12px;
   justify-content: space-between;
@@ -800,6 +801,39 @@ dialog::backdrop {
 .job button {
   font-size: 11px;
   margin-top: 6px;
+}
+/* src/JobRow.tsx — the one job row shared by the header modal (this
+   stylesheet) and the operator dashboard (dashboard.css layers its own
+   `.control-job`/`.job-status` look on top; both load globally, per the
+   comment on src/Dashboard.tsx's own header). */
+.job-row-time {
+  font-size: 11px;
+  margin: 2px 0 0;
+}
+.job-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.job-row-actions button {
+  margin-top: 0;
+}
+.job-row-details {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.job-row-details summary {
+  cursor: pointer;
+  color: #b3aca2;
+  font-size: 11px;
+}
+.job-row-details code {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+  color: #a89f93;
 }
 .job-status {
   font-size: 10px;
