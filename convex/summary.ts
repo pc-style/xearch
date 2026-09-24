@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { user } from "./access";
-import { ACCOUNT_JOB_KIND, ownedAccountJobs, resolveJobAccount } from "./lib/accounts";
+import { ACCOUNT_JOB_KIND, allAccountJobs, resolveJobAccount } from "./lib/accounts";
 import { serviceValidator } from "./schema";
 import {
   dashboardSummaryValidator,
@@ -30,14 +30,20 @@ import {
  *   2. `accountPublications.searchablePostCount` is the ONLY source for a
  *      searchable-post total — never `jobs.count`, `jobs.postsReceived`, nor
  *      a count of receipts/files. See "What unique means" in the contract.
+ *
+ * The imported corpus is shared infrastructure, not personal data: every
+ * count here is computed across every owner's jobs, and `scope` reports
+ * `{ kind: "global" }` rather than an owner-scoped view. `jobs.owner` still
+ * records who started each run (an audit trail); it is no longer a
+ * visibility boundary for these totals.
  */
 
 // --- Bounded reads ------------------------------------------------------
 // Convex query guidelines: never `.collect()` an unbounded table; use
 // `.take()` with a cap instead. These are generous relative to how many
-// jobs/accounts/receipts one account or one owner realistically has today.
+// jobs/accounts/receipts the shared corpus realistically has today.
 // These are the same tradeoff convex/library.ts already accepts for its own
-// owner-scoped job list, and the one docs/publication-contract.md itself
+// shared job list, and the one docs/publication-contract.md itself
 // names for `savedCapturesAwaitingIndexing`
 // ("a denormalized per-capture status table is a reasonable future addition
 // — not built now"). If this table outgrows these caps, the fix is
@@ -76,10 +82,9 @@ function unknownCount(unit: Count["unit"]): Count {
 //      has ever reported is therefore "unknown". A unit some account DID
 //      report on is "known", even when the tally is 0, because then someone
 //      actually looked and said so.
-//   3. Same owner scope as every other account-derived figure here: it is
-//      computed in the one pass over the caller's own accounts below, off
-//      the publication rows already being read, so it adds no extra read and
-//      cannot describe an account this caller never imported.
+//   3. Same shared-corpus scope as every other account-derived figure here:
+//      it is computed in the one pass over the accounts below, off the
+//      publication rows already being read, so it adds no extra read.
 type PendingWorkUnit = NonNullable<Doc<"accountPublications">["pendingWork"]>["unit"];
 type PendingWorkTally = { reported: boolean; sum: number };
 
@@ -98,12 +103,12 @@ function pendingWorkCount(unit: PendingWorkUnit, tally: PendingWorkTally): Count
   return tally.reported ? knownCount(unit, tally.sum) : unknownCount(unit);
 }
 
-// --- Indexed posts / indexed people (owner-scoped) ----------------------
+// --- Indexed posts / indexed people (shared corpus) ----------------------
 //
 // Both totals are derived from the same account set convex/library.ts builds
 // its rows from, so the "Indexed people" tile is exactly the length of the
 // list it links to rather than a number that happens to look similar. The
-// scan is bounded by one person's own imports; past that bound the totals
+// scan is bounded across the whole shared corpus; past that bound the totals
 // report "unknown" instead of presenting a partial sum as a complete one.
 
 async function computeAccountTotals(
@@ -173,20 +178,15 @@ async function computeAccountTotals(
   };
 }
 
-// --- Queue (owner-scoped via jobs.owner) ---------------------------------
+// --- Queue (every owner's jobs; the queue is shared infrastructure) ------
 
-async function ownedJobs(
-  ctx: QueryCtx,
-  owner: Id<"users">,
-): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
+async function allJobs(ctx: QueryCtx): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
   // One past the bound, so a full page is distinguishable from a truncated
   // scan. Newest first: a bounded read that silently kept the OLDEST jobs
-  // would describe a queue the owner no longer has.
-  const scanned = await ctx.db
-    .query("jobs")
-    .withIndex("by_owner", (q) => q.eq("owner", owner))
-    .order("desc")
-    .take(MAX_OWNED_JOBS + 1);
+  // would describe a queue this deployment no longer has. No index needed
+  // for a whole-table scan ordered by `_creationTime` (Convex's default
+  // table order) — the same pattern convex/jobs.ts `list` already uses.
+  const scanned = await ctx.db.query("jobs").order("desc").take(MAX_OWNED_JOBS + 1);
   const truncated = scanned.length > MAX_OWNED_JOBS;
   return { jobs: truncated ? scanned.slice(0, MAX_OWNED_JOBS) : scanned, truncated };
 }
@@ -220,7 +220,7 @@ async function confirmedCaptureIds(
   return set;
 }
 
-// unit "captures" — durable receipts this owner's bulk jobs produced that no
+// unit "captures" — durable receipts the shared corpus's bulk jobs produced that no
 // accepted publication update has confirmed yet. Guidance in
 // docs/publication-contract.md "Dashboard-facing shapes"; NEVER a count of
 // posts (a capture/receipt is a file, not a post — to-do.md "Never label a
@@ -229,12 +229,12 @@ async function computeSavedCapturesAwaitingIndexing(
   ctx: QueryCtx,
   bulkJobs: Doc<"jobs">[],
   // Shared with the caller rather than built locally: this function and the
-  // owner-scoped totals resolve the same jobs to the same accounts, so a
-  // second cache just paid for every one of those reads twice per load.
+  // account totals resolve the same jobs to the same accounts, so a second
+  // cache just paid for every one of those reads twice per load.
   accountCache: Map<string, Doc<"accounts"> | null>,
 ): Promise<Count> {
   const confirmedCache = new Map<Id<"accounts">, Set<string>>();
-  // Dedupe at the ACCOUNT level across ALL of the owner's bulk jobs for that
+  // Dedupe at the ACCOUNT level across ALL of the shared corpus's bulk jobs for that
   // account, never per job. captureId is content-addressed (same content ->
   // same id — see tests/indexing.test.ts), so a retry job that re-downloads
   // previously-captured content produces a second receipt row with the SAME
@@ -281,7 +281,7 @@ async function computeQueue(
   let failedRetryable = 0;
   const bulkJobs: Doc<"jobs">[] = [];
   for (const job of jobs) {
-    // A dismissed run is one the owner explicitly cleared (convex/jobs.ts
+    // A dismissed run is one someone explicitly cleared (convex/jobs.ts
     // `dismiss`), so it must stop counting toward the work-to-do numbers —
     // otherwise dismissing changes nothing a person can see. Only terminal
     // runs can be dismissed, so this can never hide active work.
@@ -342,14 +342,15 @@ export const summary = query({
   args: { now: v.number() },
   returns: dashboardSummaryValidator,
   handler: async (ctx, args): Promise<DashboardSummary> => {
-    // Authenticated backend contract only — no raw state files, service
-    // credentials, or private logs are read anywhere in this file; every
-    // returned field is exactly a Count, a timestamp, or the fixed "global"
-    // scope literal.
-    const owner = await user(ctx);
-    const owned = await ownedJobs(ctx, owner);
+    // Authenticated callers only — no raw state files, service credentials,
+    // or private logs are read anywhere in this file; every returned field
+    // is exactly a Count, a timestamp, or the fixed "global" scope literal.
+    // The imported corpus is shared infrastructure, so every signed-in
+    // caller reads the same totals; `jobs.owner` is not consulted here.
+    await user(ctx);
+    const owned = await allJobs(ctx);
     // One cache for the whole request: the queue's capture tally and the
-    // owner-scoped totals below resolve the same jobs to the same accounts.
+    // account totals below resolve the same jobs to the same accounts.
     const accountCache = new Map<string, Doc<"accounts"> | null>();
     const queue = await computeQueue(ctx, owned.jobs, owned.truncated, accountCache);
     // Resolved from the library-matching read, not from the queue's wider
@@ -357,7 +358,7 @@ export const summary = query({
     // links to are computed over the same rows and cannot disagree.
     const accountIds: Id<"accounts">[] = [];
     const seen = new Set<Id<"accounts">>();
-    const accountJobs = await ownedAccountJobs(ctx.db, owner);
+    const accountJobs = await allAccountJobs(ctx.db);
     for (const job of accountJobs.jobs) {
       const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
       if (accountId && !seen.has(accountId)) {
@@ -365,9 +366,9 @@ export const summary = query({
         accountIds.push(accountId);
       }
     }
-    // Truncation is the caller's fact, not part of summing: past the bound
-    // none of these can honestly describe "every account this caller
-    // imported", which is what the scope below claims — including the
+    // Truncation is a fact about the read, not part of summing: past the
+    // bound none of these can honestly describe "every account in the
+    // corpus", which is what the scope below claims — including the
     // queued-work totals, since the accounts we could not read may be the
     // ones with work outstanding.
     const { indexedPosts, indexedAccounts, providerQueuedWork } = accountJobs.truncated
@@ -386,11 +387,11 @@ export const summary = query({
       indexedAccounts,
       queue,
       providerQueuedWork,
-      // Everything above is scoped to this caller's own imports — see
+      // Everything above is computed over the whole shared corpus — see
       // computeAccountTotals. convex/lib/contracts.ts summaryScopeValidator's
       // "account" variant remains reserved for to-do.md P1's authorized
       // collection access and is not wired to anything.
-      scope: { kind: "owner" },
+      scope: { kind: "global" },
       observedAt: args.now,
     };
   },

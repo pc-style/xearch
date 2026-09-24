@@ -9,7 +9,7 @@ import {
   type AccountLibraryRow,
   type NextAction,
 } from "./lib/contracts";
-import { ownedAccountJobs, ownerJobsForAccount, resolveJobAccount } from "./lib/accounts";
+import { allAccountJobs, jobsForAccount, resolveJobAccount } from "./lib/accounts";
 
 /**
  * The account-library query that replaces the job wall (to-do.md P0
@@ -17,26 +17,32 @@ import { ownedAccountJobs, ownerJobsForAccount, resolveJobAccount } from "./lib/
  * account identity, built strictly from accountPublications (never summed
  * job/receipt counters) plus that account's own acquisition jobs. Full
  * semantics: docs/publication-contract.md.
+ *
+ * The imported corpus is shared infrastructure, not personal data: every
+ * signed-in caller sees the same rows, built from account-history jobs
+ * across every owner, not just their own. `jobs.owner` still records who
+ * started each run (an audit trail); it is no longer a visibility boundary
+ * here. Saved searches, bookmarks, sessions, and email deliveries remain
+ * per-owner and are untouched by this file.
  */
 // Bounded reads for one account's expandable history (Convex query
 // guidelines: no unbounded .collect()). Generous relative to how many runs
-// one person works through by hand.
+// people work through by hand.
 const MAX_HISTORY_JOBS = 50;
 const MAX_HISTORY_RECEIPTS = 100;
 
 type AccountBucket = { account: Doc<"accounts">; jobs: Doc<"jobs">[] };
 
-// Group this owner's bulk jobs by resolved account. A job whose identity
-// cannot be resolved to an existing account row is dropped, not shown as a
-// row of its own: this app never creates an account row from anything but a
-// successful acquisition profile pin (convex/jobs.ts finish), so an
-// unresolved first-ever run belongs to the queue, not the library — see
-// docs/publication-contract.md "Account identity".
-async function groupOwnedJobsByAccount(
+// Group every bulk job in the shared corpus by resolved account. A job whose
+// identity cannot be resolved to an existing account row is dropped, not
+// shown as a row of its own: this app never creates an account row from
+// anything but a successful acquisition profile pin (convex/jobs.ts finish),
+// so an unresolved first-ever run belongs to the queue, not the library —
+// see docs/publication-contract.md "Account identity".
+async function groupJobsByAccount(
   ctx: QueryCtx,
-  owner: Id<"users">,
 ): Promise<{ byAccount: Map<Id<"accounts">, AccountBucket>; truncated: boolean }> {
-  const { jobs, truncated } = await ownedAccountJobs(ctx.db, owner);
+  const { jobs, truncated } = await allAccountJobs(ctx.db);
   const identityCache = new Map<string, Doc<"accounts"> | null>();
   const byAccount = new Map<Id<"accounts">, AccountBucket>();
   for (const job of jobs) {
@@ -58,13 +64,18 @@ function latestOf(jobs: Doc<"jobs">[]): Doc<"jobs"> {
 // failed *publication* update and a failed *acquisition* job are different
 // things (docs/publication-contract.md), and this app has no receiver for
 // the former yet; this only reasons about the job's own acquisition status.
+//
+// There is no "continue" action: acquisition never waits on a person to ask
+// for the next page or the next retry — convex/jobs.ts `finish` requeues a
+// job with more to fetch (bulk history via `nextUntil`, every other kind via
+// `nextCursor`) and backs off and requeues a transient failure on its own.
+// A "queued" job with a future `readyAt` is either of those in flight, which
+// is exactly what "wait" reports.
 function nextActionFor(job: Doc<"jobs">): NextAction {
   if (job.status === "failed" || job.status === "partial" || job.status === "cancelled")
     return { kind: "retry", jobId: job._id };
   if (job.status === "queued" && job.readyAt !== undefined && job.readyAt > Date.now())
     return { kind: "wait", jobId: job._id, readyAt: job.readyAt };
-  if (job.status === "complete" && (job.nextUntil !== undefined || job.nextCursor !== undefined))
-    return { kind: "continue", jobId: job._id };
   return { kind: "none" };
 }
 
@@ -75,16 +86,18 @@ export const rows = query({
   },
   returns: v.object({
     rows: v.array(accountLibraryRowValidator),
-    // True when this owner has more account imports than one bounded read
-    // covers, so `rows` is a page rather than their whole library. Returned
-    // rather than hidden: a list silently missing its oldest accounts looks
-    // identical to a complete one, and the counts beside it are derived from
-    // the same bound.
+    // True when the shared corpus has more account imports than one bounded
+    // read covers, so `rows` is a page rather than the whole library.
+    // Returned rather than hidden: a list silently missing its oldest
+    // accounts looks identical to a complete one, and the counts beside it
+    // are derived from the same bound.
     truncated: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    const owner = await user(ctx);
-    const { byAccount, truncated } = await groupOwnedJobsByAccount(ctx, owner);
+    // Authenticated callers only; every signed-in caller sees the same
+    // shared corpus, so nothing about the identity narrows what comes back.
+    await user(ctx);
+    const { byAccount, truncated } = await groupJobsByAccount(ctx);
     const search = args.search?.trim().toLowerCase();
     const out: AccountLibraryRow[] = [];
     for (const [accountId, { account, jobs }] of byAccount) {
@@ -102,7 +115,7 @@ export const rows = query({
       // for this account; docs/publication-contract.md collapses "downloaded"
       // and "waiting_for_indexing" into the same instant once acquisition has
       // a durable receipt, and every account row here came from at least one
-      // successful acquisition (see groupOwnedJobsByAccount), so
+      // successful acquisition (see groupJobsByAccount), so
       // "waiting_for_indexing" is the honest default.
       const publicationState = publication?.state ?? "waiting_for_indexing";
       if (args.status && args.status !== publicationState) continue;
@@ -181,12 +194,14 @@ export const history = query({
   args: { accountId: v.id("accounts") },
   returns: v.array(historyRunValidator),
   handler: async (ctx, args) => {
-    const owner = await user(ctx);
-    // A targeted ownership lookup, NOT the bounded library page. Deriving
-    // this from the page meant an owner with more imports than it holds was
-    // told "not found" for an account they genuinely own, and lost both its
-    // run history and the evidence behind a dismissed run.
-    const { jobs, exhausted } = await ownerJobsForAccount(ctx.db, owner, args.accountId);
+    // Authenticated callers only; the account's history is shared corpus
+    // evidence, not this caller's own.
+    await user(ctx);
+    // A targeted lookup, NOT the bounded library page. Deriving this from the
+    // page meant a caller reaching past its bound was told "not found" for
+    // an account that genuinely exists, and lost both its run history and
+    // the evidence behind a dismissed run.
+    const { jobs, exhausted } = await jobsForAccount(ctx.db, args.accountId);
     // Checked BEFORE looking at what was found, not only when nothing was.
     // An incomplete scan that happened to find some runs is still incomplete:
     // the scan walks _creationTime order while this list is presented by
@@ -196,10 +211,10 @@ export const history = query({
     // total.
     if (!exhausted)
       throw new ConvexError(
-        "Could not read this account's full history — you have too many imports to search in one request.",
+        "Could not read this account's full history — there are too many imports to search in one request.",
       );
-    // Same message whether the account does not exist or simply is not this
-    // owner's — never confirm another user's account exists.
+    // Same message whether the account does not exist or has no jobs yet —
+    // never confirm state beyond what the corpus actually shows.
     if (jobs.length === 0) throw new ConvexError("Account not found.");
     // Exact over the scanned window: every match was collected before
     // sorting, so ordering by updatedAt cannot drop a job that the index's

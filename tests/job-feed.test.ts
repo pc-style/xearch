@@ -111,10 +111,17 @@ describe("clearing finished runs", () => {
     await expect(a.mutation(api.jobs.dismiss, { jobId: queued })).rejects.toThrow("Stop this run");
   });
 
-  it("never lets one person dismiss another person's run", async () => {
+  it("lets any signed-in person dismiss a run someone else started — imports are shared, not personal", async () => {
     const { t, alice, b } = await setup();
     const job = await insertJob(t, alice, { input: "@theo", status: "failed" });
-    await expect(b.mutation(api.jobs.dismiss, { jobId: job })).rejects.toThrow("Job not found.");
+    await b.mutation(api.jobs.dismiss, { jobId: job });
+    expect((await t.run((ctx) => ctx.db.get(job)))?.dismissedAt).toBeTypeOf("number");
+  });
+
+  it("still refuses an unauthenticated caller entirely", async () => {
+    const { t, alice } = await setup();
+    const job = await insertJob(t, alice, { input: "@theo", status: "failed" });
+    await expect(t.mutation(api.jobs.dismiss, { jobId: job })).rejects.toThrow();
   });
 
   it("keeps a dismissed run's captures counted as awaiting indexing, because hiding a row does not un-store its data", async () => {
@@ -229,5 +236,43 @@ describe("one live search, one name", () => {
       input: "from:Theo Convex Components",
     });
     expect((await t.run((ctx) => ctx.db.get(job)))?.input).toBe("@theo Convex Components");
+  });
+});
+
+describe("the imported corpus is shared across owners", () => {
+  it("lets a different signed-in user see and continue a bulk import someone else started", async () => {
+    const { t, alice, b } = await setup();
+    const accountId = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "theo", userId: "1", name: "Theo" }),
+    );
+    const job = await insertJob(t, alice, { input: "theo", kind: "bulk", status: "complete" });
+    await t.run((ctx) =>
+      ctx.db.patch(job, {
+        expectedUserId: "1",
+        nextUntil: "2025-01-01T00:00:00.000Z",
+      }),
+    );
+
+    // bob (a different anonymous user) sees alice's job in the shared feed —
+    // jobs are shared infrastructure, not personal data.
+    const feed = await b.query(api.jobs.list, {});
+    expect(feed.map((j) => j._id)).toContain(job);
+
+    // ...and in the account library, same as alice would.
+    const library = (await b.query(libraryRows, {})).rows;
+    expect(library.map((r) => r.accountId)).toContain(accountId);
+
+    // ...and can pick up the same import without hitting "Continuation does
+    // not belong to this indexing job" — that check no longer looks at who
+    // started the run it continues.
+    vi.stubEnv("X_MD_API_KEY", "test");
+    vi.stubEnv("RAW_CAPTURE_URL", "http://127.0.0.1:4319/captures");
+    vi.stubEnv("COLLECTOR_MODE", "receiver");
+    const next = await b.mutation(api.jobs.start, {
+      kind: "bulk",
+      input: "theo",
+      previous: job,
+    });
+    expect(next).not.toBe(job);
   });
 });

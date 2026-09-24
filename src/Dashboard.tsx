@@ -7,16 +7,24 @@ import { indexingUnavailableMessage } from "./integrationStatus";
 import { describeError, useTask } from "./errors";
 import { jobLabel, jobSummary, jobWarnings } from "./jobText";
 import Library from "./library/Library";
+import { useDashboardClock } from "./library/clock";
 
 function Job({ job }: { job: Doc<"jobs"> }) {
   const [expanded, setExpanded] = useState(false),
     [error, setError] = useState("");
+  // convex/_generated/ai/guidelines.md "Do not read the wall clock inside a
+  // query" applies just as much to a render body: a bare `Date.now()` here
+  // would freeze at whatever instant last re-rendered this row instead of
+  // ever advancing on its own, so "Retrying automatically at HH:MM" could
+  // sit on the wrong branch indefinitely. `useDashboardClock` is the same
+  // subscribed, periodically-refreshing clock src/library/Library.tsx
+  // already uses for its own queries.
+  const now = useDashboardClock();
   const receipts = useQuery(api.jobs.receipts, expanded ? { jobId: job._id } : "skip");
   const cancel = useMutation(api.jobs.cancel),
     retry = useMutation(api.jobs.retry),
     dismiss = useMutation(api.jobs.dismiss),
-    restore = useMutation(api.jobs.restore),
-    start = useMutation(api.jobs.start);
+    restore = useMutation(api.jobs.restore);
   const act = async (fn: () => Promise<unknown>) => {
     setError("");
     try {
@@ -36,26 +44,30 @@ function Job({ job }: { job: Doc<"jobs"> }) {
       <p>{jobSummary(job)}</p>
       <p className="control-phase" role="status">
         {job.status === "complete"
-          ? job.nextUntil
-            ? "More history remains. Continue to download the rest automatically."
-            : job.floorReached
-              ? "x.md reached the oldest history it can retrieve. Older posts may still exist on X."
-              : // This kind of job (live search, single post, profile, follower
-                // lookup, etc.) never creates a searchable account entry — that
-                // pipeline is covered per-account in the account library above,
-                // which is the only place search-publication state is reported.
-                "Saved. This isn't an account import, so it doesn't appear in your account library."
-          : job.status === "queued" || job.status === "running"
-            ? (job.phase ?? "Waiting to start")
-            : job.status === "cancelled"
-              ? (job.phase ?? "Stopped by request.")
-              : // "failed" / "partial": never the leftover in-progress phase
-                // (e.g. "Saving raw capture") here — see jobText.ts
-                // stoppedRunSummary, which jobSummary above already uses for
-                // the retained-progress line; the actual failure reason is
-                // in job.error below. to-do.md P0 "Do not leave failed jobs
-                // showing only 'Saving raw capture.'"
-                "This run did not finish."}
+          ? job.floorReached
+            ? "x.md reached the oldest history it can retrieve. Older posts may still exist on X."
+            : // This kind of job (live search, single post, profile, follower
+              // lookup, etc.) never creates a searchable account entry — that
+              // pipeline is covered per-account in the account library above,
+              // which is the only place search-publication state is reported.
+              "Saved. This isn't an account import, so it doesn't appear in your account library."
+          : job.status === "queued" && job.readyAt !== undefined && job.readyAt > now
+            ? // Auto-continuation and backed-off retries both land here: a
+              // person never has to ask for the next page or retry a
+              // transient failure — convex/jobs.ts `finish` requeues the
+              // SAME job on its own. Nothing to click; just when it happens.
+              `Retrying automatically at ${new Date(job.readyAt).toLocaleTimeString()}`
+            : job.status === "queued" || job.status === "running"
+              ? (job.phase ?? "Waiting to start")
+              : job.status === "cancelled"
+                ? (job.phase ?? "Stopped by request.")
+                : // "failed" / "partial": never the leftover in-progress phase
+                  // (e.g. "Saving raw capture") here — see jobText.ts
+                  // stoppedRunSummary, which jobSummary above already uses for
+                  // the retained-progress line; the actual failure reason is
+                  // in job.error below. to-do.md P0 "Do not leave failed jobs
+                  // showing only 'Saving raw capture.'"
+                  "This run did not finish."}
       </p>
       <small>
         Updated {new Date(job.updatedAt).toLocaleString()}
@@ -71,22 +83,6 @@ function Job({ job }: { job: Doc<"jobs"> }) {
         {active && <button onClick={() => act(() => cancel({ jobId: job._id }))}>Stop job</button>}
         {["failed", "partial", "cancelled"].includes(job.status) && (
           <button onClick={() => act(() => retry({ jobId: job._id }))}>Retry download</button>
-        )}
-        {job.status === "complete" && (job.nextUntil || job.nextCursor) && (
-          <button
-            onClick={() =>
-              act(() =>
-                start({
-                  kind: job.kind,
-                  input: job.input,
-                  previous: job._id,
-                  refresh: job.refresh,
-                }),
-              )
-            }
-          >
-            {job.kind === "bulk" ? "Continue remaining history" : "Download next page"}
-          </button>
         )}
         {/* Clearing a finished run only hides it: the run and the receipts
             proving its captures were stored are kept, and "Bring back" puts

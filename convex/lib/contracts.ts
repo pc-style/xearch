@@ -53,15 +53,16 @@ export type Count = Infer<typeof countValidator>;
 // --- Dashboard summary -------------------------------------------------------
 // The scope a summary's counts are authorized over.
 //   - "owner": every account the signed-in caller has imported themselves,
-//     derived server-side from their own `jobs.owner` rows. This is what
-//     `convex/summary.ts` returns, and it is the ONLY scope the dashboard
-//     presents as the caller's own numbers.
-//   - "global": every account in the deployment. Never RETURNED by a summary
-//     any more — `convex/summary.ts` always reports "owner" — but still an
-//     accepted INPUT: `convex/search.ts` takes a caller-supplied scope and
-//     this is the one value its fail-closed gate allows, meaning "the whole
-//     shared corpus". Reachability differs by direction; do not delete it on
-//     the strength of the return side alone.
+//     derived server-side from their own `jobs.owner` rows. No longer
+//     returned by `convex/summary.ts` — the imported corpus is shared
+//     infrastructure, not personal data (to-do.md, convex/lib/search.ts), so
+//     every signed-in caller now sees the same totals — but kept as a
+//     declared shape for any future per-owner view.
+//   - "global": every account in the deployment. This is what
+//     `convex/summary.ts` now always returns, and it is also an accepted
+//     INPUT: `convex/search.ts` takes a caller-supplied scope and this is
+//     the one value its fail-closed gate allows, meaning "the whole shared
+//     corpus".
 //   - "account": a single account. Reserved for to-do.md P1's authorized
 //     collection access; not wired to anything yet.
 export const summaryScopeValidator = v.union(
@@ -132,7 +133,7 @@ export const dashboardSummaryValidator = v.object({
   // docs/publication-contract.md "what unique means".
   indexedPosts: countValidator,
   // unit "accounts" — distinct in-scope accounts with
-  // accountPublications.state === "searchable". With `scope.kind === "owner"`
+  // accountPublications.state === "searchable". With `scope.kind === "global"`
   // this is drawn from exactly the same account set as the account-library
   // rows it links to, so the number and the list below it agree by
   // construction rather than by coincidence.
@@ -156,10 +157,16 @@ export type DashboardSummary = Infer<typeof dashboardSummaryValidator>;
 // not invent copy, since wording is a UI-layer decision (see the "dashboard"
 // reader's findings on contradictory copy — this type exists so the copy has
 // something honest to read from).
+//
+// No "continue" kind: acquisition never waits on a person to ask for the
+// next page. `convex/jobs.ts` `finish` requeues a job with more to fetch on
+// its own (bulk history via `nextUntil`, every other kind via `nextCursor`)
+// and backs off and requeues a transient failure on its own too — "wait"
+// already covers a queued job with a future `readyAt`, whichever of those it
+// is.
 export const nextActionValidator = v.union(
   v.object({ kind: v.literal("retry"), jobId: v.id("jobs") }),
   v.object({ kind: v.literal("wait"), jobId: v.id("jobs"), readyAt: v.number() }),
-  v.object({ kind: v.literal("continue"), jobId: v.id("jobs") }),
   v.object({ kind: v.literal("none") }),
 );
 export type NextAction = Infer<typeof nextActionValidator>;

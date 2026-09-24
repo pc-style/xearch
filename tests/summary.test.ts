@@ -34,8 +34,7 @@ const healthQuery = anyApi.summary.health as unknown as import("convex/server").
 >;
 // convex/library.ts's `rows` — not owned by this unit, but read here
 // (unmodified) to prove how summary.summary's global indexedAccounts/
-// indexedPosts relate to the owner-scoped account list a real caller would
-// actually see, per the "addressable" must-fix below.
+// indexedPosts relate to the shared account list every caller sees.
 const libraryRowsQuery = anyApi.library
   .rows as unknown as import("convex/server").FunctionReference<
   "query",
@@ -197,7 +196,7 @@ describe("summary.summary", () => {
   it("reports known zeroes for an empty corpus (never omitted), and unknown only where nothing was ever reported", async () => {
     const { a } = await setup();
     const result = await a.query(summaryQuery, { now: Date.now() });
-    expect(result.scope).toEqual({ kind: "owner" });
+    expect(result.scope).toEqual({ kind: "global" });
     expect(result.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 0 });
     expect(result.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 0 });
     expect(result.queue).toEqual({
@@ -362,14 +361,14 @@ describe("summary.summary", () => {
     });
   });
 
-  it("scopes the queue to the requesting owner's own jobs and never reaches another user's data", async () => {
+  it("includes every owner's jobs in the queue — the queue is shared infrastructure, not one person's own", async () => {
     const { t, alice, bob, a } = await setup();
     await insertJob(t, alice, { input: "mine", status: "queued" });
     await insertJob(t, bob, { input: "theirs-1", status: "queued" });
     await insertJob(t, bob, { input: "theirs-2", status: "failed" });
     const result = await a.query(summaryQuery, { now: Date.now() });
-    expect(result.queue.waitingDownloads).toEqual({ kind: "known", unit: "jobs", value: 1 });
-    expect(result.queue.failedRetryable).toEqual({ kind: "known", unit: "jobs", value: 0 });
+    expect(result.queue.waitingDownloads).toEqual({ kind: "known", unit: "jobs", value: 2 });
+    expect(result.queue.failedRetryable).toEqual({ kind: "known", unit: "jobs", value: 1 });
   });
 
   it("does not dedupe savedCapturesAwaitingIndexing per job — the same content-addressed captureId across two of one account's bulk jobs counts once, not twice", async () => {
@@ -390,7 +389,7 @@ describe("summary.summary", () => {
     });
   });
 
-  it("scopes indexedAccounts/indexedPosts to the caller's own imports: another owner's account is never counted into your totals, and the tile always agrees with the account list it links to", async () => {
+  it("counts indexedAccounts/indexedPosts across every owner's imports, and the tile always agrees with the account list it links to", async () => {
     const { t, alice, a, b } = await setup();
     const account = await insertAccount(t, { handle: "alice-account", userId: "1" });
     // Only alice ever ran a job for this account; bob has never imported
@@ -405,24 +404,23 @@ describe("summary.summary", () => {
     const bobsSummary = await b.query(summaryQuery, { now: Date.now() });
     const bobsLibrary = (await b.query(libraryRowsQuery, {})).rows;
 
-    // This used to be the documented leak: bob read a nonzero GLOBAL
-    // indexedAccounts/indexedPosts built from alice's account while his own
-    // library.rows — the list the "Indexed people" tile links to — was
-    // empty, so the screen contradicted itself and every user saw everyone
-    // else's corpus counted as theirs. Both numbers are now drawn from the
-    // same owner-scoped account set library.rows uses.
-    expect(bobsSummary.scope).toEqual({ kind: "owner" });
-    expect(bobsSummary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 0 });
-    expect(bobsSummary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 0 });
-    expect(bobsLibrary).toEqual([]);
+    // The imported corpus is shared infrastructure, not personal data
+    // (to-do.md, convex/lib/search.ts): bob reads the same GLOBAL
+    // indexedAccounts/indexedPosts and the same account library as alice,
+    // even though he never ran a job of his own. Both numbers are drawn
+    // from the same account set library.rows uses, so the tile and the list
+    // it links to agree by construction.
+    expect(bobsSummary.scope).toEqual({ kind: "global" });
+    expect(bobsSummary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 1 });
+    expect(bobsSummary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 10 });
+    expect(bobsLibrary).toHaveLength(1);
+    expect(bobsLibrary[0].handle).toBe("alice-account");
 
-    // Alice, who actually ran the job, sees it in both places — and the
-    // tile's number matches the length of the list it points at, which is
-    // the property "link the number to the account list" actually needs.
+    // Alice, who actually ran the job, sees the identical totals.
     const alicesSummary = await a.query(summaryQuery, { now: Date.now() });
     const alicesLibrary = (await a.query(libraryRowsQuery, {})).rows;
-    expect(alicesSummary.indexedAccounts).toEqual({ kind: "known", unit: "accounts", value: 1 });
-    expect(alicesSummary.indexedPosts).toEqual({ kind: "known", unit: "posts", value: 10 });
+    expect(alicesSummary.indexedAccounts).toEqual(bobsSummary.indexedAccounts);
+    expect(alicesSummary.indexedPosts).toEqual(bobsSummary.indexedPosts);
     expect(alicesLibrary).toHaveLength(1);
     expect(alicesLibrary[0].handle).toBe("alice-account");
     expect(alicesSummary.indexedAccounts).toEqual({

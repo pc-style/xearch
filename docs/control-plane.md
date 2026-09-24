@@ -50,6 +50,11 @@ Only `kind: "bulk"` is an account-history import (`ACCOUNT_JOB_KIND`). Live
 search, a single post, profile, followers, following, and archive stay out
 of the account library ("Other imports" on the dashboard).
 
+`jobs.list`, `jobs.cancel`, `jobs.retry`, `jobs.dismiss`, and `jobs.restore`
+require authentication but not ownership: any signed-in caller can see and
+act on any job, since imports are shared infrastructure. `job.owner` still
+records who started the run.
+
 ### Clearing finished runs
 
 `jobs.dismiss` / `jobs.restore` (`src/Dashboard.tsx` "Clear from list" /
@@ -82,36 +87,37 @@ forms are still rejected.
 
 ## Dashboard stats
 
-Indexed posts, indexed people, and the queue are **owner-scoped**: only
-accounts this signed-in person has imported. They used to scan every
-`accountPublications` row, so a user with no imports still read someone
-else's totals.
+Indexed posts, indexed people, and the queue are **shared, not
+owner-scoped**: every signed-in caller reads the same totals across every
+owner's jobs. The imported corpus is shared infrastructure, not personal
+data — `jobs.owner` still records who started each run (an audit trail) but
+is no longer a visibility boundary. `convex/summary.ts` reports
+`scope: { kind: "global" }` accordingly. (Saved searches, bookmarks,
+sessions, and email deliveries remain per-owner and are unaffected.)
 
 Both totals are built from the same bounded account-job set as
-`library.rows` (`ownedAccountJobs`, cap 500 newest bulk jobs). The
-"Indexed people" tile is the length of the list it links to.
+`library.rows` (`allAccountJobs`, cap 500 newest bulk jobs across every
+owner). The "Indexed people" tile is the length of the list it links to.
 
 **Bounded reads are not complete counts.** Past the cap the library sets
 `truncated: true` and the overview reports `unknown` rather than a partial
 total as if it were the whole corpus. Queue counts similarly report
-unknown when the owner's recent 1,000 jobs are not their full history.
+unknown when the deployment's recent 1,000 jobs are not its full history.
 
-Account **history** is a targeted ownership lookup (`ownerJobsForAccount` in
-`convex/lib/accounts.ts`, scan cap 20,000 jobs / 1,000 matching runs), not a
-slice of that library page. It returns the runs it found plus `exhausted`,
-and `library.history` checks `exhausted` **before** it looks at what was
-found — not only when nothing was:
+Account **history** is a targeted lookup (`jobsForAccount` in
+`convex/lib/accounts.ts`, scan cap 20,000 jobs / 1,000 matching runs across
+every owner), not a slice of that library page. It returns the runs it
+found plus `exhausted`, and `library.history` checks `exhausted` **before**
+it looks at what was found — not only when nothing was:
 
 - Incomplete scan → `ConvexError("Could not read this account's full
-  history — you have too many imports to search in one request.")`,
+  history — there are too many imports to search in one request.")`,
   whatever it collected. The scan walks the index's `_creationTime` order
   while history is presented newest-by-`updatedAt`, so a run it never
   reached can belong in the fifty rows (`MAX_HISTORY_JOBS`) it would
   return. Handing those back would present a partial scan as the account's
   history — the same lie as presenting a partial count as a total.
-- Completed scan, nothing found → `ConvexError("Account not found.")`. The
-  same message whether the account does not exist or simply is not this
-  owner's, so it never confirms another user's account exists.
+- Completed scan, nothing found → `ConvexError("Account not found.")`.
 
 Counts:
 
@@ -119,13 +125,28 @@ Counts:
 - A `Count` is `{ kind: "known", unit, value }` or `{ kind: "unknown", unit }`.
   Zero means "looked and found nothing"; unknown means "did not finish
   looking / upstream never said". They never collapse into each other.
-- `savedCapturesAwaitingIndexing` counts this owner's receipts that no
-  publication update has confirmed. `confirmedCaptureIds`
+- `savedCapturesAwaitingIndexing` counts receipts (across every owner's bulk
+  jobs) that no publication update has confirmed. `confirmedCaptureIds`
   (`convex/summary.ts`) treats an update as confirming its `captureIds`
   only when it was `applied` **and** its `reportedState` is not `"failed"`.
   An applied `failed` update says the indexer could **not** index those
   captures; counting them as confirmed made a capture that failed to index
   disappear from the one number meant to show outstanding work.
+
+### Acquisition runs to completion on its own
+
+There is no "Continue remaining history", "Get next page", or manual retry
+button anywhere: typing a handle indexes everything obtainable for it.
+`convex/jobs.ts` `finish` requeues the **same** job when the provider says
+there is more — bulk history via `nextUntil` (an ever-older time window),
+every other kind via `nextCursor` — and backs off and requeues a transient
+failure on its own (`30s * 2^pageAttempt`, capped at 15 minutes, up to 10
+attempts before it becomes a `partial`/`failed` a person can retry).
+`readyAt` is set whenever a job will run again on its own, and the UI reads
+it to say "retrying automatically" rather than offering a button that does
+nothing until then. A repeated identical cursor, or a `nextUntil` that does
+not move the window forward, is treated as a stall and paused rather than
+looped on forever.
 
 `pendingWork` from the indexer is stored but has no dashboard field yet.
 

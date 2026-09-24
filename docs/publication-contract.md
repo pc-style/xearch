@@ -8,7 +8,7 @@ in `convex/http.ts`) and tested against convex-test (`tests/publication.test.ts`
 `tests/scenario-publication-lifecycle.test.ts`). The **sender** now also lives in
 this repository (`search/crates/indexer/src/publish.rs`); operator setup is
 [search indexer](search-indexer.md) "Publishing to Convex". Identity resolution,
-owner-scoped dashboard totals, and provider-throttle _writes_ that earlier drafts
+shared dashboard totals, and provider-throttle _writes_ that earlier drafts
 left unimplemented are in the tree — see [the control plane](control-plane.md).
 
 Pronsh has not signed off. to-do.md P0 ("Agree the summary/publication contract
