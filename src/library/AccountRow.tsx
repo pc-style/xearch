@@ -110,6 +110,7 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           adds the one clarifying line — not a second number. */}
       {job?.status === "complete" && <p className="library-muted">{DOWNLOAD_COMPLETE_CAVEAT}</p>}
       {discoveredVia(job) && <p className="library-muted">{discoveredVia(job)}</p>}
+      {row.backfill && <p className="library-muted">{backfillSummary(row.backfill)}</p>}
       {row.publicationState === "failed" && hasGoodCorpus && (
         <p className="library-row-note">
           The previously confirmed index still has {countWithUnit(row.searchablePostCount)}{" "}
@@ -162,6 +163,27 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
       {expanded && <AccountHistory history={history} />}
     </article>
   );
+}
+
+/**
+ * The account library row's one summary line for its deep-history backfill
+ * (convex/jobs.ts, convex/lib/historyWindow.ts) — never more than one line,
+ * and never a second post count competing with `row.searchablePostCount`
+ * above (this is the backfill's own running total of posts it found across
+ * every window job it has scheduled, a different number from the indexer's
+ * committed searchable count).
+ */
+function backfillSummary(backfill: NonNullable<AccountLibraryRow["backfill"]>): string {
+  const found = `${backfill.postsFound.toLocaleString()} post${backfill.postsFound === 1 ? "" : "s"}`;
+
+  if (backfill.status === "complete") return `Older history complete: ${found} found`;
+
+  if (backfill.status === "stopped")
+    return `Older history stopped: ${backfill.error ?? "an unreported error"}`;
+
+  const joined = backfill.joined ? ` (joined ${backfill.joined})` : "";
+
+  return `Older history: ${found} found so far · searching back to ${backfill.cursorUntil}${joined}`;
 }
 
 // No "continue" case: acquisition never waits on a person to ask for the

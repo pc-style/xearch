@@ -1,7 +1,7 @@
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { XmdClient, ProviderError, string } from "./lib/xmd";
+import { XmdClient, ProviderError, string, finiteNumber } from "./lib/xmd";
 import { collectXmd } from "./lib/collect";
 import { deliverCapture } from "./lib/handoff";
 import { serviceToken } from "./lib/serviceAuth";
@@ -86,6 +86,10 @@ export const run = internalAction({
                 avatar: string(result.profile!.avatar_url)?.startsWith("https://")
                   ? string(result.profile!.avatar_url)
                   : undefined,
+                // See scripts/production-worker.ts's identical fields —
+                // this is the in-Convex (non-outbound) collection path.
+                statuses: finiteNumber(result.profile!.statuses),
+                joined: string(result.profile!.joined),
               }
             : undefined,
       });

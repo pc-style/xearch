@@ -148,7 +148,12 @@ const finiteNumberSchema = z.number().finite();
 
 const nonEmptyTrimmedString = z.string().trim().min(1);
 
-function finiteNumber(value: JsonValue | null | undefined): number | undefined {
+// Exported for convex/importer.ts and scripts/production-worker.ts, which
+// both need the same tolerant numeric read (accepts a real number or a
+// numeric string) for x.md's profile `statuses` field as this file already
+// applies to its own rate-limit headers — a second, looser parser for the
+// same job would just be a second place it could disagree.
+export function finiteNumber(value: JsonValue | null | undefined): number | undefined {
   if (value === null || value === undefined) return undefined;
   const direct = finiteNumberSchema.safeParse(value);
 

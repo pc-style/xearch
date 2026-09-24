@@ -13,20 +13,53 @@ export type Sort = "relevance" | "engagement" | "likes" | "newest" | "oldest";
 // twice per parse (matchAll, then replace).
 const authorFilter = () => /(?:^|\s)(?:from:@?|@)([A-Za-z0-9_]{1,15})(?=\s|$)/g;
 
-export function parseQuery(raw: string) {
+// `since:YYYY-MM-DD` / `until:YYYY-MM-DD`, built fresh per call for the same
+// `lastIndex` reason as `authorFilter` above. These two operators are never
+// accepted from a person's own search box — see `parseQuery`'s public input
+// rules below — only from the internal deep-history backfill (convex/jobs.ts
+// `insertHistoryWindowJob`), which asks x.md for one dated window of an
+// account's timeline (`from:<handle> since:<date> until:<date>`, verified
+// against prod x.md's /api/v1/search).
+const dateOperatorFilter = () => /(?:^|\s)(since|until):(\d{4}-\d{2}-\d{2})(?=\s|$)/gi;
+
+export type ParseQueryOptions = {
+  /**
+   * Accept `since:`/`until:` alongside `from:`/`@`, for the deep-history
+   * backfill's own internally-built queries only. A person's own search box
+   * (convex/search.ts) never sets this, so its input rules are unchanged:
+   * every other operator, and these two by default, still reject with the
+   * same "Use @handle..." message below.
+   */
+  allowDateWindow?: boolean;
+};
+
+export function parseQuery(raw: string, options: ParseQueryOptions = {}) {
   if (raw.length > 300) throw new Error("Keep searches under 300 characters.");
   const authors = [...raw.matchAll(authorFilter())].map((m) => m[1].toLowerCase());
 
   if (new Set(authors).size > 1)
     throw new Error("Search one author at a time, or remove the @ filters to search everyone.");
-  const text = raw.replace(authorFilter(), " ").trim().replace(/\s+/g, " ");
+  let text = raw.replace(authorFilter(), " ");
+  let since: string | undefined;
+  let until: string | undefined;
+
+  if (options.allowDateWindow) {
+    for (const match of text.matchAll(dateOperatorFilter())) {
+      if (match[1].toLowerCase() === "since") since = match[2];
+      else until = match[2];
+    }
+
+    text = text.replace(dateOperatorFilter(), " ");
+  }
+
+  text = text.trim().replace(/\s+/g, " ");
 
   if (/(?:^|\s)-?(?!https?:\/\/)[a-z_][a-z0-9_]*:/i.test(text))
     throw new Error(
       "Use @handle to filter authors. Other X operators are available through Find on X.",
     );
 
-  return { text, author: authors[0] };
+  return { text, author: authors[0], since, until };
 }
 
 /**
@@ -40,10 +73,36 @@ export function parseQuery(raw: string) {
  * `convex/integrations.ts` re-renders what the model proposed, and both get
  * the same answer.
  */
-export function canonicalQuery(raw: string) {
-  const { text, author } = parseQuery(raw.trim());
+export function canonicalQuery(raw: string, options: ParseQueryOptions = {}) {
+  const { text, author, since, until } = parseQuery(raw.trim(), options);
 
-  return { text, author, canonical: [author ? `@${author}` : "", text].filter(Boolean).join(" ") };
+  // A dated window is only ever an author's own timeline, verbatim as x.md's
+  // search endpoint expects it (`from:<handle> since:<date> until:<date>`) —
+  // never the `@handle` shorthand `parseQuery` accepts everywhere else, so
+  // this stays byte-identical to what convex/jobs.ts asked x.md for, letting
+  // the same-input dedup/idempotency checks in convex/jobs.ts `start` match
+  // it exactly.
+  if (since !== undefined || until !== undefined) {
+    if (!author) throw new Error("A dated history window requires an author (from:handle).");
+
+    return {
+      text,
+      author,
+      since,
+      until,
+      canonical: [`from:${author}`, since ? `since:${since}` : "", until ? `until:${until}` : ""]
+        .filter(Boolean)
+        .join(" "),
+    };
+  }
+
+  return {
+    text,
+    author,
+    since: undefined,
+    until: undefined,
+    canonical: [author ? `@${author}` : "", text].filter(Boolean).join(" "),
+  };
 }
 
 // --- Authorized collection scope ---------------------------------------------

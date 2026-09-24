@@ -143,11 +143,25 @@ export const rows = query({
       ),
     );
 
+    // Same shape of concurrency as the publications lookup above: one
+    // indexed `by_account` read per candidate account, issued together
+    // rather than one row at a time. Most accounts have never needed a
+    // backfill, so `.unique()` resolving to `null` is the common case.
+    const backfills = await Promise.all(
+      candidates.map(([accountId]) =>
+        ctx.db
+          .query("historyBackfills")
+          .withIndex("by_account", (q) => q.eq("accountId", accountId))
+          .unique(),
+      ),
+    );
+
     const out: AccountLibraryRow[] = [];
 
     for (let i = 0; i < candidates.length; i++) {
       const [accountId, { account, jobs }] = candidates[i];
       const publication = publications[i];
+      const backfill = backfills[i];
 
       // No publication row yet means no publication update has ever arrived
       // for this account; docs/publication-contract.md collapses "downloaded"
@@ -200,6 +214,15 @@ export const rows = query({
           discoveredFrom: latestJob.discoveredFrom,
         },
         nextAction: latestJob ? nextActionFor(latestJob) : { kind: "none" },
+        backfill: backfill
+          ? {
+              status: backfill.status,
+              postsFound: backfill.postsFound,
+              cursorUntil: backfill.cursorUntil,
+              joined: account.joined,
+              error: backfill.error,
+            }
+          : undefined,
       });
     }
 

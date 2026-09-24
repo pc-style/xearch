@@ -5,6 +5,7 @@ import {
   reportedPublicationStateValidator,
   countUnitValidator,
   jobStatusValidator,
+  historyBackfillStatusValidator,
 } from "../schema";
 
 /**
@@ -217,6 +218,25 @@ export const accountLibraryRowValidator = v.object({
     }),
   ),
   nextAction: nextActionValidator,
+  // The account's deep-history backfill (convex/jobs.ts, convex/lib/
+  // historyWindow.ts), when one has ever been started for it. Absent for
+  // every account that has never needed one (its bulk import never hit
+  // x.md's account-timeline floor and its reported post count matched what
+  // that import returned) — never a zeroed-out placeholder object.
+  backfill: v.optional(
+    v.object({
+      status: historyBackfillStatusValidator,
+      // This backfill's own running total across every window job it has
+      // scheduled — NOT the account's searchablePostCount above, which is
+      // the indexer's committed count and a different number entirely.
+      postsFound: v.number(),
+      // The moving boundary: how far back the backfill has searched to (or
+      // is currently searching to).
+      cursorUntil: v.string(),
+      joined: v.optional(v.string()),
+      error: v.optional(v.string()),
+    }),
+  ),
 });
 
 export type AccountLibraryRow = Infer<typeof accountLibraryRowValidator>;

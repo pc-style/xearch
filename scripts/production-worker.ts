@@ -4,7 +4,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionArgs } from "convex/server";
 import { api } from "../convex/_generated/api";
 import { collectXmd } from "../convex/lib/collect";
-import { XmdClient, ProviderError, string } from "../convex/lib/xmd";
+import { XmdClient, ProviderError, string, finiteNumber } from "../convex/lib/xmd";
 import { deliverCapture } from "../convex/lib/handoff";
 
 type ReportArgs = Omit<FunctionArgs<typeof api.worker.report>, "token" | "jobId" | "attempt">;
@@ -178,6 +178,12 @@ for (;;) {
                   avatar: string(rawProfile!.avatar_url)?.startsWith("https://")
                     ? string(rawProfile!.avatar_url)
                     : undefined,
+                  // X's own lifetime post count and join date, when x.md's
+                  // profile fetch reported them — drives the deep-history
+                  // backfill trigger in convex/jobs.ts `finish`. Never
+                  // estimated: absent stays absent.
+                  statuses: finiteNumber(rawProfile!.statuses),
+                  joined: string(rawProfile!.joined),
                 }
               : undefined,
         });

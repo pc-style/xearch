@@ -11,6 +11,15 @@ import { activeThrottleUntil, loadProviderLimit } from "./limits";
 import { handle, statusUrl } from "./lib/xmd";
 import { canonicalQuery } from "./lib/search";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
+import {
+  DEFAULT_JOIN_FLOOR,
+  INITIAL_WINDOW_DAYS,
+  computeWindow,
+  historyWindowQuery,
+  isFinalWindow,
+  isValidDate,
+  nextWindowDays,
+} from "./lib/historyWindow";
 
 // Every filter a caller cares about is applied BEFORE the limit, by streaming
 // every job newest-first and stopping once enough eligible ones are found.
@@ -798,6 +807,10 @@ export const finish = internalMutation({
         userId: v.string(),
         name: v.string(),
         avatar: v.optional(v.string()),
+        // X's own lifetime post count and join date, when x.md's profile
+        // fetch reported them. Drives the deep-history trigger below.
+        statuses: v.optional(v.number()),
+        joined: v.optional(v.string()),
       }),
     ),
   },
@@ -905,11 +918,73 @@ export const finish = internalMutation({
         jobId: job._id,
       });
 
-    if (args.profile) await upsertAccount(ctx, args.profile);
+    let accountId: Id<"accounts"> | undefined;
+
+    if (args.profile) accountId = await upsertAccount(ctx, args.profile);
+
+    // --- Deep-history trigger ---------------------------------------------
+    // x.md's account-timeline endpoint (the one a "bulk" job pages through)
+    // stops at X's own ~3,200-post floor and says so (`floor_reached`), even
+    // for an account X reports has tens of thousands of posts
+    // (`accounts.statuses`, from x.md's profile). Once a bulk job finishes,
+    // if it hit that floor OR the account's own reported post count is
+    // higher than what this run ever got, there is more history to find —
+    // through x.md's dated search windows, not the timeline endpoint (see
+    // convex/lib/historyWindow.ts and `insertHistoryWindowJob` below).
+    if (job.kind === "bulk" && patch.status === "complete") {
+      const account = accountId
+        ? await ctx.db.get(accountId)
+        : job.expectedUserId
+          ? await canonicalAccountForUserId(ctx.db, job.expectedUserId)
+          : null;
+
+      if (account) {
+        const totalPosts = patch.postsReceived ?? 0;
+        const timelineFellShort = account.statuses !== undefined && account.statuses > totalPosts;
+
+        if (args.floorReached === true || timelineFellShort)
+          await maybeStartHistoryBackfill(ctx, job.owner, account, args.oldest ?? patch.oldest);
+      }
+    }
+
+    // A history-window job (origin: "history") only ever reaches `finish`
+    // for one of two reasons: it is genuinely done (this window's cursor
+    // pages are exhausted — `continueImport` is false) or it gave up after
+    // its own backoff attempts (`retry` is false too, same as an ordinary
+    // job — see MAX_PAGE_ATTEMPTS above). Anything still auto-continuing or
+    // retrying is not a decision point for the backfill yet.
+    if (
+      job.kind === "live" &&
+      job.origin === "history" &&
+      job.historyFor &&
+      !continueImport &&
+      !retry
+    )
+      // SAFETY: `patch.status` above is only ever "queued" when `retry ||
+      // continueImport` is true (see its computation a few dozen lines up);
+      // both are excluded by this `if`, so the three other statuses in
+      // jobStatusValidator that `finish` never assigns here ("cancelled" is
+      // only ever set by `cancel`) leave exactly "complete" | "partial" |
+      // "failed".
+      await onHistoryWindowFinished(
+        ctx,
+        job,
+        job.historyFor,
+        patch.status as "complete" | "partial" | "failed",
+        patch.postsReceived ?? 0,
+        args.error,
+      );
   },
 });
 
-export type Profile = { handle: string; userId: string; name: string; avatar?: string };
+export type Profile = {
+  handle: string;
+  userId: string;
+  name: string;
+  avatar?: string;
+  statuses?: number;
+  joined?: string;
+};
 
 // Account identity is the provider account id, never the handle.
 //
@@ -937,7 +1012,15 @@ export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise
     if (
       existing.handle !== profile.handle ||
       existing.name !== profile.name ||
-      existing.avatar !== profile.avatar
+      existing.avatar !== profile.avatar ||
+      // `statuses` climbs every time X accepts a new post, so treating it
+      // like the other rarely-changing fields would miss almost every real
+      // update; comparing it (and `joined`, which never changes but costs
+      // nothing extra to include) here is what lets the deep-history trigger
+      // above see the account's CURRENT reported post count on this same
+      // profile fetch, not a stale one from the account's very first import.
+      existing.statuses !== profile.statuses ||
+      existing.joined !== profile.joined
     ) {
       // Record the CURRENT handle before it is overwritten below.
       // accountHandles is append-only evidence written only by this
@@ -997,4 +1080,220 @@ async function recordHandle(ctx: MutationCtx, accountId: Id<"accounts">, handleT
       firstSeenAt: now,
       lastSeenAt: now,
     });
+}
+
+// --- Deep-history backfill ----------------------------------------------
+// x.md's account-timeline endpoint (what a "bulk" job pages through) stops
+// at X's own ~3,200-post floor. Its search endpoint's dated windows
+// (`from:<handle> since:<date> until:<date>`) reach further back — verified
+// against prod x.md, `since:2021-06-01 until:2021-09-01` returned real 2021
+// posts, paged via `nextCursor`. This section walks those windows backward
+// in time, one `kind: "live"` job at a time, until it runs out of account
+// history to search or a window job fails permanently. Window math itself
+// (which dates, how the window size grows) lives in
+// convex/lib/historyWindow.ts and is unit-tested there; this only wires it
+// into the job/backfill lifecycle.
+
+/** The account's floor for how far back a backfill will ever search. */
+function joinFloor(account: Doc<"accounts">): string {
+  return isValidDate(account.joined) ? account.joined : DEFAULT_JOIN_FLOOR;
+}
+
+/**
+ * One `kind: "live"` job for one dated window of one account's timeline.
+ * Deliberately bypasses the public `start` mutation (and its
+ * `requireOperator` gate): this is scheduled entirely by the system, from
+ * inside `finish`, never by a person clicking anything — there is no
+ * operator session to check. `canonicalQuery` with `allowDateWindow: true`
+ * is still the one place that renders this exact query string (see its own
+ * comment in convex/lib/search.ts), so this can never drift from what
+ * convex/lib/search.ts documents `from:`/`since:`/`until:` as meaning.
+ */
+async function insertHistoryWindowJob(
+  ctx: MutationCtx,
+  owner: Id<"users">,
+  accountId: Id<"accounts">,
+  handleText: string,
+  since: string,
+  until: string,
+): Promise<Id<"jobs">> {
+  const input = canonicalQuery(historyWindowQuery(handleText, since, until), {
+    allowDateWindow: true,
+  }).canonical;
+
+  const id = await ctx.db.insert("jobs", {
+    owner,
+    kind: "live",
+    input,
+    since,
+    until,
+    refresh: false,
+    origin: "history",
+    historyFor: accountId,
+    autoContinue: false,
+    pages: 0,
+    postsReceived: 0,
+    status: "queued",
+    count: 0,
+    attempt: 0,
+    warnings: [],
+    updatedAt: Date.now(),
+  });
+
+  await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+
+  return id;
+}
+
+/**
+ * Schedule the next window job for a backfill already in progress, or mark
+ * it "complete" when `computeWindow` says there is nothing left to search
+ * (the moving boundary has already reached the account's floor).
+ */
+async function launchNextWindow(
+  ctx: MutationCtx,
+  backfillId: Id<"historyBackfills">,
+  owner: Id<"users">,
+  accountId: Id<"accounts">,
+  handleText: string,
+  cursorUntil: string,
+  windowDays: number,
+  floor: string,
+): Promise<void> {
+  const window = computeWindow(cursorUntil, windowDays, floor);
+
+  if (!window) {
+    await ctx.db.patch(backfillId, { status: "complete", updatedAt: Date.now() });
+
+    return;
+  }
+
+  await insertHistoryWindowJob(ctx, owner, accountId, handleText, window.since, window.until);
+  await ctx.db.patch(backfillId, {
+    status: "running",
+    cursorUntil: window.since,
+    windowDays,
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Start a deep-history backfill for one account, unless it already has one
+ * (this is the "never twice for the same account" rule — a `historyBackfills`
+ * row is created at most once per account, ever, and this function is the
+ * only place that creates one). `oldest` is the bulk job's own oldest-post
+ * date: the boundary the backfill starts walking back FROM, since everything
+ * from there forward was already covered by the bulk import itself.
+ */
+async function maybeStartHistoryBackfill(
+  ctx: MutationCtx,
+  owner: Id<"users">,
+  account: Doc<"accounts">,
+  oldest: string | undefined,
+): Promise<void> {
+  if (!isValidDate(oldest)) return;
+
+  const existing = await ctx.db
+    .query("historyBackfills")
+    .withIndex("by_account", (q) => q.eq("accountId", account._id))
+    .unique();
+
+  if (existing) return;
+
+  const floor = joinFloor(account);
+
+  if (oldest <= floor) return; // Nothing older than the bulk import already covered.
+
+  const backfillId = await ctx.db.insert("historyBackfills", {
+    accountId: account._id,
+    handle: account.handle,
+    owner,
+    since: floor,
+    cursorUntil: oldest,
+    windowDays: INITIAL_WINDOW_DAYS,
+    postsFound: 0,
+    status: "queued",
+    updatedAt: Date.now(),
+  });
+
+  await launchNextWindow(
+    ctx,
+    backfillId,
+    owner,
+    account._id,
+    account.handle,
+    oldest,
+    INITIAL_WINDOW_DAYS,
+    floor,
+  );
+}
+
+/**
+ * React to one history-window job reaching a terminal state: fold its posts
+ * into the backfill's running total, then either schedule the next window
+ * (widening it first if this one came back empty — see
+ * convex/lib/historyWindow.ts `nextWindowDays`) or stop the backfill for
+ * good, exactly as docs for this feature specify:
+ *   - the window that just finished already reached the account's floor
+ *     (`isFinalWindow`) → "complete";
+ *   - the window job itself failed permanently, after `finish`'s own
+ *     MAX_PAGE_ATTEMPTS backoff attempts → "stopped", with the job's error.
+ */
+async function onHistoryWindowFinished(
+  ctx: MutationCtx,
+  job: Doc<"jobs">,
+  accountId: Id<"accounts">,
+  finalStatus: "complete" | "partial" | "failed",
+  totalPostsThisWindow: number,
+  error: string | undefined,
+): Promise<void> {
+  const backfill = await ctx.db
+    .query("historyBackfills")
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .unique();
+
+  // No backfill row, or it already stopped/completed: nothing to update. A
+  // stray finish on an already-terminal backfill should never resurrect it.
+  if (!backfill || backfill.status === "complete" || backfill.status === "stopped") return;
+
+  await ctx.db.patch(backfill._id, {
+    postsFound: backfill.postsFound + totalPostsThisWindow,
+    updatedAt: Date.now(),
+  });
+
+  if (finalStatus !== "complete") {
+    await ctx.db.patch(backfill._id, {
+      status: "stopped",
+      error: error ?? "This window stopped without a reported error.",
+      updatedAt: Date.now(),
+    });
+
+    return;
+  }
+
+  const account = await ctx.db.get(accountId);
+  const floor = account ? joinFloor(account) : DEFAULT_JOIN_FLOOR;
+  // `job.since` is this window's own lower bound (set when it was created by
+  // `insertHistoryWindowJob`) — the next window's upper bound, since a
+  // backfill only ever walks backward.
+  const completedWindow = { since: job.since ?? floor, until: job.until ?? floor };
+
+  if (isFinalWindow(completedWindow, floor)) {
+    await ctx.db.patch(backfill._id, { status: "complete", updatedAt: Date.now() });
+
+    return;
+  }
+
+  const windowDays = nextWindowDays(backfill.windowDays, totalPostsThisWindow);
+
+  await launchNextWindow(
+    ctx,
+    backfill._id,
+    backfill.owner,
+    accountId,
+    backfill.handle,
+    completedWindow.since,
+    windowDays,
+    floor,
+  );
 }
