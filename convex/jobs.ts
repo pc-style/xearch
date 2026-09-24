@@ -302,6 +302,7 @@ export const claim = internalMutation({
       pageAttempt: (job.pageAttempt ?? 0) + 1,
       updatedAt: Date.now(),
       error: undefined,
+      retryable: undefined,
     });
     await ctx.scheduler.runAfter(600_000, internal.jobs.expire, {
       jobId,
@@ -371,6 +372,13 @@ export const retry = mutation({
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
 
+    // A provider 4xx like "invalid_thread"/"not_found" fails the exact same
+    // way on every attempt — src/JobRow.tsx already hides the Retry button
+    // for these, but this is the actual boundary: a repeat request against a
+    // permanent failure spends another provider call to learn nothing new.
+    if ((job.status === "failed" || job.status === "partial") && job.retryable === false)
+      throw new ConvexError("x.md can't fetch this. Retrying will not change the result.");
+
     for (const status of ["queued", "running"] as const) {
       const active = await ctx.db
         .query("jobs")
@@ -386,6 +394,7 @@ export const retry = mutation({
       status: "queued",
       readyAt: 0,
       error: undefined,
+      retryable: undefined,
       phase: "Retry queued",
       updatedAt: Date.now(),
     });
@@ -566,6 +575,9 @@ export const finish = internalMutation({
     warnings: v.array(v.string()),
     error: v.optional(v.string()),
     retryAfter: v.optional(v.number()),
+    // Only meaningful alongside `error` — see the `jobs` table's own
+    // `retryable` field comment in convex/schema.ts.
+    retryable: v.optional(v.boolean()),
     nextUntil: v.optional(v.string()),
     nextCursor: v.optional(v.string()),
     expectedUserId: v.optional(v.string()),
@@ -644,6 +656,10 @@ export const finish = internalMutation({
               : "failed"
             : "complete",
       error: args.error ?? pause,
+      // Cleared whenever this attempt did not end in a stored `error` (a
+      // pause is a scheduling note, not a stopped-with-error state) — never
+      // left over from a previous failed attempt on the same job document.
+      retryable: args.error ? args.retryable : undefined,
       // Set whenever this job will run again on its own, so the UI can say
       // "retrying automatically" instead of offering a button that does
       // nothing until then.

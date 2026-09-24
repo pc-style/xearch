@@ -130,6 +130,10 @@ export const run = internalAction({
             : "Collection failed before a complete handoff. Acknowledged raw captures remain with the storage service.",
         retryAfter:
           error instanceof ProviderError && error.retryable ? error.retryAfter : undefined,
+        // Not a ProviderError at all (a bug, a network primitive throwing) is
+        // treated as retryable=true: unlike a provider 4xx, there is no
+        // reason to believe trying again would fail the same way.
+        retryable: error instanceof ProviderError ? error.retryable : true,
       });
     }
   },

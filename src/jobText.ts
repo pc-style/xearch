@@ -62,6 +62,136 @@ export function jobSummary(job: Doc<"jobs">) {
   return job.phase ?? "Waiting to start";
 }
 
+// Best-effort "@handle" out of a normalized status URL (convex/lib/xmd.ts
+// `statusUrl`, e.g. "https://x.com/theo/status/123") for a human label on a
+// "post" job. Never throws: an unparseable/legacy input just falls back to
+// the generic label in `jobKindLabel` below instead of showing raw internals.
+function handleFromStatusUrl(url: string): string | null {
+  try {
+    const segment = new URL(url).pathname.split("/").find((part) => part.length > 0);
+
+    return segment ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A human label for what a job is downloading, shared by every surface that
+ * lists jobs (src/JobRow.tsx) — never the raw URL/handle on its own, which is
+ * what made the header modal's old "Recent imports" list read as a wall of
+ * links (/tmp/issues-codex-followup.md item 8).
+ */
+export function jobKindLabel(job: Doc<"jobs">): string {
+  switch (job.kind) {
+    case "bulk":
+      return `@${job.input} history`;
+    case "post": {
+      const handle = handleFromStatusUrl(job.input);
+
+      return handle ? `Conversation on @${handle}'s post` : "Conversation on a post";
+    }
+
+    case "live":
+      return `Live search: ${job.input}`;
+    case "profile":
+      return `Profile: @${job.input}`;
+    case "followers":
+      return `Followers: @${job.input}`;
+    case "following":
+      return `Following: @${job.input}`;
+    case "archive":
+      return `Archive: @${job.input}`;
+  }
+}
+
+/**
+ * Whether a stopped run failed for a reason retrying can never fix — a
+ * provider 4xx like "invalid_thread" or "not_found", as opposed to a
+ * transient one (timeout, 5xx, rate limit) that already got its own
+ * automatic backoff attempts before giving up (convex/jobs.ts `finish`).
+ * Backed by `job.retryable`, written from `ProviderError.retryable`
+ * (convex/lib/xmd.ts) at the moment the run stopped — never guessed from the
+ * error text, which varies by provider response and is not a stable
+ * contract to parse.
+ */
+export function isPermanentFailure(job: Doc<"jobs">): boolean {
+  return (job.status === "failed" || job.status === "partial") && job.retryable === false;
+}
+
+/** A short "N minutes/hours/days ago" rendering of a past timestamp against a
+ * live `now` (never `Date.now()` read at render time — see src/JobRow.tsx's
+ * `now` prop doc comment for why). Falls back to a calendar date once a run
+ * is old enough that "42d ago" stops being a useful answer. */
+export function relativeTime(timestamp: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - timestamp) / 1000));
+
+  if (seconds < 45) return "just now";
+  const minutes = Math.round(seconds / 60);
+
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+
+  if (days < 30) return `${days}d ago`;
+
+  return new Date(timestamp).toLocaleDateString();
+}
+
+/**
+ * The technical-details line for a job's current phase — the same facts
+ * src/Dashboard.tsx's `Job` component used to compute inline (before this
+ * became a shared row, src/JobRow.tsx), now behind every row's "Technical
+ * details" disclosure instead of always on screen. Deliberately generic
+ * about a finished job with more history available (never "account
+ * library", which only means something on the operator dashboard and would
+ * be an operator-only string leaking into the public bundle — see
+ * scripts/check-public-bundle.mjs).
+ */
+export function jobPhaseDetail(job: Doc<"jobs">, now: number): string {
+  if (job.status === "complete")
+    return job.floorReached
+      ? "x.md reached the oldest history it can retrieve. Older posts may still exist on X."
+      : "This run finished and is not scheduled to continue on its own.";
+
+  if (job.status === "queued" && job.readyAt !== undefined && job.readyAt > now)
+    return `Retrying automatically at ${new Date(job.readyAt).toLocaleTimeString()}`;
+
+  if (job.status === "queued" || job.status === "running") return job.phase ?? "Waiting to start";
+
+  if (job.status === "cancelled") return job.phase ?? "Stopped by request.";
+
+  return "This run did not finish.";
+}
+
+/**
+ * Fold repeat runs of the exact same (kind, input) — e.g. every "Retry
+ * import" click before convex/jobs.ts had an in-place `retry` mutation used
+ * `jobs.start`, which inserted a new row each time — into one visible row
+ * per input, newest first. `jobs` is assumed already newest-first (what
+ * `api.jobs.list` returns); only the first occurrence of a key is kept
+ * visible, and every later (older) one is counted, not dropped — see
+ * src/JobRow.tsx's "Technical details" disclosure, which is where the count
+ * surfaces (/tmp/issues-codex-followup.md item 2 and item 8).
+ */
+export function dedupeJobsByInput(
+  jobs: Doc<"jobs">[],
+): { job: Doc<"jobs">; earlierCount: number }[] {
+  const rows = new Map<string, { job: Doc<"jobs">; earlierCount: number }>();
+
+  for (const job of jobs) {
+    const key = `${job.kind}:${job.input}`;
+    const existing = rows.get(key);
+
+    if (existing) existing.earlierCount += 1;
+    else rows.set(key, { job, earlierCount: 0 });
+  }
+
+  return [...rows.values()];
+}
+
 export function jobWarnings(job: Doc<"jobs">) {
   return job.warnings.filter(
     (w) =>

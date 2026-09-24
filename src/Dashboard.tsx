@@ -4,16 +4,13 @@ import { useConvexAuth, useConvexConnectionState, useMutation, useQuery } from "
 import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
 import "./dashboard.css";
-import { indexingUnavailableMessage } from "./integrationStatus";
-import { describeError, useTask } from "./errors";
-import { jobLabel, jobSummary, jobWarnings } from "./jobText";
+import { indexingUnavailableMessage, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
+import { useTask } from "./errors";
+import { JobRow } from "./JobRow";
 import Library from "./library/Library";
 import { useDashboardClock, useLiveNow } from "./library/clock";
 
-function Job({ job }: { job: Doc<"jobs"> }) {
-  const [expanded, setExpanded] = useState(false),
-    [error, setError] = useState("");
-
+function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean }) {
   // convex/_generated/ai/guidelines.md "Do not read the wall clock inside a
   // query" applies just as much to a render body: a bare `Date.now()` here
   // would freeze at whatever instant last re-rendered this row instead of
@@ -22,110 +19,57 @@ function Job({ job }: { job: Doc<"jobs"> }) {
   // subscribed, periodically-refreshing clock src/library/Library.tsx
   // already uses for its own queries.
   const now = useDashboardClock();
-  const receipts = useQuery(api.jobs.receipts, expanded ? { jobId: job._id } : "skip");
 
   const cancel = useMutation(api.jobs.cancel),
     retry = useMutation(api.jobs.retry),
     dismiss = useMutation(api.jobs.dismiss),
     restore = useMutation(api.jobs.restore);
 
-  const act = async <T,>(fn: () => Promise<T>) => {
-    setError("");
-
-    try {
-      await fn();
-    } catch (e) {
-      setError(describeError(e));
-    }
-  };
-
-  const active = job.status === "queued" || job.status === "running";
   const dismissed = job.dismissedAt !== undefined;
 
   return (
-    <article className={dismissed ? "control-job is-dismissed" : "control-job"}>
-      <div className="control-job-heading">
-        <h3>{job.input}</h3>
-        <span className={`job-status ${job.status}`}>{jobLabel(job)}</span>
-      </div>
-      <p>{jobSummary(job)}</p>
-      <p className="control-phase" role="status">
-        {job.status === "complete"
-          ? job.floorReached
-            ? "x.md reached the oldest history it can retrieve. Older posts may still exist on X."
-            : // This kind of job (live search, single post, profile, follower
-              // lookup, etc.) never creates a searchable account entry — that
-              // pipeline is covered per-account in the account library above,
-              // which is the only place search-publication state is reported.
-              "Saved. This isn't an account import, so it doesn't appear in your account library."
-          : job.status === "queued" && job.readyAt !== undefined && job.readyAt > now
-            ? // Auto-continuation and backed-off retries both land here: a
-              // person never has to ask for the next page or retry a
-              // transient failure — convex/jobs.ts `finish` requeues the
-              // SAME job on its own. Nothing to click; just when it happens.
-              `Retrying automatically at ${new Date(job.readyAt).toLocaleTimeString()}`
-            : job.status === "queued" || job.status === "running"
-              ? (job.phase ?? "Waiting to start")
-              : job.status === "cancelled"
-                ? (job.phase ?? "Stopped by request.")
-                : // "failed" / "partial": never the leftover in-progress phase
-                  // (e.g. "Saving raw capture") here — see jobText.ts
-                  // stoppedRunSummary, which jobSummary above already uses for
-                  // the retained-progress line; the actual failure reason is
-                  // in job.error below. to-do.md P0 "Do not leave failed jobs
-                  // showing only 'Saving raw capture.'"
-                  "This run did not finish."}
-      </p>
-      <small>
-        Updated {new Date(job.updatedAt).toLocaleString()}
-        {job.oldest ? ` | Oldest post received: ${new Date(job.oldest).toLocaleDateString()}` : ""}
-      </small>
-      {job.error && <p className="control-error">{job.error}</p>}
-      {jobWarnings(job).map((w) => (
-        <p className="control-warning" key={w}>
-          {w}
-        </p>
-      ))}
-      <div className="control-actions">
-        {active && <button onClick={() => act(() => cancel({ jobId: job._id }))}>Stop job</button>}
-        {["failed", "partial", "cancelled"].includes(job.status) && (
-          <button onClick={() => act(() => retry({ jobId: job._id }))}>Retry download</button>
-        )}
-        {/* Clearing a finished run only hides it: the run and the receipts
-            proving its captures were stored are kept, and "Bring back" puts
-            it straight back in the list. Never offered while the run is
-            still active — stop it first, or it would keep spending provider
-            allowance with no row to stop it from. */}
-        {!active &&
-          (dismissed ? (
-            <button onClick={() => act(() => restore({ jobId: job._id }))}>Bring back</button>
-          ) : (
-            <button onClick={() => act(() => dismiss({ jobId: job._id }))}>Clear from list</button>
-          ))}
-        <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-          {expanded ? "Hide technical details" : "Technical details"}
-        </button>
-      </div>
-      {error && (
-        <p role="alert" className="control-error">
-          {error}
-        </p>
-      )}
-      {expanded && (
-        <div className="control-receipts">
-          {receipts === undefined
-            ? "Loading receipts…"
-            : receipts.length === 0
-              ? "No durable acknowledgments yet."
-              : receipts.map((r) => (
-                  <div key={r._id}>
-                    <strong>{r.records} saved response files</strong>
-                    <code>{r.receiptId}</code>
-                  </div>
-                ))}
-        </div>
-      )}
-    </article>
+    <JobRow
+      job={job}
+      now={now}
+      isOperator={isOperator}
+      className={dismissed ? "control-job is-dismissed" : "control-job"}
+      onCancel={async (j) => {
+        await cancel({ jobId: j._id });
+      }}
+      onRetry={async (j) => {
+        await retry({ jobId: j._id });
+      }}
+      onDismiss={
+        dismissed
+          ? undefined
+          : async (j) => {
+              await dismiss({ jobId: j._id });
+            }
+      }
+      // Clearing a finished run only hides it: the run and the receipts
+      // proving its captures were stored are kept, and "Bring back" puts it
+      // straight back in the list. Only offered once a run is no longer
+      // active — stop it first, or it would keep spending provider
+      // allowance with no row left to stop it from. This is a
+      // dashboard-only extra: the header modal's job row has no "Show runs
+      // I've cleared" toggle to bring anything back into, so it never needs
+      // this button (src/JobRow.tsx stays operator-string-free either way).
+      // `restore`, like Cancel/Retry/Dismiss, is requireOperator-gated
+      // server-side (convex/jobs.ts), so it gets the same disabled+notice
+      // treatment as JobRow's own actions rather than a silent ConvexError.
+      extraActions={
+        !["queued", "running"].includes(job.status) && dismissed ? (
+          <button
+            type="button"
+            disabled={!isOperator}
+            title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
+            onClick={() => restore({ jobId: job._id })}
+          >
+            Bring back
+          </button>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -138,6 +82,12 @@ export default function Dashboard({
 }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
+  // Cancel/Retry/Dismiss/Restore on a job, and starting one, all require a
+  // signed-in OPERATOR (convex/access.ts `requireOperator`), not merely a
+  // signed-in session — the dashboard is reachable by URL to any
+  // authenticated caller, operator or not. This only drives the disabled+
+  // notice treatment below; the server enforces the boundary regardless.
+  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip") ?? false;
   // `integrations.operator` requires a session, so asking for it before one
   // exists throws into the app's error boundary — which only offers a
   // reload. The dashboard is reachable directly by URL, so that is a normal
@@ -378,7 +328,7 @@ export default function Dashboard({
                   : "Nothing else has run yet. Live searches, single posts, and profile/follower lookups will show up here."}
               </p>
             ) : (
-              jobs.map((job) => <Job key={job._id} job={job} />)
+              jobs.map((job) => <Job key={job._id} job={job} isOperator={isOperator} />)
             )}
           </section>
         </div>

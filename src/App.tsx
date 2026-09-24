@@ -39,7 +39,8 @@ import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatu
 import { useLiveNow } from "./library/clock";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { describeError } from "./errors";
-import { inlineImportStatus, jobLabel, jobSummary, jobWarnings } from "./jobText";
+import { dedupeJobsByInput, inlineImportStatus } from "./jobText";
+import { JobRow } from "./JobRow";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
@@ -463,6 +464,8 @@ export default function App() {
 
   const start = useMutation(api.jobs.start),
     retry = useMutation(api.jobs.retry),
+    cancelJob = useMutation(api.jobs.cancel),
+    dismissJob = useMutation(api.jobs.dismiss),
     bookmark = useMutation(api.search.bookmark),
     save = useMutation(api.search.save),
     removeSaved = useMutation(api.search.removeSaved),
@@ -1258,42 +1261,34 @@ export default function App() {
             {!jobs.length && (
               <p className="muted-copy">Your imports and their progress will appear here.</p>
             )}
-            {jobs.map((job) => (
-              <div className="job" key={job._id}>
-                <div>
-                  <strong>{job.kind === "bulk" ? `@${job.input}` : job.input}</strong>
-                  <span className={`job-status ${job.status}`}>{jobLabel(job)}</span>
-                </div>
-                <p>{jobSummary(job)}</p>
-                {job.error && <p className="config-warning">{job.error}</p>}
-                {jobWarnings(job).map((w) => (
-                  <p className="muted-copy" key={w}>
-                    {w}
-                  </p>
-                ))}
-                {/* An import runs to the end of what the provider has on its
-                    own (convex/jobs.ts `finish` continues and retries by
-                    itself), so the only thing left for a person is to resume
-                    a run that gave up for good. That resumes THIS job where
-                    it stopped — never a new job from its cursor. */}
-                {(job.status === "failed" || job.status === "partial") && (
-                  <button
-                    type="button"
-                    disabled={busy || !isOperator}
-                    title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
-                    onClick={() =>
-                      void task(
-                        (async () => {
-                          await ensureSession();
-                          await retry({ jobId: job._id });
-                        })(),
-                      )
-                    }
-                  >
-                    Retry import
-                  </button>
-                )}
-              </div>
+            {/* Repeat runs of the exact same input (e.g. every past click of
+                "Retry" before convex/jobs.ts grew an in-place retry mutation)
+                fold into one row — see dedupeJobsByInput's own comment. */}
+            {dedupeJobsByInput(jobs).map(({ job, earlierCount }) => (
+              <JobRow
+                key={job._id}
+                job={job}
+                now={now}
+                earlierCount={earlierCount}
+                isOperator={isOperator}
+                onCancel={async (j) => {
+                  await ensureSession();
+                  await cancelJob({ jobId: j._id });
+                }}
+                // An import runs to the end of what the provider has on its
+                // own (convex/jobs.ts `finish` continues and retries by
+                // itself), so the only thing left for a person is to resume
+                // a run that gave up for good. That resumes THIS job where
+                // it stopped — never a new job from its cursor.
+                onRetry={async (j) => {
+                  await ensureSession();
+                  await retry({ jobId: j._id });
+                }}
+                onDismiss={async (j) => {
+                  await ensureSession();
+                  await dismissJob({ jobId: j._id });
+                }}
+              />
             ))}
           </div>
         </Modal>

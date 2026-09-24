@@ -259,6 +259,15 @@ export default defineSchema({
     // dismissed (see convex/jobs.ts `dismiss`), and `restore` clears this
     // field again.
     dismissedAt: v.optional(v.number()),
+    // Whether a *stopped* run (failed/partial) could succeed on a plain
+    // retry, straight from `ProviderError.retryable` (convex/lib/xmd.ts) at
+    // the moment convex/jobs.ts `finish` gave up on it. `undefined` for any
+    // job that never stopped on an error, and for the pre-existing rows this
+    // field is rolled out onto — those show the same as a retryable failure
+    // (Retry offered) rather than silently losing the button. Never set from
+    // parsing `error` text: the provider's message wording is not a stable
+    // contract to match against.
+    retryable: v.optional(v.boolean()),
   })
     .index("by_status", ["status"])
     // No index on `owner` alone: the imported corpus is shared

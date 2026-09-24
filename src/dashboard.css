@@ -136,25 +136,26 @@
   color: #a5a5a5;
   font-size: 13px;
 }
-.control-job-heading {
+.control-job .job-row-heading {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
 }
-.control-job h3 {
+.control-job strong {
   font-size: 20px;
   overflow-wrap: anywhere;
-  margin: 0;
+  font-weight: 500;
+}
+.control-job .job-row-time {
+  font-size: 13px;
+  color: #8f8f8f;
 }
 .control-job > p {
   font-size: 13px;
   line-height: 1.6;
   color: #bdbdbd;
   max-width: 68ch;
-}
-.control-job .control-phase {
-  color: #eee;
 }
 .job-status {
   font-size: 13px;
@@ -178,23 +179,24 @@
   border-left: 2px solid #776149;
   padding-left: 12px;
 }
-.control-actions {
-  display: flex;
-  flex-wrap: wrap;
+.control-job .job-row-actions {
   gap: 8px;
   margin-top: 16px;
 }
-.control-receipts {
+.control-job .job-row-details {
   margin-top: 16px;
   background: #191919;
   padding: 16px;
   font-size: 13px;
   max-width: 80ch;
 }
-.control-receipts > div {
-  margin-bottom: 12px;
+.control-job .job-row-details summary {
+  color: #b3b3b3;
 }
-.control-receipts code {
+.control-job .job-row-details > div {
+  margin-top: 12px;
+}
+.control-job .job-row-details code {
   display: block;
   overflow-wrap: anywhere;
   margin-top: 6px;
@@ -250,7 +252,7 @@
   .control-header .control-error {
     margin-top: 8px;
   }
-  .control-job-heading {
+  .control-job .job-row-heading {
     align-items: flex-start;
   }
 }
