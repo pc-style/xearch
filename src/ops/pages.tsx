@@ -168,28 +168,31 @@ export function OverviewPage(props: Props) {
                 when={list().length}
                 fallback={<div class="none">Nothing needs you right now.</div>}
               >
-                <For each={list()}>
+                {/* Keyed: `items()` is rebuilt on every query update and clock
+                    tick, and an unkeyed list would recreate every card each
+                    time, replaying its entry animation as a visible flash. */}
+                <For each={list()} keyed={(item) => item.key}>
                   {(item) => (
-                    <div class="ai" data-s={item.s} data-key={item.key}>
+                    <div class="ai" data-s={item().s} data-key={item().key}>
                       <i class="bar" />
                       <div class="body">
-                        <b>{item.title}</b>
+                        <b>{item().title}</b>
                         <span>
-                          <Show when={item.code}>
-                            <code>{item.code}</code>
+                          <Show when={item().code}>
+                            <code>{item().code}</code>
                           </Show>
-                          {item.detail}
+                          {item().detail}
                         </span>
                       </div>
                       <div class="acts">
-                        <For each={item.actions}>
+                        <For each={item().actions} keyed={(action) => action.label}>
                           {(action) => (
                             <button
                               type="button"
-                              class={["b", action.primary && "p"]}
-                              onClick={() => runAction(ops, action)}
+                              class={["b", action().primary && "p"]}
+                              onClick={() => runAction(ops, action())}
                             >
-                              {action.label}
+                              {action().label}
                             </button>
                           )}
                         </For>
@@ -277,17 +280,17 @@ function Pipeline(props: Props) {
         </span>
       </div>
       <div class="flowrow">
-        <For each={stages()}>
+        <For each={stages()} keyed={(stage) => stage.label}>
           {(stage) => (
             <button
               type="button"
               class="st"
-              title={`Open ${stage.go}`}
-              onClick={() => ops.go(stage.go)}
+              title={`Open ${stage().go}`}
+              onClick={() => ops.go(stage().go)}
             >
-              <small>{stage.label}</small>
-              <big>{stage.value}</big>
-              <div class="d">{stage.detail}</div>
+              <small>{stage().label}</small>
+              <big>{stage().value}</big>
+              <div class="d">{stage().detail}</div>
               <i class="arrow" />
             </button>
           )}
@@ -456,12 +459,12 @@ export function PerformancePage(props: Props) {
           <span class="sub">Each card opens the page where you can act on it.</span>
         </div>
         <div class="health">
-          <For each={cards()}>
+          <For each={cards()} keyed={(card) => card.b}>
             {(card) => (
-              <button type="button" class="hc" data-s={card.s} onClick={() => ops.go(card.go)}>
+              <button type="button" class="hc" data-s={card().s} onClick={() => ops.go(card().go)}>
                 <i class="dot" />
-                <b>{card.b}</b>
-                <span>{card.t}</span>
+                <b>{card().b}</b>
+                <span>{card().t}</span>
               </button>
             )}
           </For>
@@ -532,20 +535,20 @@ function Backlog(props: Props) {
       <Show when={parts().length}>
         <Show when={sameUnit()}>
           <div class="bar">
-            <For each={parts()}>
+            <For each={parts()} keyed={(p) => p.handle}>
               {(p) => (
-                <i style={{ width: `${((p.work.count / partTotal()) * 100).toFixed(1)}%` }} />
+                <i style={{ width: `${((p().work.count / partTotal()) * 100).toFixed(1)}%` }} />
               )}
             </For>
           </div>
         </Show>
         <div class="leg">
-          <For each={parts()}>
+          <For each={parts()} keyed={(p) => p.handle}>
             {(p) => (
               <span>
                 <i />
-                <b>@{p.handle}</b> · {n(p.work.count)}{" "}
-                {p.work.unit === "captures" ? "batches" : p.work.unit} pending
+                <b>@{p().handle}</b> · {n(p().work.count)}{" "}
+                {p().work.unit === "captures" ? "batches" : p().work.unit} pending
               </span>
             )}
           </For>
@@ -971,6 +974,7 @@ export function AccountsPage(props: Props) {
               >
                 <For
                   each={matching()}
+                  keyed={(a) => a.handle}
                   fallback={
                     <tr>
                       <td colspan="8" class="muted empty">
@@ -980,27 +984,27 @@ export function AccountsPage(props: Props) {
                   }
                 >
                   {(a) => {
-                    const state = () => accountState(a, ops.now());
-                    const refreshed = () => lastRefresh(a);
-                    const stale = () => isStale(a, ops.now());
-                    const run = () => a.latestRun;
+                    const state = () => accountState(a(), ops.now());
+                    const refreshed = () => lastRefresh(a());
+                    const stale = () => isStale(a(), ops.now());
+                    const run = () => a().latestRun;
 
                     return (
-                      <tr data-account={a.handle}>
+                      <tr data-account={a().handle}>
                         <td>
                           <input
                             type="checkbox"
-                            aria-label={`Select @${a.handle}`}
-                            checked={selected().has(a.handle)}
-                            onChange={(e) => toggle(a.handle, e.currentTarget.checked)}
+                            aria-label={`Select @${a().handle}`}
+                            checked={selected().has(a().handle)}
+                            onChange={(e) => toggle(a().handle, e.currentTarget.checked)}
                           />
                         </td>
                         <td>
                           <div class="acc">
-                            <Avatar name={a.name} url={a.avatar} fallbackClass="ops-av" />
+                            <Avatar name={a().name} url={a().avatar} fallbackClass="ops-av" />
                             <div>
-                              <b>@{a.handle}</b>
-                              <small>{a.name}</small>
+                              <b>@{a().handle}</b>
+                              <small>{a().name}</small>
                             </div>
                           </div>
                         </td>
@@ -1019,25 +1023,25 @@ export function AccountsPage(props: Props) {
                         </td>
                         <td class="num">
                           {/* No count reported is unknown, not 0 (convex/library.ts). */}
-                          {a.publication?.searchablePostCount === undefined ? (
+                          {a().publication?.searchablePostCount === undefined ? (
                             <span class="faint" title="The indexer has not reported a count">
                               unknown
                             </span>
-                          ) : searchable(a) ? (
-                            n(searchable(a))
+                          ) : searchable(a()) ? (
+                            n(searchable(a()))
                           ) : (
                             <span class="faint">0</span>
                           )}
                         </td>
                         <td class="num">
-                          {pendingLabel(a) ? (
-                            <span class="info">{pendingLabel(a)}</span>
+                          {pendingLabel(a()) ? (
+                            <span class="info">{pendingLabel(a())}</span>
                           ) : (
                             <span class="faint">—</span>
                           )}
                         </td>
                         <td>
-                          <Span a={a} now={ops.now()} />
+                          <Span a={a()} now={ops.now()} />
                         </td>
                         <td class={stale() ? "warn" : "muted"}>
                           {refreshed() ? (
@@ -1054,10 +1058,10 @@ export function AccountsPage(props: Props) {
                             <button
                               type="button"
                               class="ib2"
-                              title={`Search @${a.handle}’s posts`}
-                              aria-label={`Search @${a.handle}’s posts`}
-                              disabled={!hasSearchable(a)}
-                              onClick={() => ops.openSearch(`@${a.handle}`)}
+                              title={`Search @${a().handle}’s posts`}
+                              aria-label={`Search @${a().handle}’s posts`}
+                              disabled={!hasSearchable(a())}
+                              onClick={() => ops.openSearch(`@${a().handle}`)}
                             >
                               <Icon name="search" size={15} />
                             </button>
@@ -1065,19 +1069,19 @@ export function AccountsPage(props: Props) {
                               type="button"
                               class="ib2"
                               title="Refresh: collect newer posts"
-                              aria-label={`Refresh @${a.handle}`}
-                              disabled={busyAccount(a)}
-                              onClick={() => void ops.refresh([a.handle])}
+                              aria-label={`Refresh @${a().handle}`}
+                              disabled={busyAccount(a())}
+                              onClick={() => void ops.refresh([a().handle])}
                             >
                               <Icon name="refresh-cw" size={15} />
                             </button>
                             <a
                               class="ib2"
-                              href={`https://x.com/${a.handle}`}
+                              href={`https://x.com/${a().handle}`}
                               target="_blank"
                               rel="noreferrer"
                               title="Open on X"
-                              aria-label={`Open @${a.handle} on X`}
+                              aria-label={`Open @${a().handle} on X`}
                             >
                               <Icon name="arrow-up-right" size={15} />
                             </a>
@@ -1196,6 +1200,7 @@ export function JobsPage(props: Props) {
             >
               <For
                 each={shown()}
+                keyed={(job) => job._id}
                 fallback={
                   <tr>
                     <td colspan="7" class="muted empty">
@@ -1204,7 +1209,7 @@ export function JobsPage(props: Props) {
                   </tr>
                 }
               >
-                {(job) => <JobRow ops={ops} job={job} info={queue().get(job._id)} />}
+                {(job) => <JobRow ops={ops} job={job()} info={queue().get(job()._id)} />}
               </For>
             </Show>
           </tbody>

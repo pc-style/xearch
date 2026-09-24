@@ -96,6 +96,34 @@ describe("ops shell", () => {
     await vi.waitFor(() => expect(Math.max(...clocks())).toBeGreaterThan(reloaded));
     expect(ops.find(".toast").textContent).toContain("Reloaded");
   });
+
+  it("keeps the attention cards and pipeline stages in place across a re-read", async () => {
+    // Every query update rebuilds the lists behind these cards. Recreating
+    // their DOM on each one replays the entry animation, which on a busy
+    // worker looks like the dashboard flashing every second.
+    const ops = await open("overview", {
+      jobs: [job(1, { input: "bob", status: "failed", error: "x.md 502 Bad Gateway" })],
+      accounts: [account(1, { handle: "bob", name: "Bob" })],
+    });
+
+    const card = ops.find(".ai", "Import of @bob failed");
+    const stage = ops.find(".st", "Queued");
+
+    const reads = () => {
+      ops.html();
+
+      return ops.reads.filter((r) => r.name === "summary:summary").length;
+    };
+
+    const before = reads();
+
+    ops.click("button[aria-label='Reload data']");
+    await vi.waitFor(() => expect(reads()).toBeGreaterThan(before));
+
+    expect(ops.find(".ai", "Import of @bob failed")).toBe(card);
+    expect(ops.find(".st", "Queued")).toBe(stage);
+    expect(card.isConnected).toBe(true);
+  });
 });
 
 describe("overview", () => {
