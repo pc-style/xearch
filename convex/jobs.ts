@@ -7,6 +7,7 @@ import { internal } from "./_generated/api";
 import { kindValidator, throttleProviderValidator } from "./schema";
 import schema from "./schema";
 import { user, requireOperator } from "./access";
+import { activeThrottleUntil, loadProviderLimit } from "./limits";
 import { handle, statusUrl } from "./lib/xmd";
 import { canonicalQuery } from "./lib/search";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
@@ -133,6 +134,20 @@ function canonicalLiveQuery(raw: string): string {
  * mistaken for one.
  */
 const REPEAT_WINDOW_MS = 60_000;
+
+/**
+ * `HH:MM` in UTC, for `retry`'s "Retry queued for …" phase text. Explicit
+ * UTC rather than the server's default locale/timezone (which this backend
+ * has no control over and should not depend on) — the dashboard's primary
+ * "Retrying automatically at …" display (src/library/AccountRow.tsx)
+ * already formats `readyAt` in the viewer's own local time; this is only
+ * the supplementary "Last phase" text in a run's expanded history.
+ */
+function utcHHMM(at: number): string {
+  const date = new Date(at);
+
+  return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")} UTC`;
+}
 
 export const start = mutation({
   args: {
@@ -392,15 +407,35 @@ export const retry = mutation({
       if (active) throw new ConvexError("This indexing job is already active.");
     }
 
+    // Every job kind fetches through x.md (convex/lib/xmd.ts), so that is
+    // the one provider whose throttle state a manual retry needs to check —
+    // "receiver"/"search" are about this app's own services, not the
+    // provider a job's own calls go through. Reusing convex/limits.ts's
+    // `loadProviderLimit` reads the exact same fact the dashboard's
+    // "Provider limits" panel already shows, instead of a second read that
+    // could disagree with it. This respects a provider-reported limit, the
+    // one kind AGENTS.md's "Rate limiting" section allows — it adds no
+    // self-imposed cap.
+    const now = Date.now();
+    const throttledUntil = activeThrottleUntil(await loadProviderLimit(ctx, "xmd"), now);
+    const readyAt = throttledUntil ?? 0;
+
     await ctx.db.patch(jobId, {
       status: "queued",
-      readyAt: 0,
+      readyAt,
       error: undefined,
       retryable: undefined,
-      phase: "Retry queued",
-      updatedAt: Date.now(),
+      phase:
+        throttledUntil === undefined
+          ? "Retry queued"
+          : `Retry queued for ${utcHHMM(throttledUntil)}`,
+      updatedAt: now,
     });
-    await ctx.scheduler.runAfter(0, internal.importer.run, { jobId });
+    // Scheduled for the same instant `readyAt` allows a claim (convex/jobs.ts
+    // `claim` already refuses one before then): re-hitting x.md before the
+    // provider's own reset/retry-after time would just fail the same way
+    // again, so there is nothing to gain from firing this any sooner.
+    await ctx.scheduler.runAfter(Math.max(0, readyAt - now), internal.importer.run, { jobId });
 
     return null;
   },
@@ -497,9 +532,11 @@ export const restore = mutation({
 //
 // This is NOT an application quota and must never become one (AGENTS.md:
 // no self-imposed rate limits, quotas or budgets — an agent-added cap
-// previously caused a production outage). Nothing reads these rows to decide
-// whether to make a request; they are a record of what the provider said,
-// shown to a person. `remaining`/`resetAt`/`retryAfterMs` are written ONLY
+// previously caused a production outage). They are a record of what the
+// provider said, shown to a person — and, since `retry` above reads them
+// through `limits.activeThrottleUntil`, also read to decide WHEN to make a
+// request again, never whether to make one at all or to refuse one on our
+// own reasoning. `remaining`/`resetAt`/`retryAfterMs` are written ONLY
 // when the provider actually supplied them — never estimated or defaulted.
 export const recordThrottle = internalMutation({
   args: {

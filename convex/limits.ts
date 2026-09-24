@@ -1,6 +1,6 @@
 import { v, type Infer } from "convex/values";
 import { query } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { user } from "./access";
 import { throttleProviderValidator } from "./schema";
 
@@ -99,8 +99,14 @@ export const providerLimitValidator = v.union(
 
 export type ProviderLimit = Infer<typeof providerLimitValidator>;
 
-async function loadProviderLimit(
-  ctx: QueryCtx,
+// Exported so convex/jobs.ts `retry` can read the exact same fact the
+// dashboard's "Provider limits" panel shows, rather than a second
+// independent read of `providerThrottleEvents` that could drift from it.
+// Widened to `QueryCtx | MutationCtx` for that caller — this function only
+// ever reads (`ctx.db.query`), so a mutation's superset `db` satisfies it
+// the same way convex/access.ts's `requireOperator` accepts both.
+export async function loadProviderLimit(
+  ctx: QueryCtx | MutationCtx,
   provider: (typeof PROVIDERS)[number],
 ): Promise<ProviderLimit> {
   const recent = await ctx.db
@@ -158,3 +164,28 @@ export const all = query({
     return out;
   },
 });
+
+/**
+ * When a currently-active throttle says a retry should wait, or `undefined`
+ * when there is nothing to wait for (no throttle observed at all, or the
+ * one observed has already passed). Used by convex/jobs.ts `retry` to queue
+ * a job for when the provider itself said to come back, instead of
+ * re-hitting it immediately and failing the exact same way — this reads a
+ * fact the provider reported, it does not invent a limit of our own
+ * (AGENTS.md "Rate limiting").
+ *
+ * Picks the LATER of `resetAt` (the allowance window's own reset) and
+ * `nextRetryAt` (derived from the provider's `retryAfterMs`) when both are
+ * present and still in the future: either one passing on its own does not
+ * mean the other has, so the caller should wait for whichever the provider
+ * expects to hold longer.
+ */
+export function activeThrottleUntil(limit: ProviderLimit, now: number): number | undefined {
+  if (limit.kind !== "throttled") return undefined;
+
+  const candidates = [limit.resetAt, limit.nextRetryAt].filter(
+    (at): at is number => at !== undefined && at > now,
+  );
+
+  return candidates.length > 0 ? Math.max(...candidates) : undefined;
+}
