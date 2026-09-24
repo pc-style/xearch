@@ -825,6 +825,7 @@ export const expire = internalMutation({
     }
 
     const status = job.count ? "partial" : "failed";
+
     const error =
       "Collection timed out. Only acknowledged captures are recorded; retry to continue.";
 
