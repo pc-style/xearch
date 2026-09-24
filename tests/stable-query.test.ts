@@ -61,8 +61,8 @@ const client = new ConvexReactClient("https://stable-query-test.convex.cloud", {
   baseClient,
 } as ConvexReactClientOptions);
 
-function Probe({ now }: { now: number }) {
-  const result = useStableQuery(api.integrations.configured, { now });
+function Probe({ now }: { now: number | "skip" }) {
+  const result = useStableQuery(api.integrations.configured, now === "skip" ? "skip" : { now });
 
   // Rendered as text so the assertions read the DOM, never a module binding
   // written during render.
@@ -79,13 +79,13 @@ function seen(): Value | undefined {
   return text === "undefined" ? undefined : JSON.parse(text);
 }
 
-function render(now: number) {
+function render(now: number | "skip") {
   host = document.createElement("div");
   root = createRoot(host);
   act(() => root?.render(createElement(ConvexProvider, { client }, createElement(Probe, { now }))));
 }
 
-function update(now: number) {
+function update(now: number | "skip") {
   act(() => root?.render(createElement(ConvexProvider, { client }, createElement(Probe, { now }))));
 }
 
@@ -106,6 +106,26 @@ describe("useStableQuery", () => {
     expect(seen()).toEqual(first);
 
     // The next tick has a result waiting: the hook moves on to it.
+    const second: Value = { search: false };
+    responses.set(JSON.stringify({ now: 3 }), second);
+    update(3);
+    expect(seen()).toEqual(second);
+  });
+
+  it("drops the held result while the query is skipped, and starts over after", () => {
+    const first: Value = { search: true };
+    responses.set(JSON.stringify({ now: 1 }), first);
+    render(1);
+    expect(seen()).toEqual(first);
+
+    // Session gone: nothing from it may linger.
+    update("skip");
+    expect(seen()).toBeUndefined();
+
+    // A new session with no result yet is "never loaded", not the old value.
+    update(2);
+    expect(seen()).toBeUndefined();
+
     const second: Value = { search: false };
     responses.set(JSON.stringify({ now: 3 }), second);
     update(3);

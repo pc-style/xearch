@@ -13,9 +13,9 @@ import { useState } from "react";
  * is state instead of a ref so nothing is read or written during render
  * that React cannot see.
  *
- * The first load, and a `"skip"` before anything has ever loaded, still
- * report `undefined` — a consumer can tell "never loaded" from "reloading",
- * it just never regresses from the latter to the former.
+ * The first load and a `"skip"` report `undefined` — a consumer can tell
+ * "never loaded" from "reloading", it just never regresses from the latter
+ * to the former while the query stays live.
  */
 // SAFETY: this wraps `useQuery` with its exact parameters and returns either
 // its result or an earlier result of the very same query reference, so the
@@ -24,6 +24,15 @@ import { useState } from "react";
 export const useStableQuery = ((query, args) => {
   const result = useQuery(query, args);
   const [stored, setStored] = useState(result);
+
+  // A skipped query has no result to hold on to: keeping the last one would
+  // let a dashboard show configuration from a session that has ended. Clear
+  // it, so a later session starts from "never loaded" again.
+  if (args === "skip") {
+    if (stored !== undefined) setStored(undefined);
+
+    return undefined;
+  }
 
   if (result !== undefined && result !== stored) setStored(result);
 
