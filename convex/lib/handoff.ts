@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ProviderError, readThrottle, retryDelay, type RawObject } from "./xmd";
+import { ProviderError, readThrottle, retryDelay, type RawObject, type JsonValue } from "./xmd";
 
 /** Acquisition output only. The receiving service owns raw retention and normalization. */
 export type Capture = {
@@ -49,7 +49,7 @@ const encoder = new TextEncoder();
 export const utf8Bytes = (value: string): number => encoder.encode(value).byteLength;
 
 /** UTF-8 bytes of a value once serialized — the unit every capture budget is in. */
-export const jsonBytes = (value: unknown): number => utf8Bytes(JSON.stringify(value));
+export const jsonBytes = (value: JsonValue): number => utf8Bytes(JSON.stringify(value));
 
 const receiptSchema = z.object({
   captureId: z.string(),
@@ -85,13 +85,16 @@ export async function deliverCapture(
     let response: Response;
 
     try {
+      const baseHeaders = {
+        "Content-Type": "application/json",
+        "Idempotency-Key": id,
+      } satisfies Record<string, string>;
+
+      const headers = token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders;
+
       response = await fetcher(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": id,
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers,
         body,
         redirect: "error",
         signal: AbortSignal.timeout(20_000),
@@ -107,7 +110,7 @@ export async function deliverCapture(
     }
 
     if (!response.ok) {
-      let problem: unknown;
+      let problem: JsonValue | undefined;
 
       try {
         problem = await response.json();

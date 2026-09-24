@@ -228,6 +228,4 @@ for (;;) {
 // Shutdown: `online: false` is a statement about this worker, not about the
 // receiver, so no `receiver` field goes with it. Claiming the receiver is
 // down because we are stopping would be an observation we never made.
-await client
-  .action(api.worker.poll, { token, heartbeatOnly: true, online: false })
-  .catch(() => {});
+await client.action(api.worker.poll, { token, heartbeatOnly: true, online: false }).catch(() => {});

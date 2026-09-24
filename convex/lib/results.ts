@@ -1,5 +1,12 @@
 import * as Schema from "effect/Schema";
 
+/**
+ * A JSON-serializable value — what `JSON.parse`/`response.json()` produce, plus
+ * `undefined` object properties so object-literal test fixtures that omit an
+ * optional field (inferred by TypeScript as `?: undefined`) satisfy it too.
+ */
+type Json = string | number | boolean | null | Json[] | { [key: string]: Json | undefined };
+
 const safeLink = Schema.String.check(
   Schema.makeFilter((value) => {
     try {
@@ -81,7 +88,7 @@ export const searchResponse = Schema.Struct({
 
 const decode = Schema.decodeUnknownSync(searchResponse);
 
-export function decodeSearchResponse(input: unknown) {
+export function decodeSearchResponse(input: Json) {
   const result = decode(input);
 
   return { ...result, warnings: result.warnings ?? [] };

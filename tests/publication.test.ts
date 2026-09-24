@@ -34,9 +34,7 @@ async function seedAccount(
   );
 }
 
-function envelope(
-  overrides: Partial<PublicationUpdateEnvelope> = {},
-): PublicationUpdateEnvelope {
+function envelope(overrides: Partial<PublicationUpdateEnvelope> = {}): PublicationUpdateEnvelope {
   return {
     version: 1 as const,
     handle: "alice",

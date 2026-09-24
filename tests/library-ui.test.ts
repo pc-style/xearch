@@ -1,8 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment jsdom
+import { describe, expect, it } from "vitest";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { getFunctionName } from "convex/server";
+import type { UserIdentityAttributes } from "convex/server";
+import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
+import type { ConvexReactClientOptions } from "convex/react";
 import type { Value } from "convex/values";
+import type {
+  AuthTokenFetcher,
+  ConnectionState,
+  MutationOptions,
+  QueryJournal,
+  QueryToken,
+} from "convex/browser";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { AccountLibraryRow, DashboardSummary } from "../convex/lib/contracts";
@@ -10,40 +21,142 @@ import type { ServiceStatus } from "../convex/summary";
 import { summaryQuery, healthQuery } from "../src/library/summaryApi";
 import { limitsAllQuery } from "../src/library/limitsApi";
 import type { ProviderLimit } from "../convex/limits";
+import Library from "../src/library/Library";
 
 /**
  * A rendered-DOM smoke test for src/library/*.tsx (to-do.md P0 "Replace the
  * job wall with an account library"). Previous verifier passes on this unit
  * found tsc/lint-level evidence only and no proof the component tree
  * actually renders its claimed states — this fills that gap by rendering
- * <Library> to static markup (react-dom/server, no jsdom dependency needed)
- * against mocked convex/react hooks, and asserting on the real output
- * string, not on the source text.
+ * <Library> against a *real* `ConvexReactClient` and asserting on the
+ * actual rendered DOM, not on the source text.
  *
- * `convex/react`'s hooks are mocked; `getFunctionName` (the real
- * implementation from convex/server) is used inside the mock to route each
- * `useQuery` call to a fixture by the query's own module:export name, the
- * same mechanism Convex itself uses — see convex/server/api.js.
+ * No module mocking: `convex/react`'s hooks (`useQuery`, `useMutation`,
+ * `useConvexAuth`, `useConvexConnectionState`) all run for real. What's
+ * faked is only the transport underneath them — a `BaseConvexClientInterface`
+ * implementation (see `node_modules/convex/src/browser/sync/client.ts`) that
+ * answers `localQueryResult`/`connectionState`/`mutation` from this file's
+ * own per-function fixture map, keyed by `getFunctionName` exactly the way
+ * `ConvexReactClient.watchQuery` itself keys queries (see
+ * `node_modules/convex/src/react/client.ts`). `useConvexAuth` needs a real
+ * `ConvexProviderWithAuth` (`node_modules/convex/src/react/ConvexAuthState.tsx`)
+ * above the tree, which resolves auth via a `useEffect` — so this renders
+ * with `react-dom/client`'s `createRoot` inside `act()` (jsdom environment)
+ * rather than `renderToStaticMarkup`, so that effect gets to flush before
+ * each assertion.
  */
 
-const mockState = vi.hoisted(() => ({
+const mockState = {
   isAuthenticated: true,
   connected: true,
   responses: new Map<string, unknown>(),
-}));
+};
 
-vi.mock("convex/react", () => ({
-  useConvexAuth: () => ({ isAuthenticated: mockState.isAuthenticated }),
-  useConvexConnectionState: () => ({ isWebSocketConnected: mockState.connected }),
-  useQuery: (ref: Parameters<typeof getFunctionName>[0], args: Record<string, Value> | "skip") => {
-    if (args === "skip") return undefined;
+/**
+ * Mirrors `BaseConvexClientInterface`
+ * (`node_modules/convex/src/browser/sync/client.ts`) — the surface
+ * `ConvexReactClient` calls on whatever it's given as `options.baseClient`.
+ * That interface itself is `@internal` and stripped from this package's
+ * published `.d.ts`, so it can't be imported; every member here is typed
+ * against the same public types (`Value`, `ConnectionState`, `QueryToken`,
+ * ...) the real interface uses, so a shape drift between this and the
+ * installed `convex` version still fails at the `ConvexReactClientOptions`
+ * cast below or at a call site's argument types.
+ */
+interface FakeBaseConvexClient {
+  readonly url: string;
+  // `fn` is stored for `PaginatedQueryClient`'s constructor to hold onto but
+  // this fake never calls it (no usePaginatedQuery in this component tree,
+  // and no live transitions to deliver) — `never` says exactly that: a
+  // callback this fake guarantees it will not invoke, as opposed to
+  // `unknown`'s "accepts anything, unparsed".
+  addOnTransitionHandler(fn: (transition: never) => void): () => void;
+  setAuth(
+    fetchToken: AuthTokenFetcher,
+    onChange: (isAuthenticated: boolean) => void,
+    onRefreshChange?: (isRefreshing: boolean) => void,
+  ): void;
+  setAdminAuth(value: string, fakeUserIdentity?: UserIdentityAttributes): void;
+  clearAuth(): void;
+  subscribe(
+    name: string,
+    args?: Record<string, Value>,
+  ): { queryToken: QueryToken; unsubscribe: () => void };
+  localQueryResult(udfPath: string, args?: Record<string, Value>): Value | undefined;
+  localQueryResultByToken(queryToken: QueryToken): Value | undefined;
+  hasLocalQueryResultByToken(queryToken: QueryToken): boolean;
+  localQueryLogs(udfPath: string, args?: Record<string, Value>): string[] | undefined;
+  queryJournal(name: string, args?: Record<string, Value>): QueryJournal | undefined;
+  connectionState(): ConnectionState;
+  subscribeToConnectionState(cb: (connectionState: ConnectionState) => void): () => void;
+  mutation(
+    name: string,
+    args?: Record<string, Value>,
+    options?: MutationOptions,
+  ): Promise<Value | undefined>;
+  action(name: string, args?: Record<string, Value>): Promise<Value | undefined>;
+  close(): Promise<void>;
+}
 
-    return mockState.responses.get(getFunctionName(ref));
-  },
-  useMutation: () => vi.fn().mockResolvedValue(undefined),
-}));
+function makeFakeBaseClient(): FakeBaseConvexClient {
+  return {
+    url: "https://library-ui-test.convex.cloud",
+    addOnTransitionHandler: () => () => {},
+    setAuth: (_fetchToken, onChange) => {
+      // Real clients confirm the token with the server asynchronously; this
+      // fake has no server, so it reports the fixture's authenticated state
+      // back synchronously, which is what drives `useConvexAuth()`'s result
+      // through `ConvexProviderWithAuth`'s own `useEffect`.
+      onChange(mockState.isAuthenticated);
+    },
+    setAdminAuth: () => {},
+    clearAuth: () => {},
+    subscribe: (name) => ({
+      // SAFETY: `QueryToken` is `string & { __queryToken: true }`. This fake
+      // never needs collision-proof tokens (there's no real dedupe to do),
+      // only a stable per-query-name key for the caller's own bookkeeping.
+      queryToken: name as QueryToken,
+      unsubscribe: () => {},
+    }),
+    localQueryResult: (udfPath) =>
+      // SAFETY: every fixture reaches this map via `setQuery`, which only
+      // ever stores the real return value of a Convex query (a
+      // `DashboardSummary`, `ServiceStatus[]`, `ProviderLimit[]`, or a
+      // `library.rows` page) — by construction already a legal Convex
+      // `Value`. This just recovers that type past the map's `unknown` slot.
+      mockState.responses.get(udfPath) as Value | undefined,
+    localQueryResultByToken: () => undefined,
+    hasLocalQueryResultByToken: () => false,
+    localQueryLogs: () => undefined,
+    queryJournal: () => undefined,
+    connectionState: (): ConnectionState => ({
+      hasInflightRequests: false,
+      isWebSocketConnected: mockState.connected,
+      timeOfOldestInflightRequest: null,
+      hasEverConnected: true,
+      connectionCount: 1,
+      connectionRetries: 0,
+      inflightMutations: 0,
+      inflightActions: 0,
+    }),
+    subscribeToConnectionState: () => () => {},
+    mutation: () => Promise.resolve(undefined),
+    action: () => Promise.resolve(undefined),
+    close: () => Promise.resolve(),
+  };
+}
 
-import Library from "../src/library/Library";
+// SAFETY: `options.baseClient` is a real, working constructor option (see
+// `ConvexReactClient`'s `sync` getter in
+// `node_modules/convex/src/react/client.ts`, which uses it in place of
+// constructing a real `BaseConvexClient`) — it's marked `@internal` and so
+// is missing from the published `ConvexReactClientOptions` type, not from
+// the runtime. This cast bridges that published-types gap the same way
+// `src/library/summaryApi.tsx`'s `anyApi.summary.summary as FunctionReference<...>`
+// bridges codegen not having caught up yet.
+const convexClient = new ConvexReactClient("https://library-ui-test.convex.cloud", {
+  baseClient: makeFakeBaseClient(),
+} as ConvexReactClientOptions);
 
 function accountId(id: string) {
   // SAFETY: `Id<"accounts">` is `string & { __tableName: "accounts" }`; the
@@ -112,8 +225,32 @@ function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
   mockState.responses.set(getFunctionName(ref), value);
 }
 
-function renderLibrary() {
-  return renderToStaticMarkup(createElement(Library, { ensureSession: () => Promise.resolve() }));
+function renderLibrary(): string {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  act(() => {
+    root.render(
+      createElement(
+        ConvexProviderWithAuth,
+        {
+          client: convexClient,
+          useAuth: () => ({
+            isLoading: false,
+            isAuthenticated: mockState.isAuthenticated,
+            fetchAccessToken: () => Promise.resolve(null),
+          }),
+        },
+        createElement(Library, { ensureSession: () => Promise.resolve() }),
+      ),
+    );
+  });
+  const html = container.innerHTML;
+
+  act(() => {
+    root.unmount();
+  });
+
+  return html;
 }
 
 describe("Library (src/library/Library.tsx) rendered output", () => {

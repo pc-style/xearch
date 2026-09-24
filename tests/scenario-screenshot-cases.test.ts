@@ -1,14 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi, getFunctionName } from "convex/server";
+import type {
+  ArgsAndOptions,
+  FunctionArgs,
+  FunctionReference,
+  FunctionReference_future,
+  FunctionReturnType,
+} from "convex/server";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
+import type { MutationOptions, Watch, WatchQueryOptions } from "convex/react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import schema from "../convex/schema";
 import type { Id } from "../convex/_generated/dataModel";
 import type { AccountLibraryRow } from "../convex/lib/contracts";
 import type { ServiceStatus } from "../convex/summary";
-import type { Value } from "convex/values";
 import OverviewStats from "../src/library/OverviewStats";
+import AccountRow from "../src/library/AccountRow";
 
 /**
  * Workflow-run evidence for to-do.md's acceptance check: "Test the
@@ -20,31 +29,61 @@ import OverviewStats from "../src/library/OverviewStats";
  * deployment seeded here, then feeds the REAL return value into the REAL UI
  * component (AccountRow / OverviewStats) via react-dom/server, and prints
  * what actually came out. AccountRow calls useQuery/useMutation (convex/
- * react) directly with no ConvexProvider in this render, so — same as
- * tests/scenario-publication-lifecycle.test.ts and tests/library-ui.test.ts
- * — convex/react is mocked to route by function name to a response this
- * test already fetched from the real backend above; nothing here fabricates
- * data the backend did not actually return. This does not touch search/
- * (Rust) or anything Pronsh owns, and does not implement any indexer/
- * watcher/registry. No paid import, no live coordination, nothing merged or
- * deployed.
+ * react) directly, so it renders here under a REAL `ConvexProvider` backed by
+ * `FakeConvexClient` below — a `ConvexReactClient` subclass that never opens
+ * a socket (the base class only does that lazily, from its `sync` getter,
+ * which the overrides here never touch) and instead answers `watchQuery`
+ * from a response this test already fetched from the real backend above;
+ * nothing here fabricates data the backend did not actually return. This
+ * does not touch search/ (Rust) or anything Pronsh owns, and does not
+ * implement any indexer/watcher/registry. No paid import, no live
+ * coordination, nothing merged or deployed.
  */
 
-const mockState = vi.hoisted(() => ({ responses: new Map<string, unknown>() }));
+const mockResponses = new Map<string, unknown>();
 
-vi.mock("convex/react", () => ({
-  useQuery: (
-    ref: Parameters<typeof getFunctionName>[0],
-    args: Record<string, Value> | "skip",
-  ) => {
-    if (args === "skip") return undefined;
+/**
+ * A faithful, in-memory `ConvexReactClient`: real subclass, so no assertion
+ * is needed to hand it to `ConvexProvider`. `watchQuery` and `mutation` are
+ * the only methods AccountRow's `useQuery`/`useMutation` calls reach (via
+ * convex/react's own `client.ts`), so they're the only ones overridden;
+ * every other inherited method still throws through the untouched `sync`
+ * getter if anything ever calls it, which nothing here does.
+ */
+class FakeConvexClient extends ConvexReactClient {
+  constructor() {
+    super("https://fake.convex.cloud");
+  }
 
-    return mockState.responses.get(getFunctionName(ref));
-  },
-  useMutation: () => vi.fn().mockResolvedValue(undefined),
-}));
+  override watchQuery<Query extends FunctionReference<"query"> | FunctionReference_future<"query">>(
+    query: Query,
+    ..._argsAndOptions: ArgsAndOptions<Query, WatchQueryOptions>
+  ): Watch<FunctionReturnType<Query>> {
+    const name = getFunctionName(query);
 
-const AccountRow = (await import("../src/library/AccountRow")).default;
+    return {
+      onUpdate: () => () => {},
+      localQueryResult: () =>
+        // SAFETY: `mockResponses` is filled per-test with exactly the real
+        // query result convex-test returned for this function name, so this
+        // narrows a same-test round trip rather than trusting foreign input.
+        mockResponses.get(name) as FunctionReturnType<Query>,
+      journal: () => undefined,
+    };
+  }
+
+  override mutation<
+    Mutation extends FunctionReference<"mutation"> | FunctionReference_future<"mutation">,
+  >(
+    _mutation: Mutation,
+    ..._argsAndOptions: ArgsAndOptions<Mutation, MutationOptions<FunctionArgs<Mutation>>>
+  ): Promise<FunctionReturnType<Mutation>> {
+    // SAFETY: every mutation AccountRow calls (retry/start/cancel) is fired
+    // and forgotten in these render-only cases; none of them read the
+    // resolved value, so an empty resolution is a faithful stand-in.
+    return Promise.resolve(undefined as FunctionReturnType<Mutation>);
+  }
+}
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -57,7 +96,13 @@ const summaryQ = anyApi.summary.summary;
 const healthQ = anyApi.summary.health;
 
 function renderRow(row: AccountLibraryRow): string {
-  return renderToStaticMarkup(createElement(AccountRow, { row }));
+  return renderToStaticMarkup(
+    createElement(
+      ConvexProvider,
+      { client: new FakeConvexClient() },
+      createElement(AccountRow, { row }),
+    ),
+  );
 }
 
 async function seedOwner(t: ReturnType<typeof convexTest>) {
@@ -98,11 +143,12 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
 
     // AccountRow fetches convex/library.ts `history` itself (needed here
     // since job.status === "failed" makes needsFailureDetail true) — pull
-    // the REAL result from the real query and feed exactly that into the
-    // mocked convex/react useQuery below (see file header comment).
+    // the REAL result from the real query and feed exactly that into
+    // FakeConvexClient's `watchQuery` below (see file header comment).
     const history = await session.query(libraryHistory, { accountId: rows[0].accountId });
     console.log("CASE1 real library.history:", JSON.stringify(history));
-    mockState.responses = new Map([[getFunctionName(libraryHistory), history]]);
+    mockResponses.clear();
+    mockResponses.set(getFunctionName(libraryHistory), history);
 
     const html = renderRow(rows[0]);
     console.log(
@@ -122,7 +168,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
   });
 
   it("case 2: successful import — searchable, real count, no next action needed", async () => {
-    mockState.responses = new Map();
+    mockResponses.clear();
     const t = convexTest(schema, modules);
     const { owner, session } = await seedOwner(t);
 
@@ -202,7 +248,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
   });
 
   it("case 4: failed refresh on an account that still has indexed posts — old corpus stays visible, does not regress, distinguished from a currently-searchable account", async () => {
-    mockState.responses = new Map();
+    mockResponses.clear();
     const t = convexTest(schema, modules);
     const { owner, session } = await seedOwner(t);
 

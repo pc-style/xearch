@@ -217,7 +217,7 @@ export function createSearchTelemetryStore(
   let nextAttemptId = 0;
 
   const notify = () => {
-    for (const listener of [...listeners]) listener();
+    for (const listener of listeners) listener();
   };
 
   const update = (
@@ -244,10 +244,7 @@ export function createSearchTelemetryStore(
     });
   };
 
-  const commitResult = (
-    input: ResultCommitInput,
-    committedAt: number,
-  ): CommitResult => {
+  const commitResult = (input: ResultCommitInput, committedAt: number): CommitResult => {
     if (!current || current.attemptId !== input.attemptId) {
       return { changed: false, firstResult: false };
     }

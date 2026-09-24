@@ -20,6 +20,17 @@ import { summaryScopeValidator } from "./lib/contracts";
 import { user } from "./access";
 import type { Doc } from "./_generated/dataModel";
 
+/** Wire request body for the external search service (docs/integration-contract.md). */
+type SearchRequestBody = {
+  version: 1;
+  query: string;
+  author?: string;
+  sort: Doc<"sessions">["sort"];
+  cursor?: string;
+  limit: number;
+  includeStats?: true;
+};
+
 export const accounts = query({
   args: {},
   handler: (ctx) => ctx.db.query("accounts").withIndex("by_handle").take(100),
@@ -135,21 +146,25 @@ export const execute = internalAction({
     try {
       const parsed = parseQuery(session.raw);
 
+      const baseHeaders = { "Content-Type": "application/json" } satisfies Record<string, string>;
+      const token = serviceToken("search");
+      const headers = token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders;
+
+      const requestBody: SearchRequestBody = {
+        version: 1,
+        query: parsed.text,
+        author: parsed.author,
+        sort: session.sort,
+        cursor: session.cursor,
+        limit: 20,
+      };
+
+      if (session.includeStats) requestBody.includeStats = true;
+
       const response = await fetch(process.env.SEARCH_API_URL!, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(serviceToken("search") ? { Authorization: `Bearer ${serviceToken("search")}` } : {}),
-        },
-        body: JSON.stringify({
-          version: 1,
-          query: parsed.text,
-          author: parsed.author,
-          sort: session.sort,
-          cursor: session.cursor,
-          limit: 20,
-          ...(session.includeStats ? { includeStats: true } : {}),
-        }),
+        headers,
+        body: JSON.stringify(requestBody),
         redirect: "error",
         signal: AbortSignal.timeout(30_000),
       });

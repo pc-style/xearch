@@ -3,7 +3,6 @@ import { Email } from "@convex-dev/auth/providers/Email";
 import {
   convexAuth,
   getAuthUserId,
-  type EmailConfig,
   type GenericActionCtxWithAuthConfig,
 } from "@convex-dev/auth/server";
 import { AgentMail } from "@agentmail/convex";
@@ -20,36 +19,47 @@ type AuthActionCtx = GenericActionCtxWithAuthConfig<DataModel>;
 // The library also calls sendVerificationRequest with a second `ctx` argument
 // at runtime even though its own exported type only declares one parameter
 // (server/implementation/signIn.ts suppresses that exact mismatch with its own
-// `@ts-expect-error`) - the cast below matches that same, already-intentional
-// widening rather than inventing a parallel auth mechanism.
+// `@ts-expect-error`). Declaring `ctx` as a rest parameter here - rather than a
+// second required one - keeps this function's own type honestly assignable to
+// `EmailConfig["sendVerificationRequest"]` without a cast: a rest parameter of
+// array type makes a function assignable anywhere fewer arguments are
+// expected, while still requiring (and receiving, every real call) exactly
+// one `ctx` argument at runtime.
 async function sendVerificationRequest(
   { identifier, token, expires }: { identifier: string; token: string; expires: Date },
-  ctx: AuthActionCtx,
+  ...ctxArgs: AuthActionCtx[]
 ): Promise<void> {
+  const [ctx] = ctxArgs;
+
+  if (!ctx) throw new Error("@convex-dev/auth did not pass an action context.");
+
   if (!process.env.AGENTMAIL_API_KEY || !process.env.AGENTMAIL_INBOX_ID)
     throw new Error("Configure AgentMail on the backend to send sign-in codes.");
   const mail = new AgentMail(components.agentmail);
-  // Actions' `runMutation` carries an extra (transactionLimits) overload that
-  // @agentmail/convex's RunMutationCtx - typed against plain MutationCtx -
-  // doesn't declare; convex/email.ts's mutation-context call needs no such
-  // cast. Same kind of unavoidable cross-package type gap as the ctx cast
-  // above, not a new pattern.
-  await mail.sendMessage(
-    ctx as unknown as Parameters<typeof mail.sendMessage>[0],
-    process.env.AGENTMAIL_INBOX_ID,
-    {
-      to: identifier,
-      subject: "Your Xearch sign-in code",
-      text:
-        `Your Xearch sign-in code is ${token}.\n\n` +
-        `It expires at ${expires.toISOString()}. If you didn't request this, you can ignore this email.`,
-    },
-  );
+
+  // SAFETY: `ctx.runMutation` is Convex's own generic `runMutation`, just
+  // instantiated against this action's overload (which additionally accepts a
+  // `transactionLimits` option @agentmail/convex's vendored, narrower
+  // RunMutationCtx type never declares or passes). Both are the same function
+  // with the same runtime contract for the one call this wrapper makes
+  // (mutation reference plus its args, no transactionLimits) - only their
+  // independently-authored ambient generic signatures disagree. Same gap as
+  // convex/http.ts's agentmail webhook route.
+  const mutationCtx: Parameters<typeof mail.sendMessage>[0] = {
+    runMutation: ctx.runMutation as Parameters<typeof mail.sendMessage>[0]["runMutation"],
+  };
+
+  await mail.sendMessage(mutationCtx, process.env.AGENTMAIL_INBOX_ID, {
+    to: identifier,
+    subject: "Your Xearch sign-in code",
+    text:
+      `Your Xearch sign-in code is ${token}.\n\n` +
+      `It expires at ${expires.toISOString()}. If you didn't request this, you can ignore this email.`,
+  });
 }
 
 const EmailOTP = Email<DataModel>({
-  sendVerificationRequest:
-    sendVerificationRequest as unknown as EmailConfig<DataModel>["sendVerificationRequest"],
+  sendVerificationRequest,
 });
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({

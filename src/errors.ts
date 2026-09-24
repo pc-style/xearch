@@ -69,10 +69,7 @@ export type Task = {
   run: <T>(fn: () => Promise<T>, options?: string | TaskOptions) => Promise<void>;
 };
 
-export type TaskRunner = <T>(
-  fn: () => Promise<T>,
-  options?: string | TaskOptions,
-) => Promise<void>;
+export type TaskRunner = <T>(fn: () => Promise<T>, options?: string | TaskOptions) => Promise<void>;
 
 /**
  * The bookkeeping `useTask` needs when runs overlap, as a plain function so

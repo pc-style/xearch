@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -151,12 +152,11 @@ export const start = mutation({
         "Connect x.md and the raw-capture receiver before starting an indexing job.",
       );
 
-    const input =
-      args.kind === "live"
-        ? canonicalLiveQuery(args.input)
-        : args.kind === "post"
-          ? statusUrl(args.input)
-          : handle(args.input);
+    const input = Match.value(args.kind).pipe(
+      Match.when("live", () => canonicalLiveQuery(args.input)),
+      Match.when("post", () => statusUrl(args.input)),
+      Match.orElse(() => handle(args.input)),
+    );
 
     if (!input || input.length > 300) throw new ConvexError("Enter a search under 300 characters.");
 
@@ -610,7 +610,15 @@ export const finish = internalMutation({
           }
         : {}),
       updatedAt: Date.now(),
-    });
+    };
+
+    if (continueImport) {
+      patch.until = args.nextUntil;
+      patch.pageAttempt = 0;
+      patch.phase = "Downloading older posts";
+    }
+
+    await ctx.db.patch(job._id, patch);
 
     if (continueImport)
       await ctx.scheduler.runAfter(2000, internal.importer.run, {

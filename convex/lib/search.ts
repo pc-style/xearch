@@ -40,7 +40,7 @@ export function parseQuery(raw: string) {
  * `convex/integrations.ts` re-renders what the model proposed, and both get
  * the same answer.
  */
-export function canonicalQuery(raw: string): { text: string; author?: string; canonical: string } {
+export function canonicalQuery(raw: string) {
   const { text, author } = parseQuery(raw.trim());
 
   return { text, author, canonical: [author ? `@${author}` : "", text].filter(Boolean).join(" ") };

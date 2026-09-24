@@ -27,6 +27,9 @@ export const ACCOUNT_JOB_KIND = "bulk" as const;
 
 type Db = QueryCtx["db"];
 
+/** The identity a caller asserts: a pinned provider id, or a raw handle. */
+export type AccountIdentity = { providerAccountId?: string; handle: string };
+
 /**
  * The canonical row for one provider account id: the oldest.
  *
@@ -53,7 +56,7 @@ export function canonicalAccountForUserId(db: Db, userId: string): Promise<Doc<"
  */
 export async function resolveAccount(
   db: Db,
-  identity: { providerAccountId?: string; handle: string },
+  identity: AccountIdentity,
 ): Promise<Doc<"accounts"> | null> {
   if (identity.providerAccountId !== undefined)
     return canonicalAccountForUserId(db, identity.providerAccountId);
@@ -70,7 +73,7 @@ export async function resolveAccount(
 }
 
 /** The identity a job asserts: its pinned provider id, else its raw input. */
-export function jobIdentity(job: Doc<"jobs">): { providerAccountId?: string; handle: string } {
+export function jobIdentity(job: Doc<"jobs">): AccountIdentity {
   return { providerAccountId: job.expectedUserId, handle: job.input };
 }
 

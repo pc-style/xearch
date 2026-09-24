@@ -2,7 +2,13 @@ import { Match } from "effect";
 import { z } from "zod";
 
 /** A JSON-serializable value — exactly what `JSON.parse`/`response.json()` produce. */
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 // Deliberately lenient on each value (not `jsonValue`/`z.json()`): this
 // schema's only job is confirming "a plain string-keyed record", the same
@@ -58,7 +64,7 @@ export class ProviderError extends Error {
   }
 }
 
-export function record(value: JsonValue | object): RawObject {
+export function record<T extends JsonValue | Record<string, unknown>>(value: T): RawObject {
   // SAFETY: `object`'s schema only checks "is a plain string-keyed record",
   // exactly what the pre-existing `Record<string, unknown>` contract
   // guaranteed; every caller already narrows individual fields with
@@ -258,10 +264,16 @@ function problemBody(body: JsonValue | undefined): RawObject | undefined {
   const parsedTop = object.safeParse(body);
 
   if (!parsedTop.success) return undefined;
-  const top = parsedTop.data;
+  // SAFETY: same rationale as `record` above — `object`'s schema only checks
+  // "is a plain string-keyed record"; every caller narrows individual fields
+  // with `string`/`record`/`finiteNumber` before trusting them.
+  const top = parsedTop.data as RawObject;
   const parsedNested = object.safeParse(top.error);
 
-  return parsedNested.success ? parsedNested.data : top;
+  // SAFETY: same rationale as `record` above — `object`'s schema only checks
+  // "is a plain string-keyed record"; every caller narrows individual fields
+  // with `string`/`record`/`finiteNumber` before trusting them.
+  return parsedNested.success ? (parsedNested.data as RawObject) : top;
 }
 
 function problemReason(problem: RawObject | undefined): string | undefined {

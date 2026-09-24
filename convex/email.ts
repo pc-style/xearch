@@ -103,6 +103,11 @@ export const deliveries = query({
     return Promise.all(
       rows.map(async (row) => ({
         ...row,
+        // SAFETY: `deliveries.outboundId` (convex/schema.ts) is written only in
+        // the `send` mutation below from `mail.sendMessage`'s own return value,
+        // which is typed `OutboundId`; the field is `v.string()` in the schema
+        // only because the component's branded `Id<"outboundMessages">` type
+        // cannot be expressed as a Convex validator.
         delivery: await mail.status(ctx, row.outboundId as OutboundId),
       })),
     );

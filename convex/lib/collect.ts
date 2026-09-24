@@ -6,6 +6,7 @@ import {
   MAX_POSTS_PER_PAGE,
   MAX_CHAIN_CONCURRENCY,
   type RawObject,
+  type JsonValue,
 } from "./xmd";
 import { CAPTURE_MAX_BYTES, jsonBytes, type Capture, type Receipt } from "./handoff";
 
@@ -59,7 +60,7 @@ export function splitHistoryPage(envelope: RawObject, budget = CAPTURE_BUDGET): 
   if (whole <= budget) return [{ payload: envelope, bytes: whole }];
   const overhead = empty + RECORD_OVERHEAD;
   const parts: SizedPayload[] = [];
-  let slice: unknown[] = [];
+  let slice: JsonValue[] = [];
   let size = overhead;
   const push = () => parts.push({ payload: { ...envelope, posts: slice }, bytes: size });
 
@@ -189,7 +190,10 @@ export async function collectXmd(
 
     if (pending.length && (pending.length >= RECORDS_PER_CAPTURE || bytes + size > CAPTURE_BUDGET))
       await flush("more");
-    pending.push({ receivedAt: now(), payload, ...(part ? { part } : {}) });
+    const entry: Capture["records"][number] = { receivedAt: now(), payload };
+
+    if (part) entry.part = part;
+    pending.push(entry);
     bytes += size;
   };
 
@@ -339,9 +343,11 @@ export async function collectXmd(
 
     if (Array.isArray(metadata.warnings))
       warnings.push(
-        ...metadata.warnings
-          .filter((x): x is string => typeof x === "string")
-          .map((x) => x.slice(0, 500)),
+        ...metadata.warnings.flatMap((item) => {
+          const text = string(item);
+
+          return text ? [text.slice(0, 500)] : [];
+        }),
       );
     await flush("complete");
 
