@@ -38,7 +38,7 @@ import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { useLiveNow } from "./library/clock";
 import { useStableQuery } from "./library/stableQuery";
-import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
+import { ConnectionsPanel, Dashboard, OPERATOR_BUILD, QueueTimeline } from "./operatorSurface";
 import { operatorArgs } from "./operatorToken";
 import { describeError } from "./errors";
 import { dedupeJobsByInput, inlineImportStatus } from "./jobText";
@@ -426,6 +426,7 @@ export default function App() {
   // build never has `OPERATOR_BUILD` true, so this always falls through to
   // the original, unswapped behavior there.
   const dashboard = OPERATOR_BUILD ? !route.search && !route.raw : route.dashboard;
+  const queue = route.queue;
   const accountResults = useQuery(api.search.accounts);
   const accounts = accountResults ?? [];
   // `configured.indexing` decays with real time (worker liveness), not only
@@ -895,6 +896,31 @@ export default function App() {
       </div>
     );
   }
+
+  // Checked BEFORE `dashboard`: Dashboard's own "Queue" nav link
+  // (src/Dashboard.tsx) navigates by setting `queue=1` without touching
+  // `search`/`raw`, so a URL that would otherwise resolve to the dashboard
+  // (see the `dashboard` inversion above) plus `queue=1` means "on the Queue
+  // page, reached from the dashboard" — the Queue branch must win that URL,
+  // not Dashboard's.
+  if (OPERATOR_BUILD && queue && QueueTimeline)
+    return (
+      <Suspense fallback={null}>
+        <span ref={authProbe} hidden />
+        <QueueTimeline
+          close={() => {
+            // Unlike `openDashboard` below, nothing here pushes a dedicated
+            // history entry to reach `?queue=1` — the only entry points are
+            // a direct link/reload and Dashboard's "Queue" nav link, above.
+            // Clearing just the `queue` flag in place is therefore always
+            // the right undo: it falls back to the Dashboard page when this
+            // was reached from there (the URL still resolves `dashboard` to
+            // true — see the inversion above), and to plain search otherwise.
+            replaceLocation({ queue: false });
+          }}
+        />
+      </Suspense>
+    );
 
   if (OPERATOR_BUILD && dashboard && Dashboard)
     return (

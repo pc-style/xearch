@@ -35,3 +35,15 @@ export type DashboardProps = {
 export const Dashboard: ComponentType<DashboardProps> | null = lazy(() => import("./Dashboard"));
 
 export const ConnectionsPanel: ComponentType | null = lazy(() => import("./operator/Connections"));
+
+export type QueueTimelineProps = { close: () => void };
+
+// The operator Queue page (src/library/QueueTimeline.tsx): "what is the
+// worker going to do next, and when". Same module-swap exclusion as
+// Dashboard/ConnectionsPanel above — the public build's
+// `operatorSurface.public.ts` resolves this to `null` instead, so nothing
+// in that file's module graph (including convex/queue.ts's operator-only
+// wire shapes) is reachable from the public bundle.
+export const QueueTimeline: ComponentType<QueueTimelineProps> | null = lazy(
+  () => import("./library/QueueTimeline"),
+);

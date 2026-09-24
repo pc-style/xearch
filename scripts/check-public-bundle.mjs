@@ -40,6 +40,9 @@ const FORBIDDEN = [
   // not the primary mechanism.
   "Download failed. Expand history below for details.",
   "Active queue",
+  // The operator Queue page (src/library/QueueTimeline.tsx) — same
+  // module-swap exclusion as Dashboard/Connections above.
+  "Queue timeline",
 ];
 
 const files = [];

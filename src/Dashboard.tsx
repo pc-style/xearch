@@ -11,6 +11,7 @@ import Library from "./library/Library";
 import { useDashboardClock, useLiveNow } from "./library/clock";
 import { operatorArgs } from "./operatorToken";
 import { useStableQuery } from "./library/stableQuery";
+import { pushLocation } from "./locationStore";
 
 // Exported so tests/dashboard-job-ui.test.ts can render this row in
 // isolation (the fake-Convex-client harness pattern tests/library-ui.test.ts
@@ -189,6 +190,14 @@ export default function Dashboard({
       <header className="control-header">
         <div>
           <button onClick={close}>Back to search</button>
+          {/* Reachable from the dashboard nav, per spec — only sets
+              `queue=1`, leaving `search`/`raw` as they are (both unset here,
+              since being on the dashboard means `dashboard` already resolved
+              true — see src/App.tsx's inversion), so QueueTimeline's own
+              "Back to dashboard" undoes exactly this. */}
+          <button type="button" onClick={() => pushLocation({ queue: true })}>
+            Queue
+          </button>
           {/* CodeRabbit (PR #48): the heading used to always say "Import an
               account" even once the Advanced disclosure had a non-bulk kind
               selected, so the submit button started a different job than

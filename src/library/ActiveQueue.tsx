@@ -8,6 +8,7 @@ import { describeError } from "../errors";
 import { acquisitionStatusTone, formatRelative, isStalledRun } from "./format";
 import { Badge } from "./format.tsx";
 import { operatorArgs } from "../operatorToken";
+import { pushLocation } from "../locationStore";
 
 /**
  * The compact "what's downloading right now" strip. Built only from
@@ -44,7 +45,16 @@ export default function ActiveQueue({
 
   return (
     <section className="library-section" aria-label="Active queue">
-      <h2>Active queue</h2>
+      <div className="library-section-head">
+        <h2>Active queue</h2>
+        {/* The full worker timeline — every queued/running/retryable job,
+            with wait reasons and ETAs — is a separate operator page
+            (src/library/QueueTimeline.tsx); this strip stays the compact
+            "what's downloading right now" summary. */}
+        <button type="button" className="text-button" onClick={() => pushLocation({ queue: true })}>
+          See timeline
+        </button>
+      </div>
       {active.length === 0 ? (
         <p className="library-muted">Nothing is downloading right now.</p>
       ) : (
