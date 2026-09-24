@@ -248,7 +248,25 @@ function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
 }
 
 function renderLibrary(): string {
+  const { container, unmount } = renderLibraryToContainer();
+  const html = container.innerHTML;
+
+  unmount();
+
+  return html;
+}
+
+/**
+ * Same render as `renderLibrary`, but keeps the container mounted (and
+ * attached to `document.body`, which real click dispatch needs) so a test
+ * can interact with it — e.g. clicking a row's "Show history" toggle, which
+ * now also reveals the publication notes AccountRow.tsx moved behind it
+ * (QA finding 5, /tmp/issues-t3-dashboard-current.md #5's row-compaction
+ * fix).
+ */
+function renderLibraryToContainer(): { container: HTMLElement; unmount: () => void } {
   const container = document.createElement("div");
+  document.body.appendChild(container);
   const root = createRoot(container);
   act(() => {
     root.render(
@@ -271,13 +289,23 @@ function renderLibrary(): string {
       ),
     );
   });
-  const html = container.innerHTML;
 
-  act(() => {
-    root.unmount();
-  });
+  return {
+    container,
+    unmount: () => {
+      act(() => root.unmount());
+      container.remove();
+    },
+  };
+}
 
-  return html;
+// Clicks every ".library-row-toggle" button found (there is one per
+// <AccountRow>), so a test with a single fixture row can expand it without
+// needing to know its position in the (now paginated) list.
+function expandAllRows(container: HTMLElement) {
+  const toggles = container.querySelectorAll<HTMLButtonElement>(".library-row-toggle");
+
+  for (const toggle of toggles) act(() => toggle.click());
 }
 
 describe("Library (src/library/Library.tsx) rendered output", () => {
@@ -348,8 +376,16 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [failedButIndexed], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const html = renderLibrary();
-    expect(html).toContain("Publication failed");
+    const { container, unmount } = renderLibraryToContainer();
+    // The failed badge and the searchable count stay in the row's default
+    // one-line view; the "still-good corpus" note and the raw publication
+    // error are publication notes, so QA finding 5's row compaction moved
+    // them behind "Show history" — expand it to reach them.
+    expect(container.innerHTML).toContain("Publication failed");
+    expect(container.innerHTML).toContain("2,500 posts");
+    expect(container.innerHTML).not.toContain("The previously confirmed index still has");
+    expandAllRows(container);
+    const html = container.innerHTML;
     expect(html).toContain("The previously confirmed index still has");
     expect(html).toContain("2,500 posts");
     expect(html).toContain("publish rejected: schema mismatch");
@@ -357,6 +393,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     // in this component tree's own output.
     expect(html).not.toContain("Downloads aren't searchable yet");
     expect(html).not.toContain("Search will be available when the search backend is connected.");
+    unmount();
   });
 
   it("shows the deep-history backfill's own one-line summary, distinct from the searchable count", () => {
@@ -378,10 +415,14 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [running], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const runningHtml = renderLibrary();
-    expect(runningHtml).toContain(
+    // QA finding 5's row compaction moved the backfill summary line behind
+    // "Show history" along with the rest of a row's publication notes.
+    const runningRender = renderLibraryToContainer();
+    expandAllRows(runningRender.container);
+    expect(runningRender.container.innerHTML).toContain(
       "Older history: 12,340 posts downloaded so far · downloading back to 2019-03-01 (joined 2011-06-01)",
     );
+    runningRender.unmount();
 
     reset();
 
@@ -395,10 +436,12 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [complete], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const completeHtml = renderLibrary();
-    expect(completeHtml).toContain(
+    const completeRender = renderLibraryToContainer();
+    expandAllRows(completeRender.container);
+    expect(completeRender.container.innerHTML).toContain(
       "Older history download complete: 61,208 posts downloaded; search publication is separate",
     );
+    completeRender.unmount();
 
     reset();
 
@@ -417,10 +460,12 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [stopped], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const stoppedHtml = renderLibrary();
-    expect(stoppedHtml).toContain(
+    const stoppedRender = renderLibraryToContainer();
+    expandAllRows(stoppedRender.container);
+    expect(stoppedRender.container.innerHTML).toContain(
       "Older history stopped: x.md could not finish this request (500).",
     );
+    stoppedRender.unmount();
   });
 
   it("renders an explicit unauthenticated/offline-from-data state", () => {
