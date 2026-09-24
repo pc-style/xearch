@@ -78,7 +78,14 @@ for (;;) {
           attempt: job.attempt,
           ...args,
         });
+      // The phase the collector last reported, re-sent every minute so the
+      // job's `updatedAt` stays fresh through a long x.md history fetch —
+      // convex/jobs.ts `expire` presumes a run dead only when nothing has
+      // touched it for a while.
+      let currentPhase = "Starting download";
+      let ticks = 0;
       const heartbeat = setInterval(() => {
+        if (++ticks % 4 === 0) void report({ event: "phase", phase: currentPhase }).catch(() => {});
         void receiverHealth()
           .then((receiver) =>
             client.action("worker:poll" as any, {
@@ -119,6 +126,7 @@ for (;;) {
           },
           async (phase) => {
             if (stopping) throw new Error("Worker stopping");
+            currentPhase = phase;
             await report({ event: "phase", phase });
           },
         );

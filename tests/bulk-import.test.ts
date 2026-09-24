@@ -3,18 +3,16 @@ import { createHash } from "node:crypto";
 import {
   XmdClient,
   MAX_POSTS_PER_PAGE,
+  HISTORY_TIMEOUT_MS,
+  REQUEST_TIMEOUT_MS,
+  timeoutFor,
   readThrottle,
   resetAtFrom,
   ProviderError,
   type ProviderThrottle,
   type RawObject,
 } from "../convex/lib/xmd";
-import {
-  collectXmd,
-  splitHistoryPage,
-  TIMEOUT_FLOOR_POSTS,
-  type CollectionRequest,
-} from "../convex/lib/collect";
+import { collectXmd, splitHistoryPage, type CollectionRequest } from "../convex/lib/collect";
 import { CAPTURE_MAX_BYTES, deliverCapture, type Capture } from "../convex/lib/handoff";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
@@ -521,42 +519,13 @@ describe("only a refusal caused by a limit counts as throttling", () => {
   });
 });
 
-// x.md needs more than the request timeout to assemble a 5000-post page for a
-// media-heavy account. The huggingface import failed seven times in
-// production: the elapsed timeout escaped as a plain TimeoutError, the worker
-// reported "Download interrupted", and every retry asked for the same page.
-describe("a history page the provider cannot deliver in time", () => {
+// x.md's cost for a continuation page is in walking the timeline back to
+// `until`, not the page size: the huggingface page at 2026-01-26 timed out
+// identically at every size from 5000 down to 500. The abort used to escape
+// as a plain TimeoutError and every retry asked again after two minutes.
+describe("a history page the provider is slow to deliver", () => {
   const timeout = () =>
     new DOMException("The operation was aborted due to timeout", "TimeoutError");
-  function upstream(deliverAt: number | null) {
-    const asked: string[] = [];
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = new URL(requestUrl(input));
-      if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
-      const maxPosts = Number(url.searchParams.get("max_posts"));
-      asked.push(String(maxPosts));
-      if (deliverAt === null || maxPosts > deliverAt) throw timeout();
-      return Response.json(page(3));
-    });
-    return { asked, fetcher };
-  }
-  async function collect(fetcher: typeof fetch) {
-    const store = receiver();
-    const phases: string[] = [];
-    const result = await collectXmd(
-      new XmdClient("test-key", fetcher),
-      request,
-      (capture) =>
-        deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
-      async () => {},
-      () => NOW,
-      undefined,
-      async (phase) => {
-        phases.push(phase);
-      },
-    );
-    return { result, phases };
-  }
   it("is reported as a retryable provider timeout, not a generic interruption", async () => {
     const xmd = new XmdClient("test-key", async () => {
       throw timeout();
@@ -565,19 +534,32 @@ describe("a history page the provider cannot deliver in time", () => {
     expect(failure).toBeInstanceOf(ProviderError);
     expect((failure as ProviderError).code).toBe("provider_timeout");
     expect((failure as ProviderError).retryable).toBe(true);
-    expect((failure as ProviderError).message).toContain("120 seconds");
+    expect((failure as ProviderError).message).toContain("900 seconds");
   });
-  it("asks for a smaller page instead of the same page again", async () => {
-    const { asked, fetcher } = upstream(2500);
-    const { result, phases } = await collect(fetcher);
-    expect(asked).toEqual(["5000", "2500"]);
-    expect(result.postsReceived).toBe(3);
-    expect(phases).toContain("x.md timed out; asking for 2500 posts per page");
+  it("gives history and bulk requests the long timeout and everything else the short one", () => {
+    expect(timeoutFor("history")).toBe(HISTORY_TIMEOUT_MS);
+    expect(timeoutFor("bulk")).toBe(HISTORY_TIMEOUT_MS);
+    expect(timeoutFor("profile")).toBe(REQUEST_TIMEOUT_MS);
+    expect(HISTORY_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
   });
-  it("stops shrinking at the floor and hands the timeout up", async () => {
-    const { asked, fetcher } = upstream(null);
-    const failure = await collect(fetcher).catch((error: unknown) => error);
+  it("asks for the same full page again on the next attempt rather than a smaller one", async () => {
+    const asked: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(requestUrl(input));
+      if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
+      asked.push(url.searchParams.get("max_posts") ?? "");
+      throw timeout();
+    });
+    const store = receiver();
+    const failure = await collectXmd(
+      new XmdClient("test-key", fetcher),
+      request,
+      (capture) =>
+        deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
+      async () => {},
+      () => NOW,
+    ).catch((error: unknown) => error);
     expect((failure as ProviderError).code).toBe("provider_timeout");
-    expect(asked).toEqual(["5000", "2500", "1250", "625", String(TIMEOUT_FLOOR_POSTS)]);
+    expect(asked).toEqual(["5000"]);
   });
 });

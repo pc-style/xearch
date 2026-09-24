@@ -289,8 +289,22 @@ export const MAX_POSTS_PER_PAGE = 5000;
  * exchange for more upstream retries. Left at the value in production use.
  */
 const CHAIN_CONCURRENCY = "8";
-/** How long one x.md request may take before it is reported as `provider_timeout`. */
+/** How long an ordinary x.md request may take before it is reported as `provider_timeout`. */
 export const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * History pages get far longer. x.md's cost for a continuation page is in
+ * walking the timeline back to `until`, not in the page size: in production
+ * the huggingface page at 2026-01-26 timed out identically at 5000, 2500,
+ * 1250, 625 and 500 posts. Aborting at two minutes threw away work x.md was
+ * still doing and asked for it again. Fifteen minutes is inside the window a
+ * job stays alive while its worker keeps reporting progress (convex/jobs.ts
+ * `expire`).
+ */
+export const HISTORY_TIMEOUT_MS = 900_000;
+/** The request timeout for one x.md call, by the operation it is reported under. */
+export function timeoutFor(operation: string): number {
+  return operation === "history" || operation === "bulk" ? HISTORY_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+}
 export class XmdClient {
   readonly origin: string;
   constructor(
@@ -324,7 +338,7 @@ export class XmdClient {
           Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
           ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}),
         },
-        signal: signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: signal ?? AbortSignal.timeout(timeoutFor(operation)),
         redirect: "error",
       });
     } catch (error) {
@@ -338,7 +352,7 @@ export class XmdClient {
       if (error instanceof Error && error.name === "TimeoutError")
         throw new ProviderError(
           "provider_timeout",
-          `x.md did not answer within ${REQUEST_TIMEOUT_MS / 1000} seconds (${operation}).`,
+          `x.md did not answer within ${timeoutFor(operation) / 1000} seconds (${operation}).`,
           30_000,
           true,
         );
