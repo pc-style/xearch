@@ -110,6 +110,7 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           adds the one clarifying line — not a second number. */}
       {job?.status === "complete" && <p className="library-muted">{DOWNLOAD_COMPLETE_CAVEAT}</p>}
       {discoveredVia(job) && <p className="library-muted">{discoveredVia(job)}</p>}
+      {row.backfill && <p className="library-muted">{backfillSummary(row.backfill)}</p>}
       {row.publicationState === "failed" && hasGoodCorpus && (
         <p className="library-row-note">
           The previously confirmed index still has {countWithUnit(row.searchablePostCount)}{" "}
@@ -162,6 +163,31 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
       {expanded && <AccountHistory history={history} />}
     </article>
   );
+}
+
+/**
+ * The account library row's one summary line for its deep-history backfill
+ * (convex/jobs.ts, convex/lib/historyWindow.ts) — never more than one line,
+ * and never a second post count competing with `row.searchablePostCount`
+ * above. `postsFound` counts posts x.md handed over during the backfill —
+ * DOWNLOADED, not indexed — so this always says "downloaded", never "found"
+ * or a bare count that could be misread as this many are now searchable;
+ * whether they are is the indexer's own separate job (see
+ * DOWNLOAD_COMPLETE_CAVEAT above, which makes the same distinction for the
+ * ordinary bulk-download badge).
+ */
+function backfillSummary(backfill: NonNullable<AccountLibraryRow["backfill"]>): string {
+  const downloaded = `${backfill.postsFound.toLocaleString()} post${backfill.postsFound === 1 ? "" : "s"} downloaded`;
+
+  if (backfill.status === "complete")
+    return `Older history download complete: ${downloaded}; search publication is separate`;
+
+  if (backfill.status === "stopped")
+    return `Older history stopped: ${backfill.error ?? "an unreported error"}`;
+
+  const joined = backfill.joined ? ` (joined ${backfill.joined})` : "";
+
+  return `Older history: ${downloaded} so far · downloading back to ${backfill.cursorUntil}${joined}`;
 }
 
 // No "continue" case: acquisition never waits on a person to ask for the

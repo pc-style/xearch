@@ -126,6 +126,19 @@ export const pendingWorkUnitValidator = v.union(
   v.literal("posts"),
 );
 
+// Lifecycle of one account's deep-history backfill (convex/lib/
+// historyWindow.ts, convex/jobs.ts). Distinct from jobStatusValidator: a
+// backfill outlives any single window job, walking many of them back in
+// time, and only ever reaches "complete" (ran out of history to search) or
+// "stopped" (a window job failed permanently after its own retries) once —
+// see historyBackfills below.
+export const historyBackfillStatusValidator = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("complete"),
+  v.literal("stopped"),
+);
+
 // Calls this app makes that can be throttled by the far side.
 export const throttleProviderValidator = v.union(
   v.literal("xmd"),
@@ -188,7 +201,18 @@ export const publicationUpdateFields = {
   observedAt: v.number(),
 };
 
-export const jobOriginValidator = v.union(v.literal("manual"), v.literal("discovered"));
+// "history": a deep-history backfill window (historyBackfills below,
+// convex/jobs.ts `insertHistoryWindowJob`) — a `kind: "live"` job scheduled
+// by `jobs.finish` itself, walking one dated slice of an account's timeline
+// further back than x.md's account-timeline floor reaches. Never a person
+// and never `discovered` (scripts/discover-accounts.mjs's own reason for
+// queuing a run) — this is `jobs.finish` reacting to its OWN prior job, not
+// to interaction evidence about an account nobody has imported yet.
+export const jobOriginValidator = v.union(
+  v.literal("manual"),
+  v.literal("discovered"),
+  v.literal("history"),
+);
 
 export const discoveredFromValidator = v.object({
   handle: v.string(),
@@ -211,6 +235,16 @@ export default defineSchema({
     userId: v.string(),
     name: v.string(),
     avatar: v.optional(v.string()),
+    // X's own reported lifetime post count and join date, from x.md's
+    // profile fields `statuses`/`joined` (scripts/production-worker.ts,
+    // convex/importer.ts). Present only once a profile fetch has actually
+    // reported them — never estimated. Compared against a bulk job's own
+    // `postsReceived`/`floorReached` in convex/jobs.ts `finish` to decide
+    // whether x.md's account-timeline floor (~3,200 posts) left more of
+    // this account's history undiscovered, and `joined` is the deep-history
+    // backfill's walk-back floor (convex/lib/historyWindow.ts).
+    statuses: v.optional(v.number()),
+    joined: v.optional(v.string()),
   })
     .index("by_handle", ["handle"])
     .index("by_user_id", ["userId"]),
@@ -239,8 +273,11 @@ export default defineSchema({
     input: v.string(),
     // How this run came to exist. "discovered": scripts/discover-accounts.mjs
     // queued it because indexed accounts interact with this one a lot;
-    // `discoveredFrom` is that evidence. Absent on rows written before this
-    // field existed, which all came from a person.
+    // `discoveredFrom` is that evidence. "history": `jobs.finish` itself
+    // queued it as the next deep-history backfill window for `historyFor`
+    // below (convex/jobs.ts `insertHistoryWindowJob`). Absent, or "manual",
+    // means a person started it directly — every row written before this
+    // field existed was one of those.
     origin: v.optional(jobOriginValidator),
     discoveredFrom: v.optional(v.array(discoveredFromValidator)),
     since: v.optional(v.string()),
@@ -281,6 +318,9 @@ export default defineSchema({
     // parsing `error` text: the provider's message wording is not a stable
     // contract to match against.
     retryable: v.optional(v.boolean()),
+    // The account a history-window job (origin: "history") is backfilling.
+    // Unset for every other job kind/origin.
+    historyFor: v.optional(v.id("accounts")),
   })
     .index("by_status", ["status"])
     // No index on `owner` alone: the imported corpus is shared
@@ -402,6 +442,30 @@ export default defineSchema({
     // key means picking an arbitrary one. Readers use this and take the
     // first in descending order.
     .index("by_service_and_observed", ["service", "observedAt"]),
+  // One row per account ever backfilled: the source of truth for "has this
+  // account's deep history been (or is it being) walked back beyond x.md's
+  // account-timeline floor", so convex/jobs.ts `finish` never starts a
+  // second backfill for the same account. `cursorUntil` is the moving
+  // boundary — the `until` the NEXT window job will use — and moves strictly
+  // backward in time as each window completes; `windowDays` is the size of
+  // the window most recently scheduled, widened (never shrunk) when a
+  // window comes back empty (convex/lib/historyWindow.ts `nextWindowDays`).
+  // `postsFound` is this backfill's own running total across every window
+  // job it has scheduled, separate from any account's searchable-post count
+  // (accountPublications.searchablePostCount) — the indexer, not this row,
+  // is what makes a captured post searchable.
+  historyBackfills: defineTable({
+    accountId: v.id("accounts"),
+    handle: v.string(),
+    owner: v.id("users"),
+    since: v.string(),
+    cursorUntil: v.string(),
+    windowDays: v.number(),
+    postsFound: v.number(),
+    status: historyBackfillStatusValidator,
+    error: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_account", ["accountId"]),
   receipts: defineTable({
     jobId: v.id("jobs"),
     captureId: v.string(),

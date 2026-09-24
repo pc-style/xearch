@@ -359,6 +359,70 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     expect(html).not.toContain("Search will be available when the search backend is connected.");
   });
 
+  it("shows the deep-history backfill's own one-line summary, distinct from the searchable count", () => {
+    reset();
+
+    const running = makeRow({
+      accountId: accountId("acct-backfill-running"),
+      handle: "theo",
+      name: "Theo",
+      searchablePostCount: { kind: "known", unit: "posts", value: 4_087 },
+      backfill: {
+        status: "running",
+        postsFound: 12_340,
+        cursorUntil: "2019-03-01",
+        joined: "2011-06-01",
+      },
+    });
+
+    setQuery(api.library.rows, { rows: [running], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const runningHtml = renderLibrary();
+    expect(runningHtml).toContain(
+      "Older history: 12,340 posts downloaded so far · downloading back to 2019-03-01 (joined 2011-06-01)",
+    );
+
+    reset();
+
+    const complete = makeRow({
+      accountId: accountId("acct-backfill-complete"),
+      handle: "theo",
+      name: "Theo",
+      backfill: { status: "complete", postsFound: 61_208, cursorUntil: "2006-03-21" },
+    });
+
+    setQuery(api.library.rows, { rows: [complete], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const completeHtml = renderLibrary();
+    expect(completeHtml).toContain(
+      "Older history download complete: 61,208 posts downloaded; search publication is separate",
+    );
+
+    reset();
+
+    const stopped = makeRow({
+      accountId: accountId("acct-backfill-stopped"),
+      handle: "theo",
+      name: "Theo",
+      backfill: {
+        status: "stopped",
+        postsFound: 900,
+        cursorUntil: "2018-01-01",
+        error: "x.md could not finish this request (500).",
+      },
+    });
+
+    setQuery(api.library.rows, { rows: [stopped], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const stoppedHtml = renderLibrary();
+    expect(stoppedHtml).toContain(
+      "Older history stopped: x.md could not finish this request (500).",
+    );
+  });
+
   it("renders an explicit unauthenticated/offline-from-data state", () => {
     reset();
     mockState.isAuthenticated = false;

@@ -199,6 +199,11 @@ export const report = action({
         userId: v.string(),
         name: v.string(),
         avatar: v.optional(v.string()),
+        // X's own lifetime post count and join date, when x.md's profile
+        // fetch reported them — see convex/jobs.ts `finish`'s matching
+        // validator and its deep-history trigger.
+        statuses: v.optional(v.number()),
+        joined: v.optional(v.string()),
       }),
     ),
     // Only read for the "throttle" event. Every field is the provider's own

@@ -5,6 +5,8 @@ import {
   reportedPublicationStateValidator,
   countUnitValidator,
   jobStatusValidator,
+  historyBackfillStatusValidator,
+  jobOriginValidator,
 } from "../schema";
 
 /**
@@ -208,15 +210,37 @@ export const accountLibraryRowValidator = v.object({
       postsReceived: v.optional(v.number()),
       oldest: v.optional(v.string()),
       floorReached: v.optional(v.boolean()),
-      // Present when the run was queued by automatic discovery; see
-      // convex/jobs.ts `startDiscovered`.
-      origin: v.optional(v.union(v.literal("manual"), v.literal("discovered"))),
+      // Present when the run was queued by automatic discovery (see
+      // convex/jobs.ts `startDiscovered`) or by the deep-history backfill
+      // (`origin: "history"`, convex/jobs.ts `insertHistoryWindowJob`) — the
+      // one place this literal set is declared, reused here rather than
+      // copied so the two can never drift apart.
+      origin: v.optional(jobOriginValidator),
       discoveredFrom: v.optional(
         v.array(v.object({ handle: v.string(), interactions: v.number() })),
       ),
     }),
   ),
   nextAction: nextActionValidator,
+  // The account's deep-history backfill (convex/jobs.ts, convex/lib/
+  // historyWindow.ts), when one has ever been started for it. Absent for
+  // every account that has never needed one (its bulk import never hit
+  // x.md's account-timeline floor and its reported post count matched what
+  // that import returned) — never a zeroed-out placeholder object.
+  backfill: v.optional(
+    v.object({
+      status: historyBackfillStatusValidator,
+      // This backfill's own running total across every window job it has
+      // scheduled — NOT the account's searchablePostCount above, which is
+      // the indexer's committed count and a different number entirely.
+      postsFound: v.number(),
+      // The moving boundary: how far back the backfill has searched to (or
+      // is currently searching to).
+      cursorUntil: v.string(),
+      joined: v.optional(v.string()),
+      error: v.optional(v.string()),
+    }),
+  ),
 });
 
 export type AccountLibraryRow = Infer<typeof accountLibraryRowValidator>;

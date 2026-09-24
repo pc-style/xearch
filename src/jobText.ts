@@ -92,8 +92,21 @@ export function jobKindLabel(job: Doc<"jobs">): string {
       return handle ? `Conversation on @${handle}'s post` : "Conversation on a post";
     }
 
-    case "live":
+    case "live": {
+      // A deep-history backfill window (convex/jobs.ts `insertHistoryWindowJob`)
+      // is a `kind: "live"` job like any other, but its input is a dated
+      // window this app scheduled, not a person's search — label it as
+      // what it is rather than a raw "Live search: from:theo since:... "
+      // string nobody typed.
+      if (job.origin === "history" && job.since && job.until) {
+        const handleText = job.input.match(/^from:([A-Za-z0-9_]+)/)?.[1] ?? job.input;
+
+        return `@${handleText} · older history ${job.since.slice(0, 7)} → ${job.until.slice(0, 7)}`;
+      }
+
       return `Live search: ${job.input}`;
+    }
+
     case "profile":
       return `Profile: @${job.input}`;
     case "followers":
@@ -329,7 +342,12 @@ export function describeRunOutcome(run: {
 export function discoveredVia(
   job:
     | {
-        origin?: "manual" | "discovered";
+        // Widened to every value convex/schema.ts `jobOriginValidator` can
+        // hold (not just "manual" | "discovered"): callers pass a full
+        // `Doc<"jobs">` through, whose `origin` can also be "history" (a
+        // deep-history backfill window) — this only ever checks for
+        // "discovered", so the extra literal changes nothing here.
+        origin?: "manual" | "discovered" | "history";
         discoveredFrom?: { handle: string; interactions: number }[];
       }
     | null
