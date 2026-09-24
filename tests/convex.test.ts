@@ -640,7 +640,7 @@ describe("Convex application boundaries", () => {
     vi.stubGlobal("fetch", fetcher);
     await expect(
       t.action(api.integrations.readLink, { url: "https://example.com" }),
-    ).rejects.toThrow("Start a session");
+    ).rejects.toThrow("Sign in as an operator to import.");
     expect(fetcher).not.toHaveBeenCalled();
   });
   it("bounds stored web previews and preserves their collection time on cache hits", async () => {

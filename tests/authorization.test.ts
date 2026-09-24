@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
-import { api } from "../convex/_generated/api";
+import { api, internal } from "../convex/_generated/api";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -117,5 +117,99 @@ describe("the operator authorization boundary", () => {
     const feed = await guest.query(api.jobs.list, {});
     expect(feed.jobs.map((j) => j._id)).toContain(jobId);
     await expect(guest.query(api.jobs.receipts, { jobId })).resolves.toEqual([]);
+  });
+});
+
+/**
+ * convex/integrations.ts's readLink/webContext/interpret/account all spend
+ * Firecrawl, OpenAI, or x.md allowance and funnel through the same
+ * `reserve` internal mutation right before they do (readLink also checks
+ * up front, so even its cache-hit path is gated). Testing `reserve` directly
+ * covers the shared gate once; readLink/interpret's own end-to-end success
+ * with an operator identity is already exercised in tests/convex.test.ts.
+ */
+describe("convex/integrations.ts's provider-spending actions", () => {
+  beforeEach(() => {
+    vi.stubEnv("X_MD_API_KEY", "test");
+  });
+
+  it("reserve (the shared gate behind readLink/webContext/interpret/account) allows an operator", async () => {
+    const { operator } = await setup();
+    await expect(
+      operator.mutation(internal.integrations.reserve, { service: "xmd" }),
+    ).resolves.toBeNull();
+  });
+
+  it("reserve refuses an anonymous guest", async () => {
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(internal.integrations.reserve, { service: "firecrawl" }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("reserve refuses a verified email not on OPERATOR_EMAILS", async () => {
+    const { outsider } = await setup();
+    await expect(
+      outsider.mutation(internal.integrations.reserve, { service: "openai" }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("readLink refuses an anonymous guest before ever calling Firecrawl, even on what would be a cache hit", async () => {
+    const { guest } = await setup();
+    const fetcher = vi.fn<typeof fetch>();
+
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      guest.action(api.integrations.readLink, { url: "https://example.com" }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("webContext refuses an anonymous guest before ever calling Firecrawl", async () => {
+    const { guest } = await setup();
+    const fetcher = vi.fn<typeof fetch>();
+
+    vi.stubGlobal("fetch", fetcher);
+    await expect(guest.action(api.integrations.webContext, { query: "convex" })).rejects.toThrow(
+      "Sign in as an operator to import.",
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("interpret refuses an anonymous guest before ever calling OpenAI", async () => {
+    const { guest } = await setup();
+    const fetcher = vi.fn<typeof fetch>();
+
+    vi.stubGlobal("fetch", fetcher);
+    await expect(guest.action(api.integrations.interpret, { raw: "convex talks" })).rejects.toThrow(
+      "Sign in as an operator to import.",
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("account refuses an anonymous guest before ever calling x.md", async () => {
+    const { guest } = await setup();
+    const fetcher = vi.fn<typeof fetch>();
+
+    vi.stubGlobal("fetch", fetcher);
+    await expect(guest.action(api.integrations.account, { handle: "theo" })).rejects.toThrow(
+      "Sign in as an operator to import.",
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("account allows an operator, and only then calls x.md", async () => {
+    const { operator } = await setup();
+
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ profile: { userId: "1", handle: "theo", name: "Theo" } }),
+    );
+
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await operator.action(api.integrations.account, { handle: "theo" });
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ userId: "1", handle: "theo" });
   });
 });

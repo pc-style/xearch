@@ -8,12 +8,7 @@ import {
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import schema, { postFields, searchStatsFields, sortValidator } from "./schema";
-import {
-  parseQuery,
-  assertAuthorizedScope,
-  STALE_CURSOR_STATUS,
-  StaleSearchCursorError,
-} from "./lib/search";
+import { parseQuery, assertAuthorizedScope, STALE_CURSOR_STATUS } from "./lib/search";
 import { decodeSearchResponse } from "./lib/results";
 import { serviceToken } from "./lib/serviceAuth";
 import { summaryScopeValidator } from "./lib/contracts";
@@ -194,6 +189,130 @@ export const expire = internalMutation({
   },
 });
 
+// How long `execute` waits before its one retry of a transient upstream
+// failure. Short and single: this delays a person's search by at most this
+// long, not a backoff ladder — a search request is not an acquisition job
+// that can wait minutes (contrast convex/jobs.ts `finish`'s retry schedule).
+const TRANSIENT_RETRY_BACKOFF_MS = 300;
+
+// What one attempt at the search service can come back as, classified so
+// `execute` can decide whether to retry and what to tell an operator.
+// - "stale_cursor": the one failure this app can name specifically without
+//   inspecting the (opaque) cursor itself — never retried, since retrying
+//   the same expired cursor cannot succeed.
+// - "network": `fetch` itself rejected (DNS, connection refused, the
+//   30s AbortSignal timing out). Retried once: a single dropped connection
+//   or a cold-starting upstream is exactly what one short retry recovers.
+// - "server_error" (5xx): the service is up but failed the request on its
+//   own side. Retried once for the same reason as "network".
+// - "client_error" (4xx other than the stale-cursor status): this app built
+//   a request the service rejected outright. Retrying the identical
+//   request cannot change that, so this fails immediately.
+// - "invalid_body": the response came back 2xx but its body was not valid
+//   JSON, or valid JSON that didn't match the documented response shape.
+//   Retried once — the same "maybe transient, maybe a truncated response"
+//   reasoning as "network"/"server_error".
+type SearchFailure =
+  | { kind: "stale_cursor" }
+  | { kind: "network" }
+  | { kind: "server_error"; status: number }
+  | { kind: "client_error"; status: number }
+  | { kind: "invalid_body"; detail: string };
+
+type SearchAttempt =
+  | { kind: "ok"; result: ReturnType<typeof decodeSearchResponse> }
+  | { kind: "failed"; failure: SearchFailure };
+
+const RETRYABLE_FAILURE_KINDS = new Set<SearchFailure["kind"]>([
+  "network",
+  "server_error",
+  "invalid_body",
+]);
+
+/** One request/response round trip against the search service, classified. */
+async function attemptSearch(
+  url: string,
+  headers: Record<string, string>,
+  requestBody: SearchRequestBody,
+  hasCursor: boolean,
+): Promise<SearchAttempt> {
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestBody),
+      redirect: "error",
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    return { kind: "failed", failure: { kind: "network" } };
+  }
+
+  // A cursor's page window going stale is the one failure this app can tell
+  // apart from a generic outage without inspecting the cursor itself (it
+  // stays opaque; the search service owns it) — see STALE_CURSOR_STATUS in
+  // ./lib/search. Only meaningful when this request actually carried one.
+  if (response.status === STALE_CURSOR_STATUS && hasCursor)
+    return { kind: "failed", failure: { kind: "stale_cursor" } };
+
+  if (!response.ok)
+    return {
+      kind: "failed",
+      failure:
+        response.status >= 500
+          ? { kind: "server_error", status: response.status }
+          : { kind: "client_error", status: response.status },
+    };
+
+  let body;
+
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: "failed", failure: { kind: "invalid_body", detail: "not valid JSON" } };
+  }
+
+  try {
+    return { kind: "ok", result: decodeSearchResponse(body) };
+  } catch {
+    return {
+      kind: "failed",
+      failure: { kind: "invalid_body", detail: "did not match the expected response shape" },
+    };
+  }
+}
+
+/**
+ * The upstream failure class/status an operator needs to tell "the search
+ * service itself is erroring (502/503/network)" apart from "this app sent a
+ * request the service rejected (4xx)" — see docs/publication-contract.md's
+ * general "never invent a number/reason" stance: this states exactly what
+ * was observed, never a guess at the underlying cause.
+ */
+function describeFailure(failure: Exclude<SearchFailure, { kind: "stale_cursor" }>): string {
+  switch (failure.kind) {
+    case "network":
+      return "a network error reaching the search service";
+    case "server_error":
+      return `the search service returned HTTP ${failure.status}`;
+    case "client_error":
+      return `the search service rejected the request (HTTP ${failure.status})`;
+    case "invalid_body":
+      return `the search service's response ${failure.detail}`;
+  }
+}
+
+function failureMessage(failure: SearchFailure, retried: boolean): string {
+  if (failure.kind === "stale_cursor") return "This search expired. Restart your search.";
+  const cause = describeFailure(failure);
+
+  return retried
+    ? `The search service could not return a valid result page after retrying once (${cause}). Try again.`
+    : `The search service could not return a valid result page (${cause}). Try again.`;
+}
+
 export const execute = internalAction({
   args: { sessionId: v.id("sessions") },
   returns: v.null(),
@@ -220,34 +339,38 @@ export const execute = internalAction({
 
       if (session.includeStats) requestBody.includeStats = true;
 
-      const response = await fetch(process.env.SEARCH_API_URL!, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(requestBody),
-        redirect: "error",
-        signal: AbortSignal.timeout(30_000),
-      });
+      const url = process.env.SEARCH_API_URL!;
+      const hasCursor = !!session.cursor;
+      let attempt = await attemptSearch(url, headers, requestBody, hasCursor);
+      let retried = false;
 
-      // A cursor's page window going stale is the one failure this app can
-      // tell apart from a generic outage without inspecting the cursor
-      // itself (it stays opaque; the search service owns it) — see
-      // STALE_CURSOR_STATUS in ./lib/search. Only meaningful when this
-      // request actually carried a cursor.
-      if (response.status === STALE_CURSOR_STATUS && session.cursor)
-        throw new StaleSearchCursorError();
+      if (attempt.kind === "failed" && RETRYABLE_FAILURE_KINDS.has(attempt.failure.kind)) {
+        await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_BACKOFF_MS));
+        retried = true;
+        attempt = await attemptSearch(url, headers, requestBody, hasCursor);
+      }
 
-      if (!response.ok) throw new Error("Service unavailable");
-      const result = decodeSearchResponse(await response.json());
-      await ctx.runMutation(internal.search.complete, { sessionId, ...result });
-    } catch (err) {
+      if (attempt.kind === "ok") {
+        await ctx.runMutation(internal.search.complete, { sessionId, ...attempt.result });
+      } else {
+        await ctx.runMutation(internal.search.complete, {
+          sessionId,
+          rows: [],
+          warnings: [],
+          error: failureMessage(attempt.failure, retried),
+        });
+      }
+    } catch {
+      // Anything this action did not anticipate (a `parseQuery` throw on a
+      // session `start` already validated, `JSON.stringify` on the request
+      // body, a `runMutation` failure) — never let it crash the action or
+      // leave the session stuck at "queued" past its `expire` deadline.
       await ctx.runMutation(internal.search.complete, {
         sessionId,
         rows: [],
         warnings: [],
         error:
-          err instanceof StaleSearchCursorError
-            ? "This search expired. Restart your search."
-            : "The search service could not return a valid result page. Try again or check its connection.",
+          "The search service could not return a valid result page. Try again or check its connection.",
       });
     }
 

@@ -131,15 +131,15 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
     expect(decodeSearchResponse(DOC_SEARCH_RESPONSE)).toEqual(DOC_SEARCH_RESPONSE);
   });
 
-  it("surfaces a network failure or an invalid page as the one frozen generic-failure message", async () => {
+  it("retries a network failure once before failing, and names it in the error", async () => {
     const { t, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => {
-        throw new Error("network down");
-      }),
-    );
+
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      throw new Error("network down");
+    });
+
+    vi.stubGlobal("fetch", fetcher);
 
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
@@ -153,10 +153,120 @@ describe("search request/response fixtures (docs/integration-contract.md)", () =
     );
 
     await t.action(internal.search.execute, { sessionId });
+    // One initial attempt plus exactly one retry — never a retry ladder.
+    expect(fetcher).toHaveBeenCalledTimes(2);
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
       error:
-        "The search service could not return a valid result page. Try again or check its connection.",
+        "The search service could not return a valid result page after retrying once (a network error reaching the search service). Try again.",
+    });
+  });
+
+  it("retries a 502 once, and succeeds if the retry comes back clean", async () => {
+    const { t, alice } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 502 }))
+      .mockResolvedValueOnce(Response.json({ rows: [], warnings: [] }));
+
+    vi.stubGlobal("fetch", fetcher);
+
+    const sessionId = await t.run((ctx) =>
+      ctx.db.insert("sessions", {
+        owner: alice,
+        raw: "local first",
+        sort: "relevance",
+        status: "queued",
+        rows: [],
+        warnings: [],
+      }),
+    );
+
+    await t.action(internal.search.execute, { sessionId });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({ status: "complete" });
+  });
+
+  it("surfaces the upstream HTTP status when a 5xx persists through the retry", async () => {
+    const { t, alice } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+
+    vi.stubGlobal("fetch", fetcher);
+
+    const sessionId = await t.run((ctx) =>
+      ctx.db.insert("sessions", {
+        owner: alice,
+        raw: "local first",
+        sort: "relevance",
+        status: "queued",
+        rows: [],
+        warnings: [],
+      }),
+    );
+
+    await t.action(internal.search.execute, { sessionId });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "failed",
+      error:
+        "The search service could not return a valid result page after retrying once (the search service returned HTTP 503). Try again.",
+    });
+  });
+
+  it("never retries a 4xx (a rejected request stays rejected) and names the status, distinct from a 5xx/network failure", async () => {
+    const { t, alice } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 400 }));
+
+    vi.stubGlobal("fetch", fetcher);
+
+    const sessionId = await t.run((ctx) =>
+      ctx.db.insert("sessions", {
+        owner: alice,
+        raw: "local first",
+        sort: "relevance",
+        status: "queued",
+        rows: [],
+        warnings: [],
+      }),
+    );
+
+    await t.action(internal.search.execute, { sessionId });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "failed",
+      error:
+        "The search service could not return a valid result page (the search service rejected the request (HTTP 400)). Try again.",
+    });
+  });
+
+  it("retries an invalid response body once before failing", async () => {
+    const { t, alice } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+    const fetcher = vi.fn<typeof fetch>(async () => new Response("not json", { status: 200 }));
+
+    vi.stubGlobal("fetch", fetcher);
+
+    const sessionId = await t.run((ctx) =>
+      ctx.db.insert("sessions", {
+        owner: alice,
+        raw: "local first",
+        sort: "relevance",
+        status: "queued",
+        rows: [],
+        warnings: [],
+      }),
+    );
+
+    await t.action(internal.search.execute, { sessionId });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "failed",
+      error:
+        "The search service could not return a valid result page after retrying once (the search service's response not valid JSON). Try again.",
     });
   });
 });
@@ -193,10 +303,9 @@ describe("stale search cursor — restart search, not a generic failure", () => 
   it("does not call a first-page 409 (no cursor sent) a stale cursor", async () => {
     const { t, alice } = await setup();
     vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 409 })),
-    );
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 409 }));
+
+    vi.stubGlobal("fetch", fetcher);
 
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
@@ -210,10 +319,13 @@ describe("stale search cursor — restart search, not a generic failure", () => 
     );
 
     await t.action(internal.search.execute, { sessionId });
+    // A 409 with no cursor falls through to the ordinary 4xx path, which
+    // never retries.
+    expect(fetcher).toHaveBeenCalledTimes(1);
     expect(await t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "failed",
       error:
-        "The search service could not return a valid result page. Try again or check its connection.",
+        "The search service could not return a valid result page (the search service rejected the request (HTTP 409)). Try again.",
     });
   });
 
