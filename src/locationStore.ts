@@ -9,6 +9,13 @@ export interface LocationSnapshot {
   readonly includeStats: boolean;
   readonly dashboard: boolean;
   readonly view: ViewMode;
+  /** Read-only: the app has no path-based routes (dashboard, search, etc.
+   * are all query params on "/"), so this exists only so a caller can tell
+   * a genuine unknown path (e.g. a typo'd shared link) apart from "/" — QA
+   * report A14, which found `/nope/does-not-exist` silently rendering the
+   * full home page with a 200. Never written by `pushLocation`/
+   * `replaceLocation`; a real path change needs a real navigation. */
+  readonly path: string;
 }
 
 export interface LocationPatch {
@@ -38,6 +45,7 @@ const SERVER_SNAPSHOT: LocationSnapshot = Object.freeze({
   includeStats: false,
   dashboard: false,
   view: ViewMode.Search,
+  path: "/",
 });
 
 const listeners = new Set<() => void>();
@@ -75,6 +83,7 @@ function parseUrl(input: string | URL): Omit<LocationSnapshot, "version"> {
     includeStats: url.searchParams.get("stats") === "1",
     dashboard: url.searchParams.has("dashboard"),
     view: isView(viewValue) ? viewValue : ViewMode.Search,
+    path: url.pathname,
   };
 }
 

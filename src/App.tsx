@@ -66,6 +66,9 @@ import {
   type SearchAttemptId,
 } from "./searchTelemetry";
 import { ModalKind, ViewMode } from "./uiState";
+import { isAlreadySaved, sortChangeQuery, sortLabel, sorts } from "./sortOptions";
+import { ringAvatarUrl } from "./avatarUrl";
+import { splitRing } from "./ring";
 
 type SearchRequest = FlowSearchRequest & {
   readonly attemptId: SearchAttemptId;
@@ -110,14 +113,6 @@ function isAccountOnlyQuery(raw: string): boolean {
     return false;
   }
 }
-
-const sorts: { value: Sort; label: string }[] = [
-  { value: "relevance", label: "Relevant" },
-  { value: "engagement", label: "Relevant + engagement" },
-  { value: "likes", label: "Most liked" },
-  { value: "newest", label: "Newest" },
-  { value: "oldest", label: "Oldest" },
-];
 
 function Modal({
   title,
@@ -323,6 +318,36 @@ export default function App() {
   function authProbe(node: HTMLSpanElement | null) {
     if (!node) return;
     sessionGate.update({ isLoading: authLoading, isAuthenticated });
+  }
+
+  // Effect-free global shortcut: React 19 ref callbacks may return a cleanup
+  // function, which is exactly the attach/detach pair a document-level
+  // listener needs — no useEffect required. Moved "Stats for nerds" off the
+  // primary search row (QA report B3); "?" (outside form fields) or
+  // Cmd/Ctrl+Shift+S toggles it from anywhere, matching the footnote link in
+  // ResultsSection.
+  function statsHotkeyRef(node: HTMLSpanElement | null) {
+    if (!node) return;
+
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target instanceof HTMLElement ? e.target : null;
+
+      const typing =
+        !!target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) && e.key === "?";
+
+      if (typing) return;
+
+      const isToggle =
+        e.key === "?" || ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "s");
+
+      if (!isToggle) return;
+      e.preventDefault();
+      setStatsForNerds((v) => !v);
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+
+    return () => document.removeEventListener("keydown", onKeyDown);
   }
 
   const ensureSession = sessionGate.ensure;
@@ -683,7 +708,7 @@ export default function App() {
 
   const importAccount = (e: FormEvent) => {
     e.preventDefault();
-    void task(submitImport(), "Indexing started. Raw captures are handed to your data service.");
+    void task(submitImport(), "Import started. You'll see its progress in Recent imports.");
   };
 
   // The inline status line already says the fetch is running (see the
@@ -699,6 +724,20 @@ export default function App() {
   const deferredRaw = useDeferredValue(raw);
   const visible = view === ViewMode.Bookmarks ? bookmarks : rows;
   const home = !deferredRaw && view === ViewMode.Search;
+
+  // The ring only has room for ~32 avatars before they overlap. Past that,
+  // account 33+ used to silently vanish with no indication more existed
+  // (QA report P3). Reserve the last ring slot for a "+N more" chip instead
+  // of a 33rd avatar, so nothing is dropped without a way to reach it (the
+  // chip opens ModalKind.AllAccounts, a plain scrollable list of everyone).
+  // Drives the "Save search" -> "Saved" label (QA report A12): looked up by
+  // the exact query+sort pair, since convex/search.ts:save treats those as
+  // distinct saved entries (see src/sortOptions.ts's sortLabel, added for
+  // the same reason in the Saved searches modal). `isAlreadySaved` trims
+  // `raw` before comparing — see its own comment for why.
+  const alreadySaved = isAlreadySaved(saved, raw, sort);
+  const RING_LIMIT = 32;
+  const { shown: ringAccounts, overflow: ringOverflow } = splitRing(accounts, RING_LIMIT);
 
   const openDashboard = () => {
     if (!OPERATOR_BUILD) return;
@@ -769,6 +808,21 @@ export default function App() {
     });
   };
 
+  // QA report A14: any other path (e.g. a typo'd shared link) used to
+  // render the full home page with a 200, hiding the mistake. This app has
+  // no path-based routes — dashboard/search/etc. are all query params on
+  // "/" — so anything else really is unknown.
+  if (route.path !== "/") {
+    return (
+      <div className="app not-found">
+        <span ref={authProbe} hidden />
+        <h1>Page not found</h1>
+        <p>There's nothing at this address.</p>
+        <a href="/">Back to search</a>
+      </div>
+    );
+  }
+
   if (OPERATOR_BUILD && dashboard && Dashboard)
     return (
       <Suspense fallback={null}>
@@ -797,6 +851,7 @@ export default function App() {
   return (
     <div className={`app ${home ? "is-home" : "has-results"}`}>
       <span ref={authProbe} hidden />
+      <span ref={statsHotkeyRef} hidden />
       <header className="topbar">
         <button
           type="button"
@@ -858,8 +913,8 @@ export default function App() {
         <p className="connection" role="status">
           <span className="connection-dot" />
           {connection.hasEverConnected
-            ? "Reconnecting to your search library…"
-            : "Connecting to your search library…"}
+            ? "Reconnecting to the search library…"
+            : "Connecting to the search library…"}
         </p>
       )}
       <main ref={kickPendingRef}>
@@ -867,8 +922,9 @@ export default function App() {
           {home && (
             <>
               <div className="orbit" role="group" aria-label="Imported accounts">
-                {accounts.slice(0, 32).map((a, i, all) => {
-                  const angle = (i / all.length) * Math.PI * 2 - Math.PI / 2;
+                {ringAccounts.map((a, i) => {
+                  const slots = ringAccounts.length + (ringOverflow > 0 ? 1 : 0);
+                  const angle = (i / slots) * Math.PI * 2 - Math.PI / 2;
 
                   return (
                     <button
@@ -887,13 +943,54 @@ export default function App() {
                       }
                       onClick={() => search(`@${a.handle}`)}
                     >
-                      <Avatar name={a.handle} url={a.avatar} />
+                      <Avatar name={a.handle} url={ringAvatarUrl(a.avatar)} />
                     </button>
                   );
                 })}
+                {ringOverflow > 0 &&
+                  (() => {
+                    const slots = ringAccounts.length + 1;
+                    const angle = (ringAccounts.length / slots) * Math.PI * 2 - Math.PI / 2;
+
+                    return (
+                      <button
+                        type="button"
+                        className="orbit-more"
+                        title={`${ringOverflow} more accounts`}
+                        aria-label={`Show ${ringOverflow} more imported accounts`}
+                        style={
+                          // SAFETY: CSSProperties has no index signature for
+                          // custom properties, but `--left`/`--top` are
+                          // consumed only by this component's own stylesheet.
+                          {
+                            "--left": `${50 + 44 * Math.cos(angle)}%`,
+                            "--top": `${50 + 45 * Math.sin(angle)}%`,
+                          } as CSSProperties
+                        }
+                        onClick={() => setModal(ModalKind.AllAccounts)}
+                      >
+                        +{ringOverflow}
+                      </button>
+                    );
+                  })()}
               </div>
+              {accounts.length > 0 && (
+                <div className="account-strip" role="group" aria-label="Imported accounts">
+                  {accounts.map((a) => (
+                    <button
+                      type="button"
+                      title={`Search @${a.handle}`}
+                      aria-label={`Search @${a.handle}`}
+                      key={a._id}
+                      onClick={() => search(`@${a.handle}`)}
+                    >
+                      <Avatar name={a.handle} url={ringAvatarUrl(a.avatar)} />
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="hero-title">
-                <p>Your people. Their words.</p>
+                <p>Every indexed account, one search.</p>
                 <h1>Search X posts.</h1>
               </div>
             </>
@@ -902,7 +999,8 @@ export default function App() {
             className="search-form"
             onSubmit={(e) => {
               e.preventDefault();
-              search(draft);
+
+              if (draft.trim()) search(draft);
             }}
           >
             <label htmlFor="query">Search posts</label>
@@ -931,15 +1029,16 @@ export default function App() {
               <select
                 aria-label="Sort results"
                 value={sort}
-                onChange={(e) =>
-                  search(
-                    draft,
-                    // SAFETY: every <option> below comes from `sorts`, whose
-                    // `value`s are typed `Sort`, so the <select>'s string
-                    // value is always one of them.
-                    e.target.value as Sort,
-                  )
-                }
+                onChange={(e) => {
+                  // SAFETY: every <option> below comes from `sorts`, whose
+                  // `value`s are typed `Sort`, so the <select>'s string
+                  // value is always one of them.
+                  const nextSort = e.target.value as Sort;
+                  const query = sortChangeQuery(draft, raw);
+
+                  if (query !== null) search(query, nextSort);
+                  else setSort(nextSort);
+                }}
               >
                 {sorts.map((s) => (
                   <option value={s.value} key={s.value}>
@@ -947,7 +1046,7 @@ export default function App() {
                   </option>
                 ))}
               </select>
-              <button type="submit" className="primary">
+              <button type="submit" className="primary" disabled={!draft.trim()}>
                 Search
               </button>
             </div>
@@ -955,14 +1054,6 @@ export default function App() {
               <span>
                 Search everything, select a creator, or start with <b>@</b> to filter by account.
               </span>
-              <label className="stats-toggle">
-                <input
-                  type="checkbox"
-                  checked={statsForNerds}
-                  onChange={(event) => setStatsForNerds(event.target.checked)}
-                />
-                Stats for nerds
-              </label>
               {configured?.openai && (
                 <button
                   type="button"
@@ -995,33 +1086,31 @@ export default function App() {
               </button>
             </div>
           )}
-          {home && (
+          {/* When accounts exist, the search-help line above ("Search
+              everything, select a creator, or start with @...") already
+              says everything this status line used to — a second line
+              telling people to "select an account" contradicted it by
+              implying that step was required. Only show a status line for
+              the two states search-help doesn't cover: still loading, or
+              nothing to search yet. */}
+          {home && libraryLoading ? (
             <div className="library-status" aria-live="polite">
-              {libraryLoading ? (
-                <>
-                  <span className="status-dot loading" />
-                  Loading your search library…
-                </>
-              ) : accounts.length ? (
-                <>
-                  <span className="status-dot" />
-                  Select an imported account to search its posts
-                </>
-              ) : (
-                <>
-                  <span className="status-dot muted" />
-                  Connect your sources to start searching.
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => setModal(ModalKind.Imports)}
-                  >
-                    Import an account <Plus size={13} />
-                  </button>
-                </>
-              )}
+              <span className="status-dot loading" />
+              Loading the search library…
             </div>
-          )}
+          ) : home && !accounts.length ? (
+            <div className="library-status" aria-live="polite">
+              <span className="status-dot muted" />
+              No accounts have been imported yet. Import an account to add account history.
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setModal(ModalKind.Imports)}
+              >
+                Import an account <Plus size={13} />
+              </button>
+            </div>
+          ) : null}
         </section>
         {notice && (
           <div className="notice" role="status">
@@ -1073,6 +1162,10 @@ export default function App() {
                 }
                 frontendStats={deferredFrontendStats}
                 searchPending={isSearchPending}
+                emailNeedsSignIn={!verifiedEmail}
+                statsForNerds={statsForNerds}
+                onToggleStats={() => setStatsForNerds((v) => !v)}
+                alreadySaved={alreadySaved}
               />
             </div>
           </Profiler>
@@ -1095,8 +1188,7 @@ export default function App() {
       {modal === ModalKind.Imports && (
         <Modal notice={notice} title="Import an account" close={() => setModal(null)}>
           <p className="muted-copy">
-            Collect an account’s public history through x.md. Raw captures go to your data service
-            for normalization and storage; this app tracks the handoff.
+            Collect an account's public history from X. You'll see its progress below.
           </p>
           <form className="stack-form" onSubmit={importAccount}>
             <label htmlFor="account">X handle</label>
@@ -1196,6 +1288,7 @@ export default function App() {
               >
                 <Search size={16} />
                 {item.query}
+                <small>{sortLabel(item.sort)}</small>
               </button>
               <button
                 type="button"
@@ -1265,6 +1358,26 @@ export default function App() {
       {OPERATOR_BUILD && modal === ModalKind.Setup && ConnectionsPanel && (
         <Modal notice={notice} title="Connections" close={() => setModal(null)}>
           <ConnectionsPanel />
+        </Modal>
+      )}
+      {modal === ModalKind.AllAccounts && (
+        <Modal title="All imported accounts" close={() => setModal(null)}>
+          <div className="account-list">
+            {accounts.map((a) => (
+              <button
+                type="button"
+                className="account-list-row"
+                key={a._id}
+                onClick={() => {
+                  setModal(null);
+                  search(`@${a.handle}`);
+                }}
+              >
+                <Avatar name={a.handle} url={ringAvatarUrl(a.avatar)} />
+                <span>@{a.handle}</span>
+              </button>
+            ))}
+          </div>
         </Modal>
       )}
       {page && (
