@@ -831,7 +831,25 @@ export const expire = internalMutation({
 
     await ctx.db.patch(job._id, { status, error, updatedAt: Date.now() });
     // A timed-out job is as terminal as one x.md refused; it is reported the
-    // same way so the failure alert covers every way an import can stop.
+    // same way so the failure alert and the attempt history cover every way
+    // an import can stop.
+    await capturePostHog(ctx, {
+      distinctId: job.owner,
+      event: "job_attempt_finished",
+      properties: {
+        job_id: job._id,
+        kind: job.kind,
+        origin: job.origin ?? "manual",
+        provider: "x.md",
+        stage: job.phase ?? "unknown",
+        status,
+        attempt: job.attempt,
+        pages: job.pages ?? 0,
+        duration_ms: Date.now() - job.updatedAt,
+        records: job.count,
+        error: sanitizeError(error),
+      },
+    });
     await capturePostHog(ctx, {
       distinctId: job.owner,
       event: "job_failed",
