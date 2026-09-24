@@ -19,6 +19,7 @@ import { serviceToken } from "./lib/serviceAuth";
 import { summaryScopeValidator } from "./lib/contracts";
 import { user } from "./access";
 import type { Doc } from "./_generated/dataModel";
+
 /** Wire request body for the external search service (docs/integration-contract.md). */
 type SearchRequestBody = {
   version: 1;
@@ -60,6 +61,7 @@ export const accounts = query({
   returns: v.array(accountSummaryValidator),
   handler: async (ctx) => {
     const rows = await ctx.db.query("accounts").withIndex("by_handle").take(100);
+
     return rows.map(({ _id, handle, name, avatar }) => ({ _id, handle, name, avatar }));
   },
 });
@@ -166,10 +168,12 @@ export const complete = internalMutation({
 
       return null;
     }
+
     await ctx.db.patch(sessionId, {
       ...rest,
       status: rest.error ? "failed" : "complete",
     });
+
     return null;
   },
 });
@@ -185,6 +189,7 @@ export const expire = internalMutation({
         status: "failed",
         error: "The search service timed out. Try again.",
       });
+
     return null;
   },
 });
@@ -245,6 +250,7 @@ export const execute = internalAction({
             : "The search service could not return a valid result page. Try again or check its connection.",
       });
     }
+
     return null;
   },
 });
@@ -285,6 +291,7 @@ export const save = mutation({
       query: args.raw.trim(),
       sort: args.sort,
     });
+
     return null;
   },
 });
@@ -298,6 +305,7 @@ export const removeSaved = mutation({
 
     if (row?.owner !== owner) throw new ConvexError("Search not found.");
     await ctx.db.delete(id);
+
     return null;
   },
 });
@@ -350,6 +358,7 @@ export const bookmark = mutation({
     )
       throw new ConvexError("Remove a bookmark before saving another.");
     await ctx.db.insert("bookmarks", { owner, post });
+
     return null;
   },
 });

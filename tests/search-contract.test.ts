@@ -301,17 +301,13 @@ describe("authorized collection scope (fails closed)", () => {
 });
 
 describe("search.accounts (home page creator ring)", () => {
-  async function seedAccount(
-    t: ReturnType<typeof convexTest>,
-    overrides: Record<string, unknown> = {},
-  ) {
+  async function seedAccount(t: ReturnType<typeof convexTest>) {
     return t.run((ctx) =>
       ctx.db.insert("accounts", {
         handle: "theo",
         userId: "u_theo",
         name: "Theo",
         avatar: "https://example.com/theo.jpg",
-        ...overrides,
       }),
     );
   }

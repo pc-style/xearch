@@ -21,6 +21,7 @@ const capabilitiesValidator = v.object({
   openai: v.boolean(),
   email: v.boolean(),
 });
+
 /**
  * What this deployment says about itself, and who is allowed to hear it.
  *
@@ -128,6 +129,7 @@ export const reserve = internalMutation({
   returns: v.null(),
   handler: async (ctx) => {
     await user(ctx);
+
     return null;
   },
 });
@@ -165,6 +167,7 @@ export const storePage = internalMutation({
 
     if (existing) await ctx.db.patch(existing._id, args);
     else await ctx.db.insert("pages", args);
+
     return null;
   },
 });

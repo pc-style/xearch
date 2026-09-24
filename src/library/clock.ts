@@ -26,6 +26,7 @@ export function bucketNow(value: number): number {
 }
 
 const initialNow = bucketNow(Date.now());
+
 const listeners = new Set<() => void>();
 
 let now: number | undefined = typeof window === "undefined" ? initialNow : undefined;
@@ -38,6 +39,7 @@ function notify(): void {
 
 function refresh(): void {
   const nextNow = bucketNow(Date.now());
+
   if (nextNow === now) return;
   now = nextNow;
   notify();
@@ -68,6 +70,7 @@ export function subscribe(listener: () => void): () => void {
 
 export function getSnapshot(): number {
   if (now === undefined) now = bucketNow(Date.now());
+
   return now;
 }
 
@@ -105,7 +108,9 @@ export function useLiveNow(): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), LIVE_CLOCK_INTERVAL_MS);
+
     return () => clearInterval(id);
   }, []);
+
   return now;
 }

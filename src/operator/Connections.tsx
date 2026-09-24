@@ -31,6 +31,7 @@ export function ConnectionsPanel() {
   // for why a rounded `now` cannot feed this 45s liveness window safely.
   const now = useLiveNow();
   const config = useQuery(api.integrations.operator, isAuthenticated ? { now } : "skip");
+
   const connections: Connection[] = [
     {
       name: "Search service",

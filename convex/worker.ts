@@ -17,6 +17,7 @@ function authorize(token: string) {
   )
     throw new ConvexError("Worker authentication failed.");
 }
+
 // How recently `lastSeen` must have moved for the worker to count as live.
 // Mirrors src/integrationStatus.ts's WORKER_LIVE_WINDOW_MS exactly — keep
 // the two in sync if this ever changes.
@@ -266,6 +267,7 @@ export const report = action({
         expectedUserId: args.expectedUserId,
         profile: args.profile,
       });
+
     return null;
   },
 });
