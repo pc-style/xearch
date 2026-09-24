@@ -227,10 +227,21 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
   sanitized errors. Never send email addresses. Identify only non-anonymous
   users by stable ID and role. Replay all sessions while traffic is small;
   show the search field and mask other inputs.
-- Keep separate search journey and operator health dashboards. New exceptions
-  and terminal failed jobs go to Discord immediately. In-app/email insight
-  alerts run hourly because PostHog's real-time insight alerts require
-  Scale/Enterprise. Performance thresholds wait for a production baseline.
+- Two dashboards: "Xearch · Search" (volume, submit-to-useful funnel,
+  failure rate, latency, top queries, traffic; the project's landing
+  dashboard) and "Xearch · Imports & health" (failures by cause with their
+  reasons, throughput, search service success and latency, exceptions).
+- One alert path per signal. `job_failed` posts to Discord in real time with
+  the sanitised failure reason (the provider's own message when there is
+  one; a fixed timeout message when the worker timed out), stage, and cause;
+  it fires from every terminal path, including the worker timeout. Error tracking's own issue-created,
+  spiking, and reopened destinations cover exceptions. The hourly insight
+  alerts that duplicated both were removed (2026-09-24).
+- Volume guards: `job_attempt_finished` only reports attempts that errored
+  or ended the job (page hops were four fifths of all events); error tracking
+  drops more than 300 exceptions per hour project-wide or 30 per issue;
+  replay skips sessions under 3 seconds. Performance thresholds wait for a
+  production baseline.
 - The personal API key for source-map upload is in the private VM file
   `~/xearch-data/posthog-build.env`; both build variants uploaded source maps
   successfully. The frontend and Convex code is prepared but is not published

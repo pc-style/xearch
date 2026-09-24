@@ -180,6 +180,10 @@ export const report = action({
     warnings: v.optional(v.array(v.string())),
     error: v.optional(v.string()),
     retryAfter: v.optional(v.number()),
+    // Whether a manual Retry can help, as judged by the worker that saw the
+    // provider's answer. Without it every production failure is classified
+    // as a transient provider error, even a permanent 4xx.
+    retryable: v.optional(v.boolean()),
     postsReceived: v.optional(v.number()),
     oldest: v.optional(v.string()),
     floorReached: v.optional(v.boolean()),
@@ -264,6 +268,7 @@ export const report = action({
         warnings: args.warnings ?? [],
         error: args.error,
         retryAfter: args.retryAfter,
+        retryable: args.retryable,
         postsReceived: args.postsReceived,
         oldest: args.oldest,
         floorReached: args.floorReached,

@@ -32,8 +32,14 @@ export function initPostHog(): void {
       posthog.init(key, {
         api_host: host,
         autocapture: false,
-        capture_pageview: true,
-        capture_pageleave: false,
+        // This SPA navigates through pushState on the query string
+        // (src/locationStore.ts sets `q=`); the pathname rarely changes.
+        // "history_change" watches the pathname only, so `search: true` is
+        // what makes each search a pageview. A plain `true` records one per
+        // full load. Pageleave pairs with it so web analytics can compute
+        // bounce rate and session duration.
+        capture_pageview: { path: true, search: true },
+        capture_pageleave: true,
         capture_exceptions: true,
         capture_performance: true,
         before_send: (event) => JSON.parse(redactEmail(JSON.stringify(event))),
@@ -73,9 +79,19 @@ export function resetUser(): void {
   withClient((posthog) => posthog.reset());
 }
 
-export function captureError(error: Error, area: string): void {
+/**
+ * A copy of `error` with addresses removed from its message and stack. The
+ * name is kept: PostHog groups and titles issues by it, and a `TypeError`
+ * that arrives as a plain `Error` is indistinguishable from every other one.
+ */
+export function sanitizeException(error: Error): Error {
   const sanitized = new Error(redactEmail(error.message));
+  sanitized.name = error.name;
   sanitized.stack = redactEmail(error.stack ?? sanitized.stack ?? "");
 
-  withClient((posthog) => posthog.captureException(sanitized, { area }));
+  return sanitized;
+}
+
+export function captureError(error: Error, area: string): void {
+  withClient((posthog) => posthog.captureException(sanitizeException(error), { area }));
 }
