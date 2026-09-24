@@ -167,23 +167,34 @@ export const all = query({
 
 /**
  * When a currently-active throttle says a retry should wait, or `undefined`
- * when there is nothing to wait for (no throttle observed at all, or the
- * one observed has already passed). Used by convex/jobs.ts `retry` to queue
- * a job for when the provider itself said to come back, instead of
+ * when there is nothing to wait for. Used by convex/jobs.ts `retry` to
+ * queue a job for when the provider itself said to come back, instead of
  * re-hitting it immediately and failing the exact same way — this reads a
  * fact the provider reported, it does not invent a limit of our own
  * (AGENTS.md "Rate limiting").
  *
- * Picks the LATER of `resetAt` (the allowance window's own reset) and
- * `nextRetryAt` (derived from the provider's `retryAfterMs`) when both are
- * present and still in the future: either one passing on its own does not
- * mean the other has, so the caller should wait for whichever the provider
- * expects to hold longer.
+ * `resetAt` (the allowance window's own reset) and `nextRetryAt` (derived
+ * from the provider's `retryAfterMs`) mean different things and are not
+ * always both live at once (CodeRabbit #4091232187, caught against the
+ * exact case that motivated this: x.md can report `remaining: 20` — plenty
+ * of allowance left — alongside a `resetAt` far in the future for the
+ * counting window, plus a much SHORTER `retryAfterMs` cooldown from
+ * whatever specifically got refused). Treating `resetAt` as a blocking
+ * deadline while allowance remains would wait out an entire window for no
+ * reason, so it only counts once `remaining` is reported as exhausted
+ * (`kind: "known", value <= 0`) — never merely "unknown", which is not the
+ * same claim as "zero" anywhere else in this app. `nextRetryAt` always
+ * counts when present, regardless of `remaining`: it is the provider's own
+ * explicit "come back at" instant for the refused call, independent of how
+ * much allowance is left. When both qualify, wait for the later of the two
+ * — either alone does not mean the other has also passed.
  */
 export function activeThrottleUntil(limit: ProviderLimit, now: number): number | undefined {
   if (limit.kind !== "throttled") return undefined;
 
-  const candidates = [limit.resetAt, limit.nextRetryAt].filter(
+  const allowanceExhausted = limit.remaining.kind === "known" && limit.remaining.value <= 0;
+
+  const candidates = [allowanceExhausted ? limit.resetAt : undefined, limit.nextRetryAt].filter(
     (at): at is number => at !== undefined && at > now,
   );
 
