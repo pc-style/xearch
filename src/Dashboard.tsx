@@ -14,7 +14,7 @@ import { useDashboardClock, useLiveNow } from "./library/clock";
 // isolation (the fake-Convex-client harness pattern tests/library-ui.test.ts
 // and tests/jobRow-ui.test.ts already use) without standing up the rest of
 // the dashboard page's queries.
-export function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean }) {
+export function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean | undefined }) {
   // convex/_generated/ai/guidelines.md "Do not read the wall clock inside a
   // query" applies just as much to a render body: a bare `Date.now()` here
   // would freeze at whatever instant last re-rendered this row instead of
@@ -106,7 +106,9 @@ export default function Dashboard({
   // signed-in session — the dashboard is reachable by URL to any
   // authenticated caller, operator or not. This only drives the disabled+
   // notice treatment below; the server enforces the boundary regardless.
-  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip") ?? false;
+  // `undefined` while loading: buttons stay disabled, but the sign-in notice
+  // waits for a confirmed `false` — an operator must not see it on every load.
+  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip");
   // `integrations.operator` requires a session, so asking for it before one
   // exists throws into the app's error boundary — which only offers a
   // reload. The dashboard is reachable directly by URL, so that is a normal
@@ -298,7 +300,9 @@ export default function Dashboard({
                 (convex/access.ts) the same as Cancel/Retry/Dismiss/Restore
                 above — a signed-in-but-not-operator caller sees why the
                 button is disabled instead of hitting a bare ConvexError. */}
-            {isAuthenticated && !isOperator && <p role="status">{OPERATOR_SIGN_IN_NOTICE}</p>}
+            {isAuthenticated && isOperator === false && (
+              <p role="status">{OPERATOR_SIGN_IN_NOTICE}</p>
+            )}
             <p role="status">{message}</p>
           </form>
         </aside>

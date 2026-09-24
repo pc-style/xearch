@@ -59,7 +59,8 @@ export function JobRow({
    * the same way every other provider-spending action in this app is, so a
    * signed-in guest sees why the buttons are disabled instead of hitting a
    * ConvexError with no warning. */
-  isOperator: boolean;
+  /** `undefined` while the operator check is still loading: actions stay disabled, no notice yet. */
+  isOperator: boolean | undefined;
   onRetry?: (job: Doc<"jobs">) => Promise<void>;
   onCancel?: (job: Doc<"jobs">) => Promise<void>;
   onDismiss?: (job: Doc<"jobs">) => Promise<void>;
@@ -128,7 +129,7 @@ export function JobRow({
         )}
         {extraActions}
       </div>
-      {!isOperator && (canCancel || canRetry || canDismiss) && (
+      {isOperator === false && (canCancel || canRetry || canDismiss) && (
         <p className="muted-copy">{OPERATOR_SIGN_IN_NOTICE}</p>
       )}
       {message && (

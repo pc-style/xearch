@@ -101,7 +101,8 @@ export function PostCard({
   onAuthor: () => void;
   threadStatus?: string | null;
   /** Gates "Fetch conversation from X" (a paid x.md import) — see OPERATOR_SIGN_IN_NOTICE. */
-  isOperator: boolean;
+  /** `undefined` while the operator check is loading: gated controls stay disabled, no notice yet. */
+  isOperator: boolean | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const createdAt = post.createdAt === undefined ? null : new Date(post.createdAt);
@@ -235,7 +236,7 @@ export function PostCard({
             control (CodeRabbit #4089916567). A disabled `title` alone is
             also unreliable for keyboard/touch users (CodeRabbit
             #4089730724), which is why this exists as visible text at all. */}
-        {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
+        {isOperator === false && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
         {threadStatus && (
           <p className="scope-note" role="status">
             {threadStatus}
@@ -282,7 +283,8 @@ function OperatorGatedMenuItem({
   icon: ReactNode;
   label: string;
   disabled: boolean;
-  isOperator: boolean;
+  /** `undefined` while the operator check is loading: gated controls stay disabled, no notice yet. */
+  isOperator: boolean | undefined;
   onClick: () => void;
 }) {
   return (
@@ -291,7 +293,7 @@ function OperatorGatedMenuItem({
         {icon}
         {label}
       </button>
-      {!isOperator && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
+      {isOperator === false && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
     </div>
   );
 }
@@ -354,7 +356,8 @@ export function ResultsSection({
   statsForNerds?: boolean;
   onToggleStats?: () => void;
   /** Gates every paid action shown here — see OPERATOR_SIGN_IN_NOTICE. */
-  isOperator: boolean;
+  /** `undefined` while the operator check is loading: gated controls stay disabled, no notice yet. */
+  isOperator: boolean | undefined;
 }) {
   // Effect-free focus/scroll: callback ref runs at commit time, no useEffect.
   function resultsTitleRef(node: HTMLHeadingElement | null) {
@@ -531,7 +534,7 @@ export function ResultsSection({
                 Import an account
               </button>
               {/* Visible reason, not just a disabled `title` (CodeRabbit #4089730724). */}
-              {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
+              {isOperator === false && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
             </div>
           )}
         </div>

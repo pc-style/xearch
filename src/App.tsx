@@ -425,7 +425,9 @@ export default function App() {
   // guest. This is only used to show the sign-in path before someone hits
   // the server's ConvexError; the server enforces the boundary regardless
   // of what this reads.
-  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip") ?? false;
+  // `undefined` while loading: gated actions stay disabled, but the sign-in
+  // notice waits for a confirmed `false` so an operator never sees it flash.
+  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip");
   let queryError = "";
 
   try {
@@ -1079,7 +1081,9 @@ export default function App() {
                   {/* A disabled `title` alone is unreliable for keyboard/touch
                       users (CodeRabbit #4089730724) — the reason is also shown
                       as visible text. */}
-                  {!isOperator && <span className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</span>}
+                  {isOperator === false && (
+                    <span className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</span>
+                  )}
                 </>
               )}
             </div>
@@ -1207,7 +1211,7 @@ export default function App() {
           <p className="muted-copy">
             Collect an account's public history from X. You'll see its progress below.
           </p>
-          {isAuthenticated && !isOperator && (
+          {isAuthenticated && isOperator === false && (
             <>
               <p className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</p>
               <EmailSignIn
