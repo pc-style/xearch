@@ -20,6 +20,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { postsInCapture, rankInteractions } from "./lib/discovery.mjs";
 
 const DIR =
@@ -32,13 +33,21 @@ const MIN = Number(process.env.DISCOVERY_MIN_INTERACTIONS ?? "100");
 
 if (!Number.isFinite(MIN) || MIN < 1) throw new Error("DISCOVERY_MIN_INTERACTIONS must be >= 1.");
 
+// The checkout's own Convex CLI, run by the node already running this
+// script: the systemd unit sets no PATH, so `npx` may not be found, and
+// `npx` could otherwise try to download a package in an unattended run.
+const CONVEX_CLI = fileURLToPath(new URL("../node_modules/convex/bin/main.js", import.meta.url));
+
 function convexRun(fn, args) {
-  const run = spawnSync("npx", ["convex", "run", fn, JSON.stringify(args ?? {})], {
+  const run = spawnSync(process.execPath, [CONVEX_CLI, "run", fn, JSON.stringify(args ?? {})], {
     encoding: "utf8",
     env: process.env,
+    timeout: 120_000,
   });
 
-  if (run.status !== 0) throw new Error(`convex run ${fn} failed: ${run.stderr.trim()}`);
+  if (run.error) throw new Error(`convex run ${fn} could not run: ${run.error.message}`);
+
+  if (run.status !== 0) throw new Error(`convex run ${fn} failed: ${(run.stderr ?? "").trim()}`);
 
   return JSON.parse(run.stdout);
 }
@@ -114,7 +123,9 @@ let started = 0;
 for (const entry of ranked) {
   const id = convexRun("jobs:startDiscovered", {
     input: entry.handle,
-    discoveredFrom: entry.discoveredFrom.slice(0, 5),
+    // Every source, so the stored list sums to the interactions that caused
+    // this import; bounded by the number of indexed accounts.
+    discoveredFrom: entry.discoveredFrom,
   });
 
   if (id) started += 1;

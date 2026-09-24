@@ -359,7 +359,9 @@ export function discoveredVia(
   if (!job || job.origin !== "discovered") return "";
   const from = job.discoveredFrom ?? [];
   const shown = from.slice(0, 3);
-  const total = shown.reduce((sum, f) => sum + f.interactions, 0);
+  // Every stored source, not just the names shown, so the figure is the
+  // whole count that caused the import.
+  const total = from.reduce((sum, f) => sum + f.interactions, 0);
 
   const names = shown.map((f) => `@${f.handle}`).join(", ");
 
