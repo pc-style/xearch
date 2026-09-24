@@ -1,0 +1,10 @@
+[Unit]
+Description=Xearch: discover interacted accounts every hour
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+Unit=xearch-discover.service
+
+[Install]
+WantedBy=timers.target

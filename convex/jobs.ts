@@ -1,10 +1,10 @@
 import { Match } from "effect";
 import { v, ConvexError } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { kindValidator, throttleProviderValidator } from "./schema";
+import { kindValidator, throttleProviderValidator, discoveredFromValidator } from "./schema";
 import schema from "./schema";
 import { user, requireOperator } from "./access";
 import { activeThrottleUntil, loadProviderLimit } from "./limits";
@@ -297,6 +297,131 @@ export const start = mutation({
       count: 0,
       attempt: 0,
       warnings: [],
+      // A continuation is the same import as `previous`, so it keeps that
+      // job's provenance; only a fresh run (no `previous`) is "manual".
+      origin: previous?.origin ?? "manual",
+      discoveredFrom: previous?.discoveredFrom,
+      updatedAt: Date.now(),
+    });
+
+    await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+
+    return id;
+  },
+});
+
+// --- Automatic discovery --------------------------------------------------
+// scripts/discover-accounts.mjs runs on the VM (hourly, once enabled) and
+// queues account-history imports for people the indexed accounts interact
+// with a lot. It is an internal function on purpose: only the deploy key
+// (the CLI on the VM) can call it, so it needs neither a browser session nor
+// the operator token, and it never becomes a public entry point. The job it
+// writes is tagged so the dashboard can say where it came from.
+
+const DISCOVERY_INDEXED_LIMIT = 1000;
+
+const DISCOVERY_JOBS_LIMIT = 5000;
+
+/** What the discovery script needs in one read: who is indexed, what is already queued or imported. */
+export const discoveryState = internalQuery({
+  args: {},
+  returns: v.object({
+    indexed: v.array(v.string()),
+    existingInputs: v.array(v.string()),
+    // True when either read below hit its cap, so the caller saw only part
+    // of the indexed accounts or the existing jobs. `rankInteractions` builds
+    // its exclusion set from `indexed`/`existingInputs`, so a truncated read
+    // can rank an already-indexed or already-queued account as a target.
+    truncated: v.boolean(),
+  }),
+  handler: async (ctx) => {
+    const accounts = await ctx.db
+      .query("accounts")
+      .withIndex("by_handle")
+      .take(DISCOVERY_INDEXED_LIMIT + 1);
+
+    const jobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_kind", (q) => q.eq("kind", "bulk"))
+      .take(DISCOVERY_JOBS_LIMIT + 1);
+
+    return {
+      indexed: accounts
+        .slice(0, DISCOVERY_INDEXED_LIMIT)
+        .map((account) => account.handle.toLowerCase()),
+      existingInputs: [
+        ...new Set(jobs.slice(0, DISCOVERY_JOBS_LIMIT).map((job) => job.input.toLowerCase())),
+      ],
+      truncated: accounts.length > DISCOVERY_INDEXED_LIMIT || jobs.length > DISCOVERY_JOBS_LIMIT,
+    };
+  },
+});
+
+const DISCOVERY_OWNER_EMAIL = "discovery@xearch.internal";
+
+// The audit-trail owner for discovered runs: one system user, created on
+// first use. Not an operator, not signable-in (no verification time), it
+// exists only so `jobs.owner` can say "the discovery job did this".
+async function discoveryOwner(ctx: MutationCtx): Promise<Id<"users">> {
+  const existing = await ctx.db
+    .query("users")
+    .withIndex("email", (q) => q.eq("email", DISCOVERY_OWNER_EMAIL))
+    .first();
+
+  if (existing) return existing._id;
+
+  return ctx.db.insert("users", {
+    isAnonymous: false,
+    email: DISCOVERY_OWNER_EMAIL,
+    name: "Automatic discovery",
+  });
+}
+
+export const startDiscovered = internalMutation({
+  args: {
+    input: v.string(),
+    discoveredFrom: v.array(discoveredFromValidator),
+  },
+  returns: v.union(v.id("jobs"), v.null()),
+  handler: async (ctx, args) => {
+    const input = handle(args.input);
+
+    // Never a second import for an account anyone already asked for, whatever
+    // state that run is in: a person's retry or the run's own auto-continue
+    // owns it from here.
+    const existing = await ctx.db
+      .query("jobs")
+      .withIndex("by_input", (q) => q.eq("kind", "bulk").eq("input", input))
+      .first();
+
+    if (existing) return null;
+
+    const candidates = await ctx.db
+      .query("accounts")
+      .withIndex("by_handle", (q) => q.eq("handle", input))
+      .take(2);
+
+    // Already indexed, under either handle-ambiguity outcome: discovery only
+    // exists to import accounts that are not in the library yet. The caller's
+    // `indexed` set (from `discoveryState`) should already have excluded this
+    // handle, but that read can be truncated, so check the server's own state
+    // rather than trusting the caller.
+    if (candidates.length > 0) return null;
+
+    const id = await ctx.db.insert("jobs", {
+      owner: await discoveryOwner(ctx),
+      kind: "bulk",
+      input,
+      refresh: false,
+      autoContinue: true,
+      pages: 0,
+      postsReceived: 0,
+      status: "queued",
+      count: 0,
+      attempt: 0,
+      warnings: [],
+      origin: "discovered",
+      discoveredFrom: args.discoveredFrom,
       updatedAt: Date.now(),
     });
 

@@ -5,6 +5,7 @@ import type { Doc } from "../convex/_generated/dataModel";
 import { useTask } from "./errors";
 import { OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import {
+  discoveredVia,
   isPermanentFailure,
   jobKindLabel,
   jobLabel,
@@ -90,6 +91,7 @@ export function JobRow({
         <span className={`job-status ${job.status}`}>{jobLabel(job)}</span>
       </div>
       <p>{jobSummary(job)}</p>
+      {discoveredVia(job) && <p className="muted-copy">{discoveredVia(job)}</p>}
       {jobWarnings(job).map((w) => (
         <p className="muted-copy" key={w}>
           {w}

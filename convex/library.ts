@@ -196,6 +196,8 @@ export const rows = query({
           postsReceived: latestJob.postsReceived,
           oldest: latestJob.oldest,
           floorReached: latestJob.floorReached,
+          origin: latestJob.origin,
+          discoveredFrom: latestJob.discoveredFrom,
         },
         nextAction: latestJob ? nextActionFor(latestJob) : { kind: "none" },
       });

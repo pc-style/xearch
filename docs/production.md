@@ -140,6 +140,48 @@ Neither the indexer heartbeat nor the search cron has been observed running
 against the production deployment yet: `SERVICE_HEALTH_TOKEN` is not set there,
 and nothing in this change deploys itself.
 
+## Automatic account discovery
+
+`scripts/discover-accounts.mjs` expands the indexed accounts to the people they
+interact with most. It reads the raw captures already on this machine (no
+provider is contacted), counts replies, quotes, @mentions and reposts from
+indexed accounts per target handle, and queues an account-history import for
+every target at or above `DISCOVERY_MIN_INTERACTIONS` (default 100; on 2026-09-24 the captures gave 535 accounts at 25, 218 at 50, 86 at 100, 25 at 200) that is
+neither indexed nor already the subject of a bulk import in any state. The
+threshold is the relevance criterion; there is deliberately no per-run cap
+(see "Rate limiting" in AGENTS.md). Discovered runs are tagged
+(`jobs.origin = "discovered"`, `jobs.discoveredFrom`) and the dashboard says
+which accounts led to them.
+
+```sh
+# Rank only, start nothing:
+CONVEX_DEPLOYMENT=prod:utmost-kudu-321 node scripts/discover-accounts.mjs
+# Queue the imports:
+CONVEX_DEPLOYMENT=prod:utmost-kudu-321 node scripts/discover-accounts.mjs --apply
+```
+
+It goes through `convex run` on internal functions, which needs a
+`CONVEX_DEPLOY_KEY`, not just the deployment name: `Environment=CONVEX_DEPLOYMENT`
+in the unit names the target but proves nothing to Convex. Provision it once:
+
+```sh
+install -d -m 700 ~/xearch-data/logs
+touch ~/xearch-data/discover.env      # never truncates an existing file
+chmod 600 ~/xearch-data/discover.env
+# then edit it; one KEY=value per line, no quotes, no `export`:
+#   CONVEX_DEPLOY_KEY=<the deploy key>
+install -m 600 deploy/systemd/xearch-discover.service deploy/systemd/xearch-discover.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+```
+
+`deploy/systemd/xearch-discover.service` loads that file with
+`EnvironmentFile=-%h/xearch-data/discover.env`; the leading `-` means a missing
+file is not an error, but the run then fails for lack of a credential.
+`deploy/systemd/xearch-discover.timer` runs the service hourly once enabled
+(`systemctl --user enable --now xearch-discover.timer`); it logs to
+`~/xearch-data/logs/discover.log`. Enabling the timer is a deliberate step:
+every run can start paid imports.
+
 ## VM services
 
 The VM runs the static frontend and raw capture receiver and, after a coordinated

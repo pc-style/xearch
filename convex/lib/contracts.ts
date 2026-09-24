@@ -208,6 +208,12 @@ export const accountLibraryRowValidator = v.object({
       postsReceived: v.optional(v.number()),
       oldest: v.optional(v.string()),
       floorReached: v.optional(v.boolean()),
+      // Present when the run was queued by automatic discovery; see
+      // convex/jobs.ts `startDiscovered`.
+      origin: v.optional(v.union(v.literal("manual"), v.literal("discovered"))),
+      discoveredFrom: v.optional(
+        v.array(v.object({ handle: v.string(), interactions: v.number() })),
+      ),
     }),
   ),
   nextAction: nextActionValidator,

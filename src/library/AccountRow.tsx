@@ -5,7 +5,12 @@ import type { AccountLibraryRow, NextAction } from "../../convex/lib/contracts";
 import type { HistoryRun } from "../../convex/library";
 import type { Id } from "../../convex/_generated/dataModel";
 import { useTask } from "../errors";
-import { DOWNLOAD_COMPLETE_CAVEAT, acquisitionStatusLabel, describeRunOutcome } from "../jobText";
+import {
+  DOWNLOAD_COMPLETE_CAVEAT,
+  acquisitionStatusLabel,
+  describeRunOutcome,
+  discoveredVia,
+} from "../jobText";
 import {
   PUBLICATION_STATE_META,
   acquisitionStatusTone,
@@ -104,6 +109,7 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           current searchable count above (never invented here), so this only
           adds the one clarifying line — not a second number. */}
       {job?.status === "complete" && <p className="library-muted">{DOWNLOAD_COMPLETE_CAVEAT}</p>}
+      {discoveredVia(job) && <p className="library-muted">{discoveredVia(job)}</p>}
       {row.publicationState === "failed" && hasGoodCorpus && (
         <p className="library-row-note">
           The previously confirmed index still has {countWithUnit(row.searchablePostCount)}{" "}

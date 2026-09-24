@@ -1,0 +1,15 @@
+[Unit]
+Description=Xearch: queue imports for accounts the indexed accounts interact with
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/exedev/xearch-worker
+EnvironmentFile=-%h/xearch-data/discover.env
+Environment=CONVEX_DEPLOYMENT=prod:utmost-kudu-321
+Environment=DISCOVERY_MIN_INTERACTIONS=100
+ExecStart=/usr/bin/node /home/exedev/xearch-worker/scripts/discover-accounts.mjs --apply
+StandardOutput=append:/home/exedev/xearch-data/logs/discover.log
+StandardError=append:/home/exedev/xearch-data/logs/discover.log
+NoNewPrivileges=true
