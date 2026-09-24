@@ -31,6 +31,7 @@ import type * as lib_serviceAuth from "../lib/serviceAuth.js";
 import type * as lib_xmd from "../lib/xmd.js";
 import type * as library from "../library.js";
 import type * as limits from "../limits.js";
+import type * as ops from "../ops.js";
 import type * as publication from "../publication.js";
 import type * as queue from "../queue.js";
 import type * as search from "../search.js";
@@ -68,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   "lib/xmd": typeof lib_xmd;
   library: typeof library;
   limits: typeof limits;
+  ops: typeof ops;
   publication: typeof publication;
   queue: typeof queue;
   search: typeof search;

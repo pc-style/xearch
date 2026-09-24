@@ -42,6 +42,10 @@ const JOB_FEED_SCAN = 2_000;
 
 const JOB_FEED_LIMIT = 20;
 
+// The most a caller may ask for in one page (the /ops Jobs table shows
+// active work and recent history together, so it asks for more than 20).
+const JOB_FEED_MAX_LIMIT = 100;
+
 // Which kinds a caller wants. "account" is the full-history import that owns
 // a library row; "other" is everything else (live search, single post,
 // profile, follower/following lookups) — the split src/Dashboard.tsx's
@@ -52,6 +56,7 @@ export const list = query({
   args: {
     includeDismissed: v.optional(v.boolean()),
     scope: v.optional(jobScopeValidator),
+    limit: v.optional(v.number()),
   },
   returns: v.object({
     jobs: v.array(schema.doc("jobs")),
@@ -67,6 +72,12 @@ export const list = query({
     // shared feed, so nothing about the identity narrows what comes back.
     await user(ctx);
     const scope = args.scope ?? "all";
+
+    const limit = Math.max(
+      1,
+      Math.min(JOB_FEED_MAX_LIMIT, Math.floor(args.limit ?? JOB_FEED_LIMIT)),
+    );
+
     const out: Doc<"jobs">[] = [];
     let scanned = 0;
     let truncated = false;
@@ -82,7 +93,7 @@ export const list = query({
       if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
       out.push(job);
 
-      if (out.length >= JOB_FEED_LIMIT) break;
+      if (out.length >= limit) break;
     }
 
     return { jobs: out, truncated };
