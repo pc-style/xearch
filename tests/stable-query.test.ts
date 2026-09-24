@@ -70,6 +70,7 @@ function Probe({ now }: { now: number }) {
 }
 
 let root: Root | undefined;
+
 let host: HTMLElement | undefined;
 
 function seen(): unknown {
