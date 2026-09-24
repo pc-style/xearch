@@ -135,6 +135,27 @@ describe("x.md raw acquisition handoff", () => {
     expect(r.captures.at(-1)?.records[0].payload).toEqual(page);
   });
 
+  it("rejects a search page without a posts array instead of counting it as empty", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      requestUrl(input).includes("/search")
+        ? Response.json({ nextCursor: "c2" })
+        : Response.json({ resource: "profile", profile }),
+    );
+
+    const r = receiver();
+
+    await expect(
+      collectXmd(
+        new XmdClient("test-key", fetcher),
+        { ...request, kind: "live", input: "from:theo since:2026-03-01", format: undefined },
+        r.sink,
+        r.ack,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_search" });
+
+    expect(r.captures.at(-1)?.terminal).toBe("partial");
+  });
+
   it("retains malformed JSON history for review without declaring completion", async () => {
     const fetcher = vi.fn<typeof fetch>(async (input) =>
       Response.json(
