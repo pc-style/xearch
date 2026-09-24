@@ -248,7 +248,25 @@ function setQuery<T>(ref: Parameters<typeof getFunctionName>[0], value: T) {
 }
 
 function renderLibrary(): string {
+  const { container, unmount } = renderLibraryToContainer();
+  const html = container.innerHTML;
+
+  unmount();
+
+  return html;
+}
+
+/**
+ * Same render as `renderLibrary`, but keeps the container mounted (and
+ * attached to `document.body`, which real click dispatch needs) so a test
+ * can interact with it — e.g. clicking a row's "Show history" toggle, which
+ * now also reveals the publication notes AccountRow.tsx moved behind it
+ * (QA finding 5, /tmp/issues-t3-dashboard-current.md #5's row-compaction
+ * fix).
+ */
+function renderLibraryToContainer(otherImports?: ReturnType<typeof createElement>) {
   const container = document.createElement("div");
+  document.body.appendChild(container);
   const root = createRoot(container);
   act(() => {
     root.render(
@@ -267,17 +285,28 @@ function renderLibrary(): string {
           config: mockState.config,
           liveNow: mockState.liveNow,
           onOpenQueue: () => {},
+          otherImports,
         }),
       ),
     );
   });
-  const html = container.innerHTML;
 
-  act(() => {
-    root.unmount();
-  });
+  return {
+    container,
+    unmount: () => {
+      act(() => root.unmount());
+      container.remove();
+    },
+  };
+}
 
-  return html;
+// Clicks every ".library-row-toggle" button found (there is one per
+// <AccountRow>), so a test with a single fixture row can expand it without
+// needing to know its position in the (now paginated) list.
+function expandAllRows(container: HTMLElement) {
+  const toggles = container.querySelectorAll<HTMLButtonElement>(".library-row-toggle");
+
+  for (const toggle of toggles) act(() => toggle.click());
 }
 
 describe("Library (src/library/Library.tsx) rendered output", () => {
@@ -348,8 +377,16 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [failedButIndexed], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const html = renderLibrary();
-    expect(html).toContain("Publication failed");
+    const { container, unmount } = renderLibraryToContainer();
+    // The failed badge and the searchable count stay in the row's default
+    // one-line view; the "still-good corpus" note and the raw publication
+    // error are publication notes, so QA finding 5's row compaction moved
+    // them behind "Show history" — expand it to reach them.
+    expect(container.innerHTML).toContain("Publication failed");
+    expect(container.innerHTML).toContain("2,500 posts");
+    expect(container.innerHTML).not.toContain("The previously confirmed index still has");
+    expandAllRows(container);
+    const html = container.innerHTML;
     expect(html).toContain("The previously confirmed index still has");
     expect(html).toContain("2,500 posts");
     expect(html).toContain("publish rejected: schema mismatch");
@@ -357,6 +394,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     // in this component tree's own output.
     expect(html).not.toContain("Downloads aren't searchable yet");
     expect(html).not.toContain("Search will be available when the search backend is connected.");
+    unmount();
   });
 
   it("shows the deep-history backfill's own one-line summary, distinct from the searchable count", () => {
@@ -378,10 +416,14 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [running], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const runningHtml = renderLibrary();
-    expect(runningHtml).toContain(
+    // QA finding 5's row compaction moved the backfill summary line behind
+    // "Show history" along with the rest of a row's publication notes.
+    const runningRender = renderLibraryToContainer();
+    expandAllRows(runningRender.container);
+    expect(runningRender.container.innerHTML).toContain(
       "Older history: 12,340 posts downloaded so far · downloading back to 2019-03-01 (joined 2011-06-01)",
     );
+    runningRender.unmount();
 
     reset();
 
@@ -395,10 +437,12 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [complete], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const completeHtml = renderLibrary();
-    expect(completeHtml).toContain(
+    const completeRender = renderLibraryToContainer();
+    expandAllRows(completeRender.container);
+    expect(completeRender.container.innerHTML).toContain(
       "Older history download complete: 61,208 posts downloaded; search publication is separate",
     );
+    completeRender.unmount();
 
     reset();
 
@@ -417,10 +461,12 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [stopped], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    const stoppedHtml = renderLibrary();
-    expect(stoppedHtml).toContain(
+    const stoppedRender = renderLibraryToContainer();
+    expandAllRows(stoppedRender.container);
+    expect(stoppedRender.container.innerHTML).toContain(
       "Older history stopped: x.md could not finish this request (500).",
     );
+    stoppedRender.unmount();
   });
 
   it("renders an explicit unauthenticated/offline-from-data state", () => {
@@ -633,5 +679,151 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     // The big number appears exactly once — not once as the tile's value and
     // again as a "9,006 posts" sub-line underneath it.
     expect(html.match(/9,006/g) ?? []).toHaveLength(1);
+  });
+});
+
+// QA finding 5 (/tmp/issues-t3-dashboard-current.md #5): "The dashboard
+// remains a very long unpaginated job wall at real data volume... Put
+// current work before the library and compact or paginate the library."
+describe("Library section order, row compaction, and library pagination (QA finding 5)", () => {
+  it("puts the active queue and other imports ahead of the account library, which renders last", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+
+    const { container, unmount } = renderLibraryToContainer(
+      createElement(
+        "section",
+        { "aria-label": "Other imports" },
+        createElement("h2", null, "Other imports"),
+      ),
+    );
+
+    const html = container.innerHTML;
+    const queueAt = html.indexOf("Active queue");
+    const otherImportsAt = html.indexOf("Other imports");
+    const recentAt = html.indexOf("Recent run history");
+    const libraryAt = html.indexOf("Account library");
+
+    expect(queueAt).toBeGreaterThan(-1);
+    expect(otherImportsAt).toBeGreaterThan(-1);
+    expect(recentAt).toBeGreaterThan(-1);
+    expect(libraryAt).toBeGreaterThan(-1);
+    // Active queue leads, other imports comes directly after it, and the
+    // (potentially 49-row) account library is last — never buried above
+    // the current-work sections the way it used to sit.
+    expect(queueAt).toBeLessThan(otherImportsAt);
+    expect(otherImportsAt).toBeLessThan(recentAt);
+    expect(recentAt).toBeLessThan(libraryAt);
+    unmount();
+  });
+
+  it("renders an account row as one compact line by default, with details behind 'Show history'", () => {
+    reset();
+
+    const row = makeRow({
+      accountId: accountId("acct-compact"),
+      handle: "compact",
+      name: "Compact Co",
+      publicationState: "failed",
+      searchablePostCount: { kind: "known", unit: "posts", value: 42 },
+      lastPublishedAt: Date.now(),
+      lastError: { message: "publish rejected: timeout", observedAt: Date.now() },
+      backfill: { status: "running", postsFound: 100, cursorUntil: "2020-01-01" },
+      latestJob: { jobId: jobId("job-compact"), status: "complete", updatedAt: Date.now() },
+    });
+
+    setQuery(api.library.rows, { rows: [row], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+
+    const { container, unmount } = renderLibraryToContainer();
+    const collapsedHtml = container.innerHTML;
+
+    // Always visible: identity, status badges, searchable count.
+    expect(collapsedHtml).toContain("@compact");
+    expect(collapsedHtml).toContain("Publication failed");
+    expect(collapsedHtml).toContain("42 posts");
+    // Publication notes stay collapsed until "Show history" is clicked.
+    expect(collapsedHtml).not.toContain("Last published");
+    expect(collapsedHtml).not.toContain("publish rejected: timeout");
+    expect(collapsedHtml).not.toContain("Older history");
+    expect(collapsedHtml).toContain("Show history");
+
+    expandAllRows(container);
+    const expandedHtml = container.innerHTML;
+
+    expect(expandedHtml).toContain("Last published");
+    expect(expandedHtml).toContain("publish rejected: timeout");
+    expect(expandedHtml).toContain("Older history");
+    expect(expandedHtml).toContain("Hide history");
+    unmount();
+  });
+
+  it("shows the completion caveat once above the list, not once per completed account", () => {
+    reset();
+
+    const rows = [
+      makeRow({
+        accountId: accountId("acct-a"),
+        handle: "aaa",
+        latestJob: { jobId: jobId("job-a"), status: "complete", updatedAt: Date.now() },
+      }),
+      makeRow({
+        accountId: accountId("acct-b"),
+        handle: "bbb",
+        latestJob: { jobId: jobId("job-b"), status: "complete", updatedAt: Date.now() },
+      }),
+      makeRow({
+        accountId: accountId("acct-c"),
+        handle: "ccc",
+        latestJob: { jobId: jobId("job-c"), status: "failed", updatedAt: Date.now() },
+      }),
+    ];
+
+    setQuery(api.library.rows, { rows, truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const html = renderLibrary();
+    // RecentActivity already carries its own copy of this note (a separate
+    // section, unaffected by this row-level dedupe) — the account library
+    // section itself must show it exactly once, not once per completed row.
+    const inAccountLibrary = html.slice(html.indexOf('id="account-library"'));
+
+    expect(
+      inAccountLibrary.match(
+        /"Download complete" means x\.md finished handing over what it had for this run/g,
+      ) ?? [],
+    ).toHaveLength(1);
+  });
+
+  it("paginates the account library to 20 rows by default, revealing more via 'Show more'", () => {
+    reset();
+
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      makeRow({
+        accountId: accountId(`acct-${i}`),
+        handle: `user${i}`,
+        name: `User ${i}`,
+      }),
+    );
+
+    setQuery(api.library.rows, { rows, truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+
+    const { container, unmount } = renderLibraryToContainer();
+    expect(container.querySelectorAll(".library-row").length).toBe(20);
+    const showMore = container.querySelector<HTMLButtonElement>(".library-show-more");
+
+    expect(showMore).not.toBeNull();
+    expect(showMore!.textContent).toContain("5 more");
+
+    act(() => showMore!.click());
+
+    expect(container.querySelectorAll(".library-row").length).toBe(25);
+    expect(container.querySelector(".library-show-more")).toBeNull();
+    unmount();
   });
 });

@@ -583,6 +583,16 @@
 .library-row-toggle {
   margin-left: auto;
 }
+/* One-line-row compaction (QA finding 5): everything behind "Show
+   history"/"Hide history" — publication notes, backfill progress, the
+   failure explanation, and the full run history. */
+.library-row-details {
+  display: grid;
+  gap: 8px;
+}
+.library-show-more {
+  justify-self: start;
+}
 
 /* Per-account history */
 .library-history {

@@ -56,8 +56,8 @@ export default function RecentActivity({
       <div className="library-section-head">
         <h2>Recent run history</h2>
         <p className="library-muted">
-          The most recent runs across your library. Expand an account above for its full history and
-          receipts. {DOWNLOAD_COMPLETE_CAVEAT}
+          The most recent runs across your library. Expand an account in the library below for its
+          full history and receipts. {DOWNLOAD_COMPLETE_CAVEAT}
         </p>
       </div>
       {recent.length === 0 ? (

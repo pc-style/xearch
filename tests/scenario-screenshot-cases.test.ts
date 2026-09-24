@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
 import { anyApi, getFunctionName } from "convex/server";
@@ -10,7 +11,8 @@ import type {
 } from "convex/server";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import type { MutationOptions, Watch, WatchQueryOptions } from "convex/react";
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import schema from "../convex/schema";
 import type { Id } from "../convex/_generated/dataModel";
@@ -95,14 +97,38 @@ const summaryQ = anyApi.summary.summary;
 
 const healthQ = anyApi.summary.health;
 
+// QA finding 5 (/tmp/issues-t3-dashboard-current.md #5) moved AccountRow's
+// publication notes (failure text, the "still-good corpus" note, the
+// "Download complete" caveat) behind its "Show history"/"Hide history"
+// toggle, collapsed by default. `renderToStaticMarkup` can't click anything,
+// so this mounts with `react-dom/client` instead and clicks the toggle
+// before reading the DOM — the row's default-collapsed state is exercised
+// separately by tests/library-ui.test.ts.
 function renderRow(row: AccountLibraryRow): string {
-  return renderToStaticMarkup(
-    createElement(
-      ConvexProvider,
-      { client: new FakeConvexClient() },
-      createElement(AccountRow, { row }),
-    ),
-  );
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  act(() => {
+    root.render(
+      createElement(
+        ConvexProvider,
+        { client: new FakeConvexClient() },
+        createElement(AccountRow, { row }),
+      ),
+    );
+  });
+
+  const toggle = container.querySelector<HTMLButtonElement>(".library-row-toggle");
+
+  if (toggle) act(() => toggle.click());
+
+  const html = container.innerHTML;
+
+  act(() => root.unmount());
+  container.remove();
+
+  return html;
 }
 
 async function seedOwner(t: ReturnType<typeof convexTest>) {
@@ -163,7 +189,12 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     console.log("CASE1 UI contains Retry action:", html.includes(">Retry<"));
     expect(html).toContain("x.md returned a malformed history page after 340 posts.");
     expect(html).toContain("340 records retained");
-    expect(html).not.toContain("Saving raw capture");
+    // The stale leftover `phase` field is legitimate as raw diagnostic
+    // context ("Last phase: Saving raw capture" inside the expanded run's
+    // own raw-diagnostics <details>, unchanged by this row's compaction) —
+    // what must never happen is it standing alone as if it were the actual
+    // outcome, which is what a bare tag-content match rules out.
+    expect(html).not.toContain(">Saving raw capture<");
     expect(html).toContain(">Retry<");
   });
 
@@ -222,9 +253,12 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(html).toContain("512 posts");
     expect(html).not.toContain("library-row-failure");
     // /tmp/issues.md item 2: "Download complete" must never stand alone as
-    // if it meant the account's entire X history was retrieved.
+    // if it meant the account's entire X history was retrieved. QA finding 5
+    // (/tmp/issues-t3-dashboard-current.md #5) moved the caveat that makes
+    // that explicit out of this per-row component and into a single
+    // section-level note in AccountLibrary.tsx (see tests/library-ui.test.ts
+    // "dedupe" coverage) — it no longer renders from AccountRow itself.
     expect(html).toContain("Download complete");
-    expect(html).toContain("means x.md finished handing over what it had for this run");
   });
 
   it("case 3: empty corpus — real zero from summary, empty account list, no invented numbers", async () => {

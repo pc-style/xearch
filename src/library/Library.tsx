@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { FunctionReturnType } from "convex/server";
 import { useConvexAuth, useConvexConnectionState, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
@@ -47,11 +48,20 @@ export default function Library({
   config,
   liveNow,
   onOpenQueue,
+  otherImports,
 }: {
   ensureSession: () => Promise<void>;
   config: OperatorConfig | undefined;
   liveNow: number;
   onOpenQueue: () => void;
+  // Dashboard.tsx's own "Other imports" section (non-account jobs), slotted
+  // in here rather than rendered as this component's sibling. QA finding 5
+  // (/tmp/issues-t3-dashboard-current.md #5) wants current work — the active
+  // queue, then other imports — ahead of the potentially 49-card account
+  // library, so the two must interleave in one DOM order instead of sitting
+  // in separate parent components that can't be reordered against each
+  // other.
+  otherImports?: ReactNode;
 }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
@@ -83,6 +93,15 @@ export default function Library({
         connected={connected}
         isAuthenticated={isAuthenticated}
       />
+      {/* QA finding 5: current work first. Active queue, then the
+          integrator's "Other imports" (non-account jobs), then the recent-
+          activity strip, with the potentially-49-row account library last —
+          previously the account library sat above the queue, burying the
+          one section that answers "what's happening right now" below the
+          entire job wall. */}
+      <ActiveQueue rows={allRows} isAuthenticated={isAuthenticated} onOpenQueue={onOpenQueue} />
+      {otherImports}
+      <RecentActivity rows={allRows} isAuthenticated={isAuthenticated} />
       <AccountLibrary
         isAuthenticated={isAuthenticated}
         connected={connected}
@@ -90,8 +109,6 @@ export default function Library({
           void ensureSession();
         }}
       />
-      <ActiveQueue rows={allRows} isAuthenticated={isAuthenticated} onOpenQueue={onOpenQueue} />
-      <RecentActivity rows={allRows} isAuthenticated={isAuthenticated} />
     </div>
   );
 }

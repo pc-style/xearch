@@ -337,61 +337,70 @@ export default function Dashboard({
               separately-ticking clocks would send slightly different `now`
               values, so the two queries would not actually share one Convex
               subscription the way the comment near this file's own `config`
-              declaration claims. */}
+              declaration claims.
+
+              QA finding 5 (/tmp/issues-t3-dashboard-current.md #5): "Other
+              imports" is passed in as `otherImports` rather than rendered as
+              <Library>'s sibling here, so it renders directly after the
+              active queue and ahead of the account library — <Library> owns
+              the actual section order (queue, other imports, recent
+              activity, account library last). */}
           <Library
             ensureSession={ensureSession}
             config={config}
             liveNow={liveNow}
             onOpenQueue={onOpenQueue}
+            otherImports={
+              <section className="control-feed" aria-label="Other imports">
+                <h2>Other imports</h2>
+                <p className="control-feed-note">
+                  Live searches, single posts, profiles, and follower/following lookups. These
+                  aren't account history imports, so they don't create or update a row in the
+                  account library below.
+                </p>
+                {/* B7: a checkbox that can never reveal anything is not worth
+                    showing — only offer it once something has actually run
+                    (dismissed or not). */}
+                {isAuthenticated && everRan && (
+                  <label className="control-feed-toggle">
+                    <input
+                      type="checkbox"
+                      checked={showDismissed}
+                      onChange={(e) => setShowDismissed(e.target.checked)}
+                    />
+                    Show runs I've cleared
+                  </label>
+                )}
+                {!isAuthenticated ? (
+                  <button
+                    onClick={async () => {
+                      try {
+                        await ensureSession();
+                      } catch {
+                        setMessage("Could not start your session.");
+                      }
+                    }}
+                  >
+                    Connect to my jobs
+                  </button>
+                ) : !jobs ? (
+                  <p>Loading jobs…</p>
+                ) : jobs.length === 0 ? (
+                  // B7: one compact line, same shape as the other three
+                  // "nothing here yet" states this dashboard can show at
+                  // once (account library, active queue, recent run
+                  // history) — not its own bigger headline.
+                  <p className="library-muted">
+                    {showDismissed
+                      ? "You haven't cleared any runs, and there are no others to show."
+                      : "Nothing else has run yet. Live searches, single posts, and profile/follower lookups will show up here."}
+                  </p>
+                ) : (
+                  jobs.map((job) => <Job key={job._id} job={job} isOperator={isOperator} />)
+                )}
+              </section>
+            }
           />
-          <section className="control-feed" aria-label="Other imports">
-            <h2>Other imports</h2>
-            <p className="control-feed-note">
-              Live searches, single posts, profiles, and follower/following lookups. These aren't
-              account history imports, so they don't create or update a row in the account library
-              above.
-            </p>
-            {/* B7: a checkbox that can never reveal anything is not worth
-                showing — only offer it once something has actually run
-                (dismissed or not). */}
-            {isAuthenticated && everRan && (
-              <label className="control-feed-toggle">
-                <input
-                  type="checkbox"
-                  checked={showDismissed}
-                  onChange={(e) => setShowDismissed(e.target.checked)}
-                />
-                Show runs I've cleared
-              </label>
-            )}
-            {!isAuthenticated ? (
-              <button
-                onClick={async () => {
-                  try {
-                    await ensureSession();
-                  } catch {
-                    setMessage("Could not start your session.");
-                  }
-                }}
-              >
-                Connect to my jobs
-              </button>
-            ) : !jobs ? (
-              <p>Loading jobs…</p>
-            ) : jobs.length === 0 ? (
-              // B7: one compact line, same shape as the other three "nothing
-              // here yet" states this dashboard can show at once (account
-              // library, active queue, recent run history) — not its own
-              // bigger headline.
-              <p className="library-muted">
-                {showDismissed
-                  ? "You haven't cleared any runs, and there are no others to show."
-                  : "Nothing else has run yet. Live searches, single posts, and profile/follower lookups will show up here."}
-              </p>
-            ) : (
-              jobs.map((job) => <Job key={job._id} job={job} isOperator={isOperator} />)
-            )}
-          </section>
         </div>
       </div>
     </main>
