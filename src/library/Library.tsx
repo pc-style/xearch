@@ -37,6 +37,11 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
   const summary = useQuery(summaryQuery, isAuthenticated ? { now } : "skip");
   const health = useQuery(healthQuery, isAuthenticated ? { now } : "skip");
   const limits = useQuery(limitsAllQuery, isAuthenticated ? {} : "skip");
+  // Feeds the merged Connections/Dependency health/Provider limits status
+  // block (B2 "one status block"). `Dashboard.tsx` also reads this same
+  // query for its own import-form gating — Convex serves identical
+  // query+args as one shared subscription, so this is not a second read.
+  const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
   // Unfiltered rows for the active-queue strip, independent of whatever
   // search/status filter is set inside <AccountLibrary>below. Same
   // convex/library.ts `rows` query, just a second live subscription with
@@ -56,6 +61,7 @@ export default function Library({ ensureSession }: { ensureSession: () => Promis
         summary={summary}
         health={health}
         limits={limits}
+        config={config}
         connected={connected}
         isAuthenticated={isAuthenticated}
       />

@@ -36,42 +36,33 @@ export function ConnectionsPanel() {
     {
       name: "Search service",
       ready: config?.search,
-      env: "SEARCH_API_URL, SEARCH_SERVICE_TOKEN",
       purpose: "Finds posts in your library",
     },
     receiverConnection(config?.collectorMode, handoffReady(config?.handoffState, now)),
     {
       name: "x.md",
       ready: config?.xmd,
-      env: "X_MD_API_KEY",
       purpose: "Account histories, live search, conversations",
     },
     {
       name: "Firecrawl",
       ready: config?.firecrawl,
-      env: "FIRECRAWL_API_KEY",
       purpose: "Reads pages linked in posts",
     },
     {
       name: "OpenAI",
       ready: config?.openai,
-      env: "OPENAI_API_KEY",
       purpose: "Turns a question into a clearer search",
     },
     {
       name: "AgentMail",
       ready: config?.email,
-      env: "AGENTMAIL_API_KEY, AGENTMAIL_INBOX_ID",
       purpose: "Emails search results",
     },
   ];
 
   return (
     <>
-      <p className="muted-copy">
-        Search is live once your data service returns results. The remaining connections are
-        optional improvements.
-      </p>
       {connections.map((c) => (
         <div className="connection-row" key={c.name}>
           <div>
@@ -92,7 +83,6 @@ export function ConnectionsPanel() {
                     : c.proves === "live"
                       ? "Not connected"
                       : "Not configured"}
-                  {c.env ? ` · ${c.env}` : ""}
                 </>
               )}
             </small>

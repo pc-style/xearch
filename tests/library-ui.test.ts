@@ -342,7 +342,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     expect(html).not.toContain("No accounts imported yet");
   });
 
-  it("renders provider limits honestly: none observed vs. a real throttle fact, never jobs.error", () => {
+  it("shows a real throttle fact, never jobs.error, and never a permanent 'no throttling' row (B2)", () => {
     reset();
     setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
@@ -364,20 +364,134 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(limitsAllQuery, limits);
     const html = renderLibrary();
     expect(html).toContain("Provider limits");
-    expect(html).toContain("No throttling reported");
     expect(html).toContain("Throttled on handoff");
     expect(html).toContain("Too many requests");
     expect(html).toContain("remaining allowance unknown");
+    // Only the actually-throttled provider gets a row — the two clear
+    // providers are not shown as a permanent "all fine" badge (B2 "hide
+    // provider limits unless something is actually throttled").
+    expect(html).not.toContain("No throttling reported");
   });
 
-  it("shows the provider-limits panel as loading, distinctly, before that query resolves", () => {
+  it("shows no provider-limits panel at all once nothing is throttled or while it is still loading (B2)", () => {
     reset();
     setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
-    // limitsAllQuery deliberately left unset in mockState.responses.
+    setQuery(limitsAllQuery, [
+      { kind: "none", provider: "xmd" },
+      { kind: "none", provider: "receiver" },
+      { kind: "none", provider: "search" },
+    ]);
+    const resolvedClear = renderLibrary();
+    expect(resolvedClear).not.toContain("Provider limits");
+
+    // limitsAllQuery deliberately left unset for this render -> still loading.
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const stillLoading = renderLibrary();
+    expect(stillLoading).not.toContain("Provider limits");
+  });
+
+  it("renders one merged status block with connections, health, and no env var names (B2)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
     const html = renderLibrary();
-    expect(html).toContain("Provider limits");
-    expect(html).toContain("x.md: loading…");
+    expect(html).toContain("Status");
+    expect(html).toContain("x.md");
+    expect(html).toContain("AgentMail");
+    expect(html).not.toContain("SEARCH_API_URL");
+    expect(html).not.toContain("X_MD_API_KEY");
+    expect(html).not.toContain("AGENTMAIL_API_KEY");
+    // The old duplicated disclaimer paragraphs (B1) are gone.
+    expect(html).not.toContain("Health is an observed fact");
+    expect(html).not.toContain("Configuration status, not a live health check");
+  });
+
+  it("labels the download worker by liveness, never by 'Configured'/'Not configured' (coordinator follow-up)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const baseConfig = {
+      indexing: true,
+      search: true,
+      firecrawl: true,
+      openai: true,
+      email: true,
+      xmd: true,
+      collectorMode: "outbound" as const,
+    };
+
+    setQuery(api.integrations.operator, {
+      ...baseConfig,
+      handoff: true,
+      handoffState: { kind: "live" as const, lastSeenAt: Date.now() },
+    });
+    const online = renderLibrary();
+    expect(online).toContain("Online");
+    expect(online).not.toContain("Not configured");
+
+    const lastSeenAt = Date.now() - 5 * 60_000;
+    setQuery(api.integrations.operator, {
+      ...baseConfig,
+      handoff: false,
+      handoffState: { kind: "live" as const, lastSeenAt },
+    });
+    const offline = renderLibrary();
+    expect(offline).toContain("Offline since");
+    // A real configuration fact (x.md's key being set) must still say
+    // "Configured" — only the worker's own liveness row switches vocabulary.
+    expect(offline).toContain("Configured");
+    expect(offline).not.toContain("Not connected");
+  });
+
+  it("hides a queued-work tile until the indexer actually reports that unit, and shows it once it does (A4)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(healthQuery, makeHealth());
+    // Default fixture: every providerQueuedWork unit is "unknown" — nothing
+    // has ever reported pendingWork. None of the three tiles should render.
+    setQuery(summaryQuery, makeSummary());
+    const hidden = renderLibrary();
+    expect(hidden).not.toContain("Queued posts");
+    expect(hidden).not.toContain("Queued captures");
+    expect(hidden).not.toContain("Queued indexer jobs");
+    expect(hidden).not.toContain("not yet known");
+
+    // Once one unit is actually reported (even as a known 0), only that
+    // tile appears — the other two, still never reported, stay hidden.
+    setQuery(
+      summaryQuery,
+      makeSummary({
+        providerQueuedWork: {
+          posts: { kind: "known", unit: "posts", value: 12 },
+          captures: { kind: "unknown", unit: "captures" },
+          jobs: { kind: "unknown", unit: "jobs" },
+        },
+      }),
+    );
+    const oneKnown = renderLibrary();
+    expect(oneKnown).toContain("Queued posts");
+    expect(oneKnown).not.toContain("Queued captures");
+    expect(oneKnown).not.toContain("Queued indexer jobs");
+  });
+
+  it("never repeats a stat tile's own number on a second line (A3)", () => {
+    reset();
+    setQuery(api.library.rows, { rows: [], truncated: false });
+    setQuery(healthQuery, makeHealth());
+    setQuery(
+      summaryQuery,
+      makeSummary({ indexedPosts: { kind: "known", unit: "posts", value: 9_006 } }),
+    );
+    const html = renderLibrary();
+    // The big number appears exactly once — not once as the tile's value and
+    // again as a "9,006 posts" sub-line underneath it.
+    expect(html.match(/9,006/g) ?? []).toHaveLength(1);
   });
 });
