@@ -50,13 +50,34 @@ if (!process.env.CONVEX_DEPLOYMENT) {
 
 const state = convexRun("jobs:discoveryState");
 
+if (APPLY && state.truncated) {
+  console.error(
+    "Discovery state is truncated (too many indexed accounts or jobs); refusing --apply.",
+  );
+  process.exit(1);
+}
+
 const posts = [];
+
+const seenPostIds = new Set();
 
 for (const name of await readdir(DIR)) {
   if (!name.endsWith(".json")) continue;
 
   try {
-    posts.push(...postsInCapture(JSON.parse(await readFile(join(DIR, name), "utf8"))));
+    // A retry can save an acknowledged capture and requeue the same page
+    // under a different `attempt`, so the same post can appear in more than
+    // one capture file. Count it once, by its own id.
+    for (const post of postsInCapture(JSON.parse(await readFile(join(DIR, name), "utf8")))) {
+      const id = post?.id;
+
+      if (id !== undefined) {
+        if (seenPostIds.has(String(id))) continue;
+        seenPostIds.add(String(id));
+      }
+
+      posts.push(post);
+    }
   } catch (cause) {
     console.error(`skipping ${name}: ${cause instanceof Error ? cause.message : String(cause)}`);
   }

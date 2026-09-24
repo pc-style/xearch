@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
-import { api, internal } from "../convex/_generated/api";
+import { internal } from "../convex/_generated/api";
+import * as jobs from "../convex/jobs";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -54,8 +55,9 @@ describe("automatic discovery", () => {
   });
 
   it("is not reachable as a public function", () => {
-    // `api.jobs` exposes the public surface only; the discovery entry point
-    // must not be on it.
-    expect(Object.hasOwn(api.jobs, "startDiscovered")).toBe(false);
+    expect(jobs.startDiscovered.isInternal).toBe(true);
+    expect(jobs.discoveryState.isInternal).toBe(true);
+    // Control: a public mutation reports the opposite property.
+    expect(jobs.start.isPublic).toBe(true);
   });
 });

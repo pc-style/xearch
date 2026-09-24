@@ -160,9 +160,24 @@ CONVEX_DEPLOYMENT=prod:utmost-kudu-321 node scripts/discover-accounts.mjs
 CONVEX_DEPLOYMENT=prod:utmost-kudu-321 node scripts/discover-accounts.mjs --apply
 ```
 
-It goes through `convex run` on internal functions, so it needs the deploy
-key the VM already uses and neither a browser session nor the operator token.
-`deploy/systemd/xearch-discover.timer` runs it hourly once enabled
+It goes through `convex run` on internal functions, which needs a
+`CONVEX_DEPLOY_KEY`, not just the deployment name: `Environment=CONVEX_DEPLOYMENT`
+in the unit names the target but proves nothing to Convex. Provision it once:
+
+```sh
+install -d -m 700 ~/xearch-data/logs
+touch ~/xearch-data/discover.env      # never truncates an existing file
+chmod 600 ~/xearch-data/discover.env
+# then edit it; one KEY=value per line, no quotes, no `export`:
+#   CONVEX_DEPLOY_KEY=<the deploy key>
+install -m 600 deploy/systemd/xearch-discover.service deploy/systemd/xearch-discover.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+```
+
+`deploy/systemd/xearch-discover.service` loads that file with
+`EnvironmentFile=-%h/xearch-data/discover.env`; the leading `-` means a missing
+file is not an error, but the run then fails for lack of a credential.
+`deploy/systemd/xearch-discover.timer` runs the service hourly once enabled
 (`systemctl --user enable --now xearch-discover.timer`); it logs to
 `~/xearch-data/logs/discover.log`. Enabling the timer is a deliberate step:
 every run can start paid imports.

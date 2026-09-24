@@ -315,24 +315,41 @@ export const start = mutation({
 // the operator token, and it never becomes a public entry point. The job it
 // writes is tagged so the dashboard can say where it came from.
 
+const DISCOVERY_INDEXED_LIMIT = 1000;
+
+const DISCOVERY_JOBS_LIMIT = 5000;
+
 /** What the discovery script needs in one read: who is indexed, what is already queued or imported. */
 export const discoveryState = internalQuery({
   args: {},
   returns: v.object({
     indexed: v.array(v.string()),
     existingInputs: v.array(v.string()),
+    // True when either read below hit its cap, so the caller saw only part
+    // of the indexed accounts or the existing jobs. `rankInteractions` builds
+    // its exclusion set from `indexed`/`existingInputs`, so a truncated read
+    // can rank an already-indexed or already-queued account as a target.
+    truncated: v.boolean(),
   }),
   handler: async (ctx) => {
-    const accounts = await ctx.db.query("accounts").withIndex("by_handle").take(1000);
+    const accounts = await ctx.db
+      .query("accounts")
+      .withIndex("by_handle")
+      .take(DISCOVERY_INDEXED_LIMIT + 1);
 
     const jobs = await ctx.db
       .query("jobs")
       .withIndex("by_kind", (q) => q.eq("kind", "bulk"))
-      .take(5000);
+      .take(DISCOVERY_JOBS_LIMIT + 1);
 
     return {
-      indexed: accounts.map((account) => account.handle.toLowerCase()),
-      existingInputs: [...new Set(jobs.map((job) => job.input.toLowerCase()))],
+      indexed: accounts
+        .slice(0, DISCOVERY_INDEXED_LIMIT)
+        .map((account) => account.handle.toLowerCase()),
+      existingInputs: [
+        ...new Set(jobs.slice(0, DISCOVERY_JOBS_LIMIT).map((job) => job.input.toLowerCase())),
+      ],
+      truncated: accounts.length > DISCOVERY_INDEXED_LIMIT || jobs.length > DISCOVERY_JOBS_LIMIT,
     };
   },
 });
@@ -381,7 +398,12 @@ export const startDiscovered = internalMutation({
       .withIndex("by_handle", (q) => q.eq("handle", input))
       .take(2);
 
-    const account = candidates.length === 1 ? candidates[0] : null;
+    // Already indexed, under either handle-ambiguity outcome: discovery only
+    // exists to import accounts that are not in the library yet. The caller's
+    // `indexed` set (from `discoveryState`) should already have excluded this
+    // handle, but that read can be truncated, so check the server's own state
+    // rather than trusting the caller.
+    if (candidates.length > 0) return null;
 
     const id = await ctx.db.insert("jobs", {
       owner: await discoveryOwner(ctx),
@@ -391,7 +413,6 @@ export const startDiscovered = internalMutation({
       autoContinue: true,
       pages: 0,
       postsReceived: 0,
-      expectedUserId: account?.userId,
       status: "queued",
       count: 0,
       attempt: 0,

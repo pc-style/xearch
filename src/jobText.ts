@@ -337,14 +337,12 @@ export function discoveredVia(
 ): string {
   if (!job || job.origin !== "discovered") return "";
   const from = job.discoveredFrom ?? [];
-  const total = from.reduce((sum, f) => sum + f.interactions, 0);
+  const shown = from.slice(0, 3);
+  const total = shown.reduce((sum, f) => sum + f.interactions, 0);
 
-  const names = from
-    .slice(0, 3)
-    .map((f) => `@${f.handle}`)
-    .join(", ");
+  const names = shown.map((f) => `@${f.handle}`).join(", ");
 
   return names
-    ? `Discovered via ${names} (${total} interactions)`
+    ? `Discovered via ${names} (${total} ${total === 1 ? "interaction" : "interactions"})`
     : "Discovered from interactions with indexed accounts";
 }

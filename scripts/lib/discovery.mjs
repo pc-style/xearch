@@ -59,16 +59,18 @@ export function rankInteractions(posts, { indexed, exclude, minInteractions }) {
       .map((r) => normalizeHandle(r?.screen_name))
       .filter((h) => h && indexedSet.has(h));
 
-    const from = author && indexedSet.has(author) ? author : reposters[0];
+    const sources = author && indexedSet.has(author) ? [author] : reposters;
 
-    if (!from) continue;
+    if (!sources.length) continue;
 
-    for (const target of interactionsOf(post)) {
-      if (target === from || indexedSet.has(target) || excludeSet.has(target)) continue;
-      const entry = counts.get(target) ?? { handle: target, interactions: 0, from: new Map() };
-      entry.interactions += 1;
-      entry.from.set(from, (entry.from.get(from) ?? 0) + 1);
-      counts.set(target, entry);
+    for (const from of sources) {
+      for (const target of interactionsOf(post)) {
+        if (target === from || indexedSet.has(target) || excludeSet.has(target)) continue;
+        const entry = counts.get(target) ?? { handle: target, interactions: 0, from: new Map() };
+        entry.interactions += 1;
+        entry.from.set(from, (entry.from.get(from) ?? 0) + 1);
+        counts.set(target, entry);
+      }
     }
   }
 
