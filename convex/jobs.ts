@@ -1230,8 +1230,14 @@ async function maybeStartHistoryBackfill(
   ctx: MutationCtx,
   owner: Id<"users">,
   account: Doc<"accounts">,
-  oldest: string | undefined,
+  oldestRaw: string | undefined,
 ): Promise<void> {
+  // The worker reports `oldest` as the post's full ISO timestamp
+  // ("2026-03-30T03:03:36.000Z"); the window math below works in whole UTC
+  // days. Take the date part — a bare-date check on the raw value would
+  // silently skip every real bulk import, and no backfill would ever start.
+  const oldest = oldestRaw?.slice(0, 10);
+
   if (!isValidDate(oldest)) return;
 
   const existing = await ctx.db
