@@ -47,10 +47,34 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   const currentRun = job && history?.find((h) => h.jobId === job.jobId);
   const stateMeta = PUBLICATION_STATE_META[row.publicationState];
   const hasGoodCorpus = row.searchablePostCount.kind === "known";
-  const stalled = job ? isStalledRun(job.status, job.updatedAt) : false;
+
+  // /tmp/issues.md item 1: a completed base import's own "Download
+  // complete · Last run 11m ago" badge/line used to keep showing even while
+  // this same account had an older-history backfill actively downloading
+  // (row.historyJob, a DIFFERENT job than row.latestJob's base import — see
+  // convex/lib/contracts.ts's own comment on `historyJob`) — a person had no
+  // way to tell, from the headline alone, that anything was still running.
+  // Only ever set when the backfill window job is actually queued/running,
+  // so a stopped/complete backfill still leaves the base import's own badge
+  // and "Last run" line as the headline (its own outcome is described by
+  // `backfillSummary` below either way).
+  const activeHistoryJob =
+    row.historyJob && (row.historyJob.status === "queued" || row.historyJob.status === "running")
+      ? row.historyJob
+      : undefined;
+
+  const stalled = activeHistoryJob
+    ? isStalledRun(activeHistoryJob.status, activeHistoryJob.updatedAt)
+    : job
+      ? isStalledRun(job.status, job.updatedAt)
+      : false;
 
   return (
-    <article className="library-row">
+    // `id` is a plain in-page anchor target (no scroll effect, no state) for
+    // the Queue timeline's "Show in dashboard" link
+    // (src/library/QueueTimeline.tsx) — the browser's own `#hash` navigation
+    // does the scrolling, so this needs nothing beyond the id existing.
+    <article className="library-row" id={`account-${row.accountId}`}>
       <div className="library-row-head">
         <div className="library-identity">
           {row.avatar ? (
@@ -67,10 +91,16 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         </div>
         <div className="library-row-badges">
           <Badge tone={stateMeta.tone}>{stateMeta.label}</Badge>
-          {job && (
-            <Badge tone={acquisitionStatusTone(job.status)}>
-              {acquisitionStatusLabel(job.status)}
+          {activeHistoryJob ? (
+            <Badge tone={acquisitionStatusTone(activeHistoryJob.status)}>
+              Downloading older history
             </Badge>
+          ) : (
+            job && (
+              <Badge tone={acquisitionStatusTone(job.status)}>
+                {acquisitionStatusLabel(job.status)}
+              </Badge>
+            )
           )}
         </div>
       </div>
@@ -90,12 +120,23 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         <span>
           Searchable posts: <strong>{countWithUnit(row.searchablePostCount)}</strong>
         </span>
-        {job && (
+        {/* The one state line follows whichever job is actually the newest
+            activity on this account: the backfill window while it's running,
+            else the base import. "Last published" lives in the expanded
+            details (compact row). */}
+        {activeHistoryJob ? (
           <span>
-            {job.status === "running" || job.status === "queued" ? "Downloading" : "Last run"}{" "}
-            {formatRelative(job.updatedAt)}
+            Downloading older history {formatRelative(activeHistoryJob.updatedAt)}
             {stalled && " — no update in over 10m, may be stalled"}
           </span>
+        ) : (
+          job && (
+            <span>
+              {job.status === "running" || job.status === "queued" ? "Downloading" : "Last run"}{" "}
+              {formatRelative(job.updatedAt)}
+              {stalled && " — no update in over 10m, may be stalled"}
+            </span>
+          )
         )}
       </div>
 
@@ -105,14 +146,30 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
           busy={busy}
           onRetry={(jobId) => act(() => retry({ jobId, ...operatorArgs() }))}
         />
-        {job && (job.status === "running" || job.status === "queued") && (
-          <button
-            disabled={busy}
-            onClick={() => act(() => cancel({ jobId: job.jobId, ...operatorArgs() }))}
-          >
-            Stop
-          </button>
-        )}
+        {/* Stops whichever job is actually the active one — the backfill
+            window while it's running, else the base import — matching the
+            headline badge/"Last run" line above. Without this, a running
+            backfill (base import already "complete") had no Stop control at
+            all: the old condition only ever looked at `job` (the base
+            import). Computed as one value rather than a `||`/`??` chain in
+            the JSX itself so `onClick` never needs a non-null assertion to
+            reach back into that chain. */}
+        {(() => {
+          const stoppableJob =
+            activeHistoryJob ??
+            (job && (job.status === "running" || job.status === "queued") ? job : undefined);
+
+          return (
+            stoppableJob && (
+              <button
+                disabled={busy}
+                onClick={() => act(() => cancel({ jobId: stoppableJob.jobId, ...operatorArgs() }))}
+              >
+                Stop
+              </button>
+            )
+          );
+        })()}
         <button
           className="library-row-toggle"
           aria-expanded={expanded}

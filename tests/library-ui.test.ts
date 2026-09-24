@@ -469,6 +469,55 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     stoppedRender.unmount();
   });
 
+  // /tmp/issues.md items 1 and 2: Theo's base import reads "Download
+  // complete · Last run 11m ago" while an older-history backfill is
+  // actively downloading behind it, and the Active queue strip says
+  // "Nothing is downloading right now" for the exact same account at the
+  // exact same moment — because it only ever looked at `latestJob` (always
+  // the base "bulk" import; convex/lib/accounts.ts ACCOUNT_JOB_KIND), never
+  // `historyJob` (the backfill's own current window job).
+  it("shows a running deep-history backfill in the Active queue and as the account row's own headline, even though its own base import is already complete", () => {
+    reset();
+
+    const theo = makeRow({
+      accountId: accountId("acct-theo"),
+      handle: "theo",
+      name: "Theo",
+      searchablePostCount: { kind: "known", unit: "posts", value: 5_138 },
+      latestJob: {
+        jobId: jobId("base-import"),
+        status: "complete",
+        updatedAt: Date.now() - 11 * 60_000,
+      },
+      historyJob: {
+        jobId: jobId("history-window"),
+        status: "running",
+        updatedAt: Date.now() - 30_000,
+        since: "2025-11-01",
+        until: "2025-12-01",
+      },
+      backfill: {
+        status: "running",
+        postsFound: 0,
+        cursorUntil: "2025-11-01",
+      },
+    });
+
+    setQuery(api.library.rows, { rows: [theo], truncated: false });
+    setQuery(summaryQuery, makeSummary());
+    setQuery(healthQuery, makeHealth());
+    const html = renderLibrary();
+
+    // The Active queue strip now includes this account, labelled with its
+    // handle and the backfill's own dated window.
+    expect(html).not.toContain("Nothing is downloading right now.");
+    expect(html).toContain("@theo");
+    expect(html).toContain("older history 2025-11 → 2025-12");
+    // The account row's own headline reflects the backfill, not the base
+    // import's stale "Download complete" state.
+    expect(html).toContain("Downloading older history");
+  });
+
   it("renders an explicit unauthenticated/offline-from-data state", () => {
     reset();
     mockState.isAuthenticated = false;
