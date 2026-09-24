@@ -6,6 +6,7 @@ import {
   countUnitValidator,
   jobStatusValidator,
   historyBackfillStatusValidator,
+  jobOriginValidator,
 } from "../schema";
 
 /**
@@ -209,9 +210,12 @@ export const accountLibraryRowValidator = v.object({
       postsReceived: v.optional(v.number()),
       oldest: v.optional(v.string()),
       floorReached: v.optional(v.boolean()),
-      // Present when the run was queued by automatic discovery; see
-      // convex/jobs.ts `startDiscovered`.
-      origin: v.optional(v.union(v.literal("manual"), v.literal("discovered"))),
+      // Present when the run was queued by automatic discovery (see
+      // convex/jobs.ts `startDiscovered`) or by the deep-history backfill
+      // (`origin: "history"`, convex/jobs.ts `insertHistoryWindowJob`) — the
+      // one place this literal set is declared, reused here rather than
+      // copied so the two can never drift apart.
+      origin: v.optional(jobOriginValidator),
       discoveredFrom: v.optional(
         v.array(v.object({ handle: v.string(), interactions: v.number() })),
       ),

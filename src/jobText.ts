@@ -342,7 +342,12 @@ export function describeRunOutcome(run: {
 export function discoveredVia(
   job:
     | {
-        origin?: "manual" | "discovered";
+        // Widened to every value convex/schema.ts `jobOriginValidator` can
+        // hold (not just "manual" | "discovered"): callers pass a full
+        // `Doc<"jobs">` through, whose `origin` can also be "history" (a
+        // deep-history backfill window) — this only ever checks for
+        // "discovered", so the extra literal changes nothing here.
+        origin?: "manual" | "discovered" | "history";
         discoveredFrom?: { handle: string; interactions: number }[];
       }
     | null
