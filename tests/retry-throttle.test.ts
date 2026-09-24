@@ -58,6 +58,11 @@ function stoppedJob(t: Awaited<ReturnType<typeof setup>>["t"], owner: Id<"users"
       retryable: true,
       warnings: [],
       updatedAt: Date.now(),
+      // Identity already pinned from an earlier attempt (this run already
+      // has `count: 3` posts) — jobs.ts `nextXmdOperations` reads this to
+      // know the job's NEXT call is "history"/"bulk", not "profile" again,
+      // matching the "history" operation the throttle fixtures below use.
+      expectedUserId: "1234567890",
     }),
   );
 }
@@ -148,6 +153,71 @@ describe("jobs.retry respects an active x.md throttle", () => {
     const retried = await t.run((ctx) => ctx.db.get(jobId));
 
     expect(retried?.readyAt).toBe(resetAt);
+  });
+
+  // CodeRabbit #4091329853: a throttle on a DIFFERENT x.md operation (e.g.
+  // "search", from an unrelated live-search job) must not delay this job's
+  // retry just because both happen to go through the same provider.
+  it("ignores a throttle recorded for an unrelated x.md operation", async () => {
+    const { t, operator } = await setup();
+    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const jobId = await stoppedJob(t, owner); // "bulk" with identity pinned -> next op is history/bulk
+    const observedAt = Date.now();
+    // An unrelated job's "search" throttle, exhausted and far in the future
+    // — would dominate an unscoped, provider-wide lookup.
+    await t.run((ctx) =>
+      ctx.db.insert("providerThrottleEvents", {
+        provider: "xmd",
+        operation: "search",
+        reason: "Throttled on search",
+        remaining: 0,
+        resetAt: observedAt + 30 * 60_000,
+        observedAt,
+      }),
+    );
+
+    await operator.mutation(api.jobs.retry, { jobId });
+
+    const retried = await t.run((ctx) => ctx.db.get(jobId));
+
+    expect(retried?.readyAt).toBe(0);
+    expect(retried?.phase).toBe("Retry queued");
+  });
+
+  // A "bulk" job that has not yet pinned an account id will call "profile"
+  // next, not "history"/"bulk" — a throttle on the wrong one of those must
+  // not apply either.
+  it('a bulk job without a pinned identity is scoped to "profile", not "history"', async () => {
+    const { t, operator } = await setup();
+    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
+    const jobId = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner,
+        kind: "bulk",
+        input: "newaccount",
+        refresh: false,
+        status: "failed",
+        count: 0,
+        attempt: 1,
+        retryable: true,
+        warnings: [],
+        updatedAt: Date.now(),
+        // No expectedUserId: this run never got past pinning identity.
+      }),
+    );
+
+    const observedAt = Date.now();
+    await throttleEvent(t, jobId, { remaining: 0, observedAt, resetAt: observedAt + 60_000 });
+
+    await operator.mutation(api.jobs.retry, { jobId });
+
+    // The fixture's throttle is recorded under "history" (this file's
+    // default), which is not what an identity-less "bulk" job calls next —
+    // so it must be ignored, same as any other unrelated operation.
+    const retried = await t.run((ctx) => ctx.db.get(jobId));
+
+    expect(retried?.readyAt).toBe(0);
   });
 
   it("retries immediately when no throttle has ever been observed", async () => {

@@ -1,6 +1,7 @@
 import { v, type Infer } from "convex/values";
 import { query } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { user } from "./access";
 import { throttleProviderValidator } from "./schema";
 
@@ -99,6 +100,28 @@ export const providerLimitValidator = v.union(
 
 export type ProviderLimit = Infer<typeof providerLimitValidator>;
 
+function toProviderLimit(
+  provider: (typeof PROVIDERS)[number],
+  latest: Doc<"providerThrottleEvents"> | undefined,
+): ProviderLimit {
+  if (!latest) return { kind: "none", provider };
+
+  return {
+    kind: "throttled",
+    provider: latest.provider,
+    operation: latest.operation,
+    reason: latest.reason,
+    remaining:
+      latest.remaining !== undefined
+        ? { kind: "known", value: latest.remaining }
+        : { kind: "unknown" },
+    resetAt: latest.resetAt,
+    nextRetryAt:
+      latest.retryAfterMs !== undefined ? latest.observedAt + latest.retryAfterMs : undefined,
+    observedAt: latest.observedAt,
+  };
+}
+
 // Exported so convex/jobs.ts `retry` can read the exact same fact the
 // dashboard's "Provider limits" panel shows, rather than a second
 // independent read of `providerThrottleEvents` that could drift from it.
@@ -116,22 +139,46 @@ export async function loadProviderLimit(
     .take(RECENT_WINDOW);
 
   if (recent.length === 0) return { kind: "none", provider };
-  const latest = recent.reduce((a, b) => (b.observedAt > a.observedAt ? b : a));
 
-  return {
-    kind: "throttled",
-    provider: latest.provider,
-    operation: latest.operation,
-    reason: latest.reason,
-    remaining:
-      latest.remaining !== undefined
-        ? { kind: "known", value: latest.remaining }
-        : { kind: "unknown" },
-    resetAt: latest.resetAt,
-    nextRetryAt:
-      latest.retryAfterMs !== undefined ? latest.observedAt + latest.retryAfterMs : undefined,
-    observedAt: latest.observedAt,
-  };
+  return toProviderLimit(
+    provider,
+    recent.reduce((a, b) => (b.observedAt > a.observedAt ? b : a)),
+  );
+}
+
+/**
+ * Like `loadProviderLimit`, but scoped to one or more specific x.md
+ * operations (e.g. the exact call the retried job is about to make next)
+ * rather than the provider's single most recent event across every
+ * operation it serves.
+ *
+ * CodeRabbit #4091329853: `jobs.retry` originally used `loadProviderLimit`
+ * unscoped, so a throttle observed on one operation (say "search", from an
+ * unrelated live-search job) could delay a manual retry of a completely
+ * different job doing "history" — the two share a provider but not a rate
+ * limit window. Restricting the candidate rows to the operation(s) the
+ * retried job will actually perform next is what makes the deadline mean
+ * something for THAT retry specifically.
+ */
+export async function loadProviderLimitForOperations(
+  ctx: QueryCtx | MutationCtx,
+  provider: (typeof PROVIDERS)[number],
+  operations: readonly string[],
+): Promise<ProviderLimit> {
+  const recent = await ctx.db
+    .query("providerThrottleEvents")
+    .withIndex("by_provider", (q) => q.eq("provider", provider))
+    .order("desc")
+    .take(RECENT_WINDOW);
+
+  const matching = recent.filter((event) => operations.includes(event.operation));
+
+  if (matching.length === 0) return { kind: "none", provider };
+
+  return toProviderLimit(
+    provider,
+    matching.reduce((a, b) => (b.observedAt > a.observedAt ? b : a)),
+  );
 }
 
 // The current throttle status for one provider. Requires a signed-in user

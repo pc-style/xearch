@@ -7,7 +7,7 @@ import { internal } from "./_generated/api";
 import { kindValidator, throttleProviderValidator } from "./schema";
 import schema from "./schema";
 import { user, requireOperator } from "./access";
-import { activeThrottleUntil, loadProviderLimit } from "./limits";
+import { activeThrottleUntil, loadProviderLimitForOperations } from "./limits";
 import { handle, statusUrl } from "./lib/xmd";
 import { canonicalQuery } from "./lib/search";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
@@ -147,6 +147,32 @@ function utcHHMM(at: number): string {
   const date = new Date(at);
 
   return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")} UTC`;
+}
+
+/**
+ * The x.md operation name(s) (convex/lib/xmd.ts's `operation` — the string
+ * `providerThrottleEvents.operation` is recorded under) that this job's
+ * NEXT attempt will call. Matches convex/lib/collect.ts's own dispatch:
+ * "live" reads under "search", every other read kind reads under its own
+ * name, and "bulk" calls "profile" first (to pin identity) and then
+ * "history" (json, this Convex action's own path — see collect.ts's
+ * `historyPage`) or "bulk" (ndjson, the outbound worker's own streaming
+ * path) once identity is already pinned. `job.expectedUserId` being set is
+ * exactly the signal collect.ts itself uses to know identity is already
+ * pinned, so a "bulk" job with one only re-reads "profile" if something
+ * upstream forces it to — which does not happen — so both later operations
+ * are included as candidates rather than guessing which format this run
+ * used (convex/jobs.ts never stores that; see collect.ts's `historyPage`
+ * grouping "history"/"bulk" under the same timeout for the same reason).
+ *
+ * Used only to scope a manual retry's throttle check (CodeRabbit
+ * #4091329853) to the call this specific job is actually about to make,
+ * not the provider's single most recent event across every operation.
+ */
+function nextXmdOperations(job: Pick<Doc<"jobs">, "kind" | "expectedUserId">): string[] {
+  if (job.kind === "bulk") return job.expectedUserId ? ["history", "bulk"] : ["profile"];
+
+  return [job.kind === "live" ? "search" : job.kind];
 }
 
 export const start = mutation({
@@ -410,14 +436,17 @@ export const retry = mutation({
     // Every job kind fetches through x.md (convex/lib/xmd.ts), so that is
     // the one provider whose throttle state a manual retry needs to check —
     // "receiver"/"search" are about this app's own services, not the
-    // provider a job's own calls go through. Reusing convex/limits.ts's
-    // `loadProviderLimit` reads the exact same fact the dashboard's
-    // "Provider limits" panel already shows, instead of a second read that
-    // could disagree with it. This respects a provider-reported limit, the
-    // one kind AGENTS.md's "Rate limiting" section allows — it adds no
-    // self-imposed cap.
+    // provider a job's own calls go through. Scoped to the operation(s)
+    // THIS job will actually call next (`nextXmdOperations`), not the
+    // provider's single most recent event across every operation
+    // (CodeRabbit #4091329853): an unrelated job's "search" throttle must
+    // not delay a "history" retry just because both happen to go through
+    // x.md. This respects a provider-reported limit, the one kind
+    // AGENTS.md's "Rate limiting" section allows — it adds no self-imposed
+    // cap.
     const now = Date.now();
-    const throttledUntil = activeThrottleUntil(await loadProviderLimit(ctx, "xmd"), now);
+    const limit = await loadProviderLimitForOperations(ctx, "xmd", nextXmdOperations(job));
+    const throttledUntil = activeThrottleUntil(limit, now);
     const readyAt = throttledUntil ?? 0;
 
     await ctx.db.patch(jobId, {
