@@ -465,7 +465,7 @@ export default function App() {
   const start = useMutation(api.jobs.start),
     retry = useMutation(api.jobs.retry),
     cancelJob = useMutation(api.jobs.cancel),
-    dismissJob = useMutation(api.jobs.dismiss),
+    dismissInput = useMutation(api.jobs.dismissInput),
     bookmark = useMutation(api.search.bookmark),
     save = useMutation(api.search.save),
     removeSaved = useMutation(api.search.removeSaved),
@@ -1264,7 +1264,7 @@ export default function App() {
             {/* Repeat runs of the exact same input (e.g. every past click of
                 "Retry" before convex/jobs.ts grew an in-place retry mutation)
                 fold into one row — see dedupeJobsByInput's own comment. */}
-            {dedupeJobsByInput(jobs).map(({ job, earlierCount, earlierIds }) => (
+            {dedupeJobsByInput(jobs).map(({ job, earlierCount }) => (
               <JobRow
                 key={job._id}
                 job={job}
@@ -1285,14 +1285,14 @@ export default function App() {
                   await retry({ jobId: j._id });
                 }}
                 // Dismiss the WHOLE folded group, not just the one visible
-                // row: `jobs.list` excludes dismissed jobs by default, so
-                // clearing only `j._id` would surface the next-newest
-                // earlier run of this same input on the very next render
-                // instead of actually clearing the list (CodeRabbit, PR
-                // #52) — see dedupeJobsByInput's own `earlierIds` comment.
+                // row: `jobs.dismissInput` walks every job for this exact
+                // (kind, input) server-side, so it isn't limited to whatever
+                // page `jobs.list` happened to hand this component (see its
+                // own comment in convex/jobs.ts for why a client-side id
+                // list isn't enough once a group has 21+ runs in it).
                 onDismiss={async (j) => {
                   await ensureSession();
-                  await Promise.all([j._id, ...earlierIds].map((jobId) => dismissJob({ jobId })));
+                  await dismissInput({ kind: j.kind, input: j.input });
                 }}
               />
             ))}

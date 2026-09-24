@@ -431,6 +431,50 @@ export const dismiss = mutation({
   },
 });
 
+// A duplicate-input group (src/jobText.ts `dedupeJobsByInput`) can hold more
+// runs than any one page of `jobs.list` (JOB_FEED_LIMIT) ever returns, and
+// with 21+ of them for the same kind+input, a client that only knows the ids
+// on its current page can dismiss those and nothing else — the next-newest
+// run outside that page then resurfaces on the very next render instead of
+// the group actually clearing (found on 4144bcd, which dismissed by id from
+// `dedupeJobsByInput`'s own `earlierIds`, itself bounded by the same page).
+// This walks every job for the exact (kind, input) server-side instead, so
+// the count of terminal runs dismissed is never limited by what the caller
+// happened to have loaded.
+const DISMISS_INPUT_SCAN = 2_000;
+
+export const dismissInput = mutation({
+  args: { kind: kindValidator, input: v.string() },
+  returns: v.number(),
+  handler: async (ctx, { kind, input }) => {
+    await requireOperator(ctx);
+
+    let dismissed = 0;
+    let scanned = 0;
+
+    // `by_input` is (kind, input, status): binding only its first two
+    // columns is a valid partial-prefix query, matching every status for
+    // this exact request the same way convex/jobs.ts `start`'s own repeat-
+    // request lookup reuses this same index.
+    for await (const job of ctx.db
+      .query("jobs")
+      .withIndex("by_input", (q) => q.eq("kind", kind).eq("input", input))) {
+      if (++scanned > DISMISS_INPUT_SCAN) break;
+
+      // Same terminal-status guard as `dismiss` above: an active run is left
+      // untouched rather than silently hidden while it still spends
+      // provider allowance with nothing left in the UI to stop it.
+      if (job.status === "queued" || job.status === "running") continue;
+
+      if (job.dismissedAt !== undefined) continue;
+      await ctx.db.patch(job._id, { dismissedAt: Date.now() });
+      dismissed++;
+    }
+
+    return dismissed;
+  },
+});
+
 export const restore = mutation({
   args: { jobId: v.id("jobs") },
   returns: v.null(),

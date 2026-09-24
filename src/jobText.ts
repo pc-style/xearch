@@ -1,4 +1,4 @@
-import type { Doc, Id } from "../convex/_generated/dataModel";
+import type { Doc } from "../convex/_generated/dataModel";
 import type { JobStatus } from "../convex/lib/contracts";
 
 export function jobLabel(job: Doc<"jobs">) {
@@ -179,14 +179,18 @@ export function jobPhaseDetail(job: Doc<"jobs">, now: number): string {
 export type DedupedJobRow = {
   job: Doc<"jobs">;
   earlierCount: number;
-  /** Every OTHER job folded into this row (same kind+input, older) — never
-   * includes `job` itself. `jobs.list` excludes dismissed jobs by default,
-   * so dismissing only `job._id` would surface the next-newest of these on
-   * the very next render (CodeRabbit, PR #52): a caller's "Clear from list"
-   * must dismiss the whole group, not just the row it can currently see. */
-  earlierIds: Id<"jobs">[];
 };
 
+// Display-only: how many older runs of this exact (kind, input) are folded
+// behind the visible one — see src/JobRow.tsx's "Technical details" line.
+// Never used to decide WHICH ids "Clear from list" dismisses: `jobs.list`
+// only ever hands this function one page (JOB_FEED_LIMIT), so a caller-side
+// id list here is bounded by that page too. With 21+ duplicate runs of the
+// same input, dismissing only the ids on the current page left the
+// next-newest one outside it and it resurfaced right back on the next
+// render (found on 4144bcd). `jobs.dismissInput` fixes that server-side by
+// walking every job for the exact (kind, input) regardless of what any one
+// page returned — see its own comment in convex/jobs.ts.
 export function dedupeJobsByInput(jobs: Doc<"jobs">[]): DedupedJobRow[] {
   const rows = new Map<string, DedupedJobRow>();
 
@@ -194,10 +198,8 @@ export function dedupeJobsByInput(jobs: Doc<"jobs">[]): DedupedJobRow[] {
     const key = `${job.kind}:${job.input}`;
     const existing = rows.get(key);
 
-    if (existing) {
-      existing.earlierCount += 1;
-      existing.earlierIds.push(job._id);
-    } else rows.set(key, { job, earlierCount: 0, earlierIds: [] });
+    if (existing) existing.earlierCount += 1;
+    else rows.set(key, { job, earlierCount: 0 });
   }
 
   return [...rows.values()];

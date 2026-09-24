@@ -182,6 +182,73 @@ describe("clearing finished runs", () => {
   });
 });
 
+describe("dismissInput (clearing a whole duplicate group at once)", () => {
+  // Regression: a client that only knows the ids on its current page of
+  // `jobs.list` (JOB_FEED_LIMIT, currently 20) can't dismiss what it never
+  // loaded — found on commit 4144bcd, which dismissed by a client-collected
+  // id list and left anything past the first page behind. `dismissInput`
+  // walks every job for the exact (kind, input) server-side instead, so the
+  // count dismissed is never limited by what any one page returned.
+  it("dismisses every terminal run of the same kind+input, however many there are, and never touches a running one", async () => {
+    const { t, alice, a } = await setup();
+    const DUPLICATE_COUNT = 25;
+
+    const ids = await Promise.all(
+      Array.from({ length: DUPLICATE_COUNT }, (_, i) =>
+        insertJob(t, alice, {
+          input: "@theo",
+          kind: "live",
+          status: i % 2 === 0 ? "failed" : "complete",
+        }),
+      ),
+    );
+
+    // A currently-active run for the exact same input must survive: hiding
+    // it would make it unstoppable from the UI while it still spends
+    // provider allowance (the same guard `jobs.dismiss` applies).
+    const running = await insertJob(t, alice, { input: "@theo", kind: "live", status: "running" });
+
+    // A different input/kind must be untouched by this call.
+    const other = await insertJob(t, alice, { input: "@convex", kind: "live", status: "failed" });
+
+    const dismissedCount = await a.mutation(api.jobs.dismissInput, {
+      kind: "live",
+      input: "@theo",
+    });
+
+    expect(dismissedCount).toBe(DUPLICATE_COUNT);
+
+    for (const id of ids) {
+      const job = await t.run((ctx) => ctx.db.get(id));
+
+      expect(job?.dismissedAt).toBeDefined();
+    }
+
+    const stillRunning = await t.run((ctx) => ctx.db.get(running));
+
+    expect(stillRunning?.dismissedAt).toBeUndefined();
+
+    const untouched = await t.run((ctx) => ctx.db.get(other));
+
+    expect(untouched?.dismissedAt).toBeUndefined();
+
+    // Nothing was deleted — same contract as the single-job `dismiss`.
+    expect(await t.run((ctx) => ctx.db.query("jobs").collect())).toHaveLength(DUPLICATE_COUNT + 2);
+  });
+
+  it("refuses an anonymous (non-operator) caller", async () => {
+    const { t, alice } = await setup();
+
+    await insertJob(t, alice, { input: "@theo", kind: "live", status: "failed" });
+    const anon = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const guest = t.withIdentity({ subject: `${anon}|session` });
+
+    await expect(
+      guest.mutation(api.jobs.dismissInput, { kind: "live", input: "@theo" }),
+    ).rejects.toThrow();
+  });
+});
+
 describe("an account whose every run was cleared", () => {
   it("keeps its library row and its published counts, and simply reports no latest run", async () => {
     const { t, alice, a } = await setup();
