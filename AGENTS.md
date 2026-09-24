@@ -42,6 +42,20 @@ does not prove observability works. Keep self-driving PR creation behind Adam's
 approval, with no more than three Xearch self-driving PRs per month across the
 old and new PostHog projects.
 
+PostHog access and build configuration:
+
+- The ignored `.env.production.local` holds `VITE_POSTHOG_KEY` and
+  `VITE_POSTHOG_HOST` (`https://eu.i.posthog.com`) for VM frontend builds.
+- The private `/home/exedev/xearch-data/posthog-build.env` holds
+  `POSTHOG_CLI_API_KEY` for source-map uploads. Never print or commit its value.
+- GitHub Actions uses repository variables `VITE_POSTHOG_KEY` and
+  `VITE_POSTHOG_HOST`, plus the `POSTHOG_CLI_API_KEY` repository secret, for
+  production static-hosting deploys.
+- Claude Code has a user-scoped PostHog MCP at `https://mcp.posthog.com/mcp`.
+  Check it with `claude mcp get posthog`; if disconnected, run
+  `claude mcp login --no-browser posthog` and authenticate as the account with
+  access to EU project `283153`. Keep OAuth redirect URLs out of Git and chat.
+
 <!-- convex-ai-start -->
 
 This project uses [Convex](https://convex.dev) as its backend.
