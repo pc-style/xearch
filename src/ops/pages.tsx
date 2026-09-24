@@ -1236,20 +1236,29 @@ function JobRow(props: {
     const j = job();
     const now = ops.now();
 
+    // A job's creation time is when it was queued, not when it ran: a retry
+    // days later starts a new attempt on the same row. Only the attempt's
+    // own start (`attemptStartedAt`, stamped when the worker claims it) can
+    // say how long it ran; jobs from before that field exists have no
+    // honest run time, so none is shown for them.
+    const started = j.attemptStartedAt ?? j._creationTime;
+
     switch (state()) {
       case "waiting":
         return `queued ${ago(now - j._creationTime)}`;
       case "running":
-        return `started ${ago(now - j._creationTime)} · ${props.info?.finish ? `done ≈ ${clock(props.info.finish)}` : "estimate unavailable"}`;
+        return `started ${ago(now - started)} · ${props.info?.finish ? `done ≈ ${clock(props.info.finish)}` : "estimate unavailable"}`;
       case "stalled":
         return (
           <>
-            started {ago(now - j._creationTime)} ·{" "}
+            started {ago(now - started)} ·{" "}
             <span class="crit">no progress {dur(now - j.updatedAt)}</span>
           </>
         );
       default:
-        return `${ago(now - j.updatedAt)} · ran ${dur(j.updatedAt - j._creationTime)}`;
+        return j.attemptStartedAt === undefined
+          ? ago(now - j.updatedAt)
+          : `${ago(now - j.updatedAt)} · ran ${dur(j.updatedAt - j.attemptStartedAt)}`;
     }
   };
 

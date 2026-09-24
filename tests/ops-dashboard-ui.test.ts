@@ -421,6 +421,37 @@ describe("accounts", () => {
 });
 
 describe("jobs", () => {
+  it("measures a finished job's run time from its attempt, not from when it was queued", async () => {
+    const now = Date.now();
+
+    const ops = await open("jobs", {
+      jobs: [
+        // Queued four days ago, retried an hour ago, failed after 12 minutes.
+        job(1, {
+          status: "failed",
+          error: "boom",
+          _creationTime: now - 4 * DAY,
+          attemptStartedAt: now - HOUR - 12 * MINUTE,
+          updatedAt: now - HOUR,
+        }),
+        // From before attempts were stamped: no honest run time exists.
+        job(2, {
+          status: "failed",
+          error: "boom",
+          _creationTime: now - 4 * DAY,
+          updatedAt: now - HOUR,
+        }),
+      ],
+    });
+
+    const row = (n: number) => ops.find(`tr[data-job=${jobId(n)}]`).textContent ?? "";
+
+    expect(row(1)).toContain("ran 12 min");
+    expect(row(1)).not.toContain("ran 4 d");
+    expect(row(2)).toContain("1 h ago");
+    expect(row(2)).not.toContain("ran ");
+  });
+
   it("splits active from history and maps each state to its actions", async () => {
     const now = Date.now();
 
