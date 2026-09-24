@@ -196,10 +196,19 @@ export function createAuthClient({
     }
 
     // Another tab signed in or out: follow it, without writing back (the
-    // write is what fired this event).
+    // write is what fired this event). Another tab refreshing the same
+    // identity's token is not an identity change: take the new token
+    // without bumping `identity`, as this tab's own refresh does.
     const onStorage = (event: StorageEvent) => {
-      if (event.storageArea === storage && event.key === key(JWT_KEY))
-        setToken(event.newValue === null ? null : { token: event.newValue }, false);
+      if (event.storageArea !== storage || event.key !== key(JWT_KEY)) return;
+
+      if (event.newValue !== null && token !== null && sameSubject(token, event.newValue)) {
+        token = event.newValue;
+
+        return;
+      }
+
+      setToken(event.newValue === null ? null : { token: event.newValue }, false);
     };
 
     // Leaving mid-refresh can strand the refresh token; ask first.
@@ -217,6 +226,30 @@ export function createAuthClient({
   });
 
   return { isLoading, isAuthenticated: hasToken, identity, fetchAccessToken, signIn, signOut };
+}
+
+/** The JWT's `sub` claim, or null when it can't be read. */
+function subjectOf(jwt: string): string | null {
+  try {
+    const payload = jwt.split(".")[1];
+
+    if (!payload) return null;
+
+    const claims: { sub?: string } = JSON.parse(
+      atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
+    );
+
+    return claims.sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Both tokens name the same, readable subject. */
+function sameSubject(a: string, b: string): boolean {
+  const subject = subjectOf(a);
+
+  return subject !== null && subject === subjectOf(b);
 }
 
 /** Run `fn` as the only tab doing so (the Web Locks API, where available). */

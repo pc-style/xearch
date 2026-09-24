@@ -94,14 +94,11 @@ export const clock = (ms: number) =>
 
 // --- Accounts ----------------------------------------------------------------
 
-/** When new posts for this account last arrived: a finished import, or the
- * indexer publishing it, whichever is later. */
+/** When new posts for this account were last collected: its last finished
+ * import. A publication is not a collection, so the indexer's publish time
+ * stands in only for an account with no run on record at all. */
 export function lastRefresh(a: OpsAccount): number | undefined {
-  const times = [a.lastCompletedAt, a.publication?.lastPublishedAt].filter(
-    (t): t is number => t !== undefined,
-  );
-
-  return times.length ? Math.max(...times) : undefined;
+  return hasRunRecord(a) ? a.lastCompletedAt : a.publication?.lastPublishedAt;
 }
 
 export const searchable = (a: OpsAccount) => a.publication?.searchablePostCount ?? 0;
@@ -581,7 +578,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       key: `stale-${a.accountId}`,
       s: "warn",
       title: `@${a.handle} last refreshed ${Math.round((now - refreshed) / DAY)} days ago`,
-      detail: `Nothing newer than ${day(refreshed)} has been collected. Searches for recent ${a.name} posts return nothing after that.`,
+      detail:
+        a.lastCompletedAt !== undefined
+          ? `Nothing newer than ${day(refreshed)} has been collected. Searches for recent ${a.name} posts return nothing after that.`
+          : `No import is on record; the indexer last published it on ${day(refreshed)}. Searches for recent ${a.name} posts return nothing after that.`,
       actions: [
         { kind: "refresh", label: "Refresh now", primary: true, handle: a.handle },
         ...(hasSearchable(a)

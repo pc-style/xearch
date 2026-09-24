@@ -7,6 +7,7 @@ import {
   jobStatusValidator,
   historyBackfillStatusValidator,
   jobOriginValidator,
+  discoveredFromValidator,
 } from "../schema";
 
 /**
@@ -216,9 +217,7 @@ export const accountLibraryRowValidator = v.object({
       // one place this literal set is declared, reused here rather than
       // copied so the two can never drift apart.
       origin: v.optional(jobOriginValidator),
-      discoveredFrom: v.optional(
-        v.array(v.object({ handle: v.string(), interactions: v.number() })),
-      ),
+      discoveredFrom: v.optional(v.array(discoveredFromValidator)),
     }),
   ),
   nextAction: nextActionValidator,

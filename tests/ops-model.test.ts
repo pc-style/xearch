@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   accountState,
+  attentionItems,
+  type AttentionInput,
   coverage,
   jobState,
   jobTarget,
@@ -13,6 +15,16 @@ import {
 import { account, DAY, emptyTimeline, HOUR, job, jobId, liveWorker, MINUTE } from "./opsFixtures";
 
 const now = Date.now();
+
+const attentionInput: AttentionInput = {
+  now,
+  jobs: [],
+  accounts: [],
+  summary: undefined,
+  health: undefined,
+  limit: undefined,
+  config: undefined,
+};
 
 describe("account status", () => {
   it("reads a running first import, a failed import, indexing and staleness in that order", () => {
@@ -115,6 +127,47 @@ describe("totals", () => {
         now,
       ),
     ).toEqual({ total: 5, complete: 1, history: 1, newer: 1, none: 1, unrecorded: 1 });
+  });
+
+  it("does not treat a recent indexer publication as newly collected posts", () => {
+    const importedLongAgo = account(1, {
+      lastCompletedAt: now - 30 * DAY,
+      publication: {
+        state: "searchable",
+        searchablePostCount: 5,
+        lastPublishedAt: now - DAY,
+        updatedAt: now - DAY,
+      },
+    });
+
+    expect(accountState(importedLongAgo, now)).toEqual({ s: "warn", t: "Stale · 30 d" });
+
+    const item = attentionItems({ ...attentionInput, accounts: [importedLongAgo] }).find((i) =>
+      i.key.startsWith("stale-"),
+    );
+
+    expect(item?.detail).toContain("Nothing newer than");
+    expect(item?.detail).toContain("has been collected");
+  });
+
+  it("words a publication time as one when no import is on record", () => {
+    const unrecorded = account(1, {
+      latestRun: undefined,
+      lastCompletedAt: undefined,
+      publication: {
+        state: "searchable",
+        searchablePostCount: 5,
+        lastPublishedAt: now - 30 * DAY,
+        updatedAt: now - 30 * DAY,
+      },
+    });
+
+    const item = attentionItems({ ...attentionInput, accounts: [unrecorded] }).find((i) =>
+      i.key.startsWith("stale-"),
+    );
+
+    expect(item?.detail).toContain("the indexer last published it");
+    expect(item?.detail).not.toContain("has been collected");
   });
 
   it("does not call a searchable account with no indexer count empty", () => {

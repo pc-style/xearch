@@ -7,8 +7,13 @@
 //   than the caller's includeStats choice — client telemetry is always
 //   populated once a search runs.
 import { describe, expect, it } from "vitest";
+import { ResultsHead } from "../src/ResultsSection";
+import { ViewMode } from "../src/uiState";
+import { mount } from "./solid";
 import {
+  configured,
   frontendStats,
+  noop,
   post,
   renderHead,
   renderResults as render,
@@ -109,5 +114,49 @@ describe("operator authorization boundary in the results UI", () => {
 
     expect(html).toContain("example.com</span>");
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*example\.com/);
+  });
+});
+
+describe("email availability copy in the results menu", () => {
+  it("says email isn't set up only when the deployment reports it off", () => {
+    expect(renderHead({ configured: { ...configured, email: false } })).toContain(
+      "Email isn't set up on this deployment.",
+    );
+  });
+
+  it("says nothing while the configuration is still loading, and keeps the button disabled", () => {
+    const html = renderHead({ configured: undefined });
+
+    expect(html).not.toContain("Email isn't set up");
+    expect(html).toMatch(
+      /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Email these results/,
+    );
+  });
+});
+
+describe("opening Bookmarks", () => {
+  it("moves focus to the Bookmarks heading", () => {
+    const mounted = mount(ResultsHead, {
+      view: ViewMode.Bookmarks,
+      raw: "",
+      account: undefined,
+      alreadySaved: false,
+      busy: false,
+      queryError: "",
+      hasUsableResults: false,
+      configured,
+      isOperator: true,
+      emailNeedsSignIn: false,
+      onBack: noop,
+      onSave: noop,
+      onCopy: noop,
+      onEmail: noop,
+      onWebContext: noop,
+      onLiveSearch: noop,
+    });
+
+    expect(document.activeElement?.textContent).toBe("Bookmarks");
+    expect(document.activeElement?.getAttribute("tabindex")).toBe("-1");
+    mounted.unmount();
   });
 });

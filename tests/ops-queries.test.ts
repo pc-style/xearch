@@ -114,6 +114,24 @@ describe("ops.accounts", () => {
       });
     });
 
+    // The window that moved `cursorUntil` to 2018-01-01 is still running:
+    // only its `until` has been reached so far.
+    const windowJob = await t.run((ctx) =>
+      ctx.db.insert(
+        "jobs",
+        jobFields(userId, {
+          kind: "live",
+          input: "from:bob since:2018-01-01 until:2018-04-01",
+          origin: "history",
+          historyFor: bob,
+          since: "2018-01-01",
+          until: "2018-04-01",
+          status: "running",
+          updatedAt: now,
+        }),
+      ),
+    );
+
     const { rows, truncated } = await a.query(api.ops.accounts, {});
 
     expect(truncated).toBe(false);
@@ -129,14 +147,22 @@ describe("ops.accounts", () => {
     expect(row.joined).toBe("2012-03-01");
     expect(row.latestRun).toMatchObject({ status: "failed", error: "x.md 502", refresh: true });
     expect(row.lastCompletedAt).toBe(now - 2 * HOUR);
-    // The backfill has walked back to 2018-01-01, past the run's 2019 floor.
-    expect(row.oldestCollected).toBe("2018-01-01");
+    // The running window has reached 2018-04-01, past the run's 2019 floor,
+    // but not yet the 2018-01-01 its launch already wrote to `cursorUntil`.
+    expect(row.oldestCollected).toBe("2018-04-01");
     expect(row.backfill).toMatchObject({ status: "running", postsFound: 40 });
     expect(row.publication).toMatchObject({
       state: "searchable",
       searchablePostCount: 3100,
       pendingWork: { unit: "captures", count: 2 },
     });
+
+    // Once that window finishes, its `since` has been walked.
+    await t.run((ctx) => ctx.db.patch(windowJob, { status: "complete" }));
+
+    const after = (await a.query(api.ops.accounts, {})).rows.find((r) => r.handle === "bob")!;
+
+    expect(after.oldestCollected).toBe("2018-01-01");
   });
 });
 

@@ -76,9 +76,10 @@ Rotation is genuinely two separate steps — republishing the operator site (whi
 ```sh
 NEW=$(openssl rand -hex 32)
 OLD=$(grep -oP '(?<=VITE_OPERATOR_TOKEN=).*' ~/xearch-data/operator.env)
-CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set OPERATOR_TOKEN_PREVIOUS "$OLD"
-CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set OPERATOR_TOKEN "$NEW"
+printf '%s' "$OLD" | CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set OPERATOR_TOKEN_PREVIOUS
+printf '%s' "$NEW" | CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set OPERATOR_TOKEN
 sed -i "s/^VITE_OPERATOR_TOKEN=.*/VITE_OPERATOR_TOKEN=$NEW/" ~/xearch-data/operator.env
+unset NEW OLD
 bash scripts/deploy-operator-site.sh   # republishes with the new token baked in
 CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env unset OPERATOR_TOKEN_PREVIOUS   # once the republish above is confirmed live
 ```
@@ -86,10 +87,11 @@ CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env unset OPERATOR_TOKEN_PREV
 **Simple, accepting the gap** — skip `OPERATOR_TOKEN_PREVIOUS`; republish first (the outgoing bundle's old token stops matching for however long it takes `convex env set` to run right after), or set `OPERATOR_TOKEN` first (every operator site load fails the token path, falling back to the allowlist, until the republish below lands):
 
 ```sh
-openssl rand -hex 32   # new token
-$EDITOR ~/xearch-data/operator.env   # replace VITE_OPERATOR_TOKEN=... with the new value
+NEW=$(openssl rand -hex 32)   # kept in a variable, never printed
+sed -i "s/^VITE_OPERATOR_TOKEN=.*/VITE_OPERATOR_TOKEN=$NEW/" ~/xearch-data/operator.env
 bash scripts/deploy-operator-site.sh   # rebuilds and republishes with the new token baked in
-CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set OPERATOR_TOKEN
+printf '%s' "$NEW" | CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set OPERATOR_TOKEN   # stdin, not argv
+unset NEW
 ```
 
 Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. Browser visual checks were unavailable during deployment.

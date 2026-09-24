@@ -3,6 +3,7 @@ import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
   conversationLabel,
   dedupeJobsByInput,
+  discoveredVia,
   exactClockTime,
   historyWindowLabel,
   historyWindowRange,
@@ -203,5 +204,15 @@ describe("dedupeJobsByInput", () => {
     expect(rows[0]!.job).toBe(newest);
     expect(rows[0]!.earlierCount).toBe(2);
     expect(rows[1]!.earlierCount).toBe(0);
+  });
+});
+
+describe("discoveredVia", () => {
+  it("totals every source, not only the three it names", () => {
+    const discoveredFrom = ["a", "b", "c", "d"].map((handle) => ({ handle, interactions: 10 }));
+
+    expect(discoveredVia({ origin: "discovered", discoveredFrom })).toBe(
+      "Discovered via @a, @b, @c (40 interactions)",
+    );
   });
 });

@@ -36,7 +36,6 @@ import {
   searchable,
   searchablePosts,
   searchableTotal,
-  searchableUncounted,
   shortId,
   sortJobs,
   throttledUntil,
@@ -1019,7 +1018,8 @@ export function AccountsPage(props: Props) {
                           </Show>
                         </td>
                         <td class="num">
-                          {searchableUncounted(a) ? (
+                          {/* No count reported is unknown, not 0 (convex/library.ts). */}
+                          {a.publication?.searchablePostCount === undefined ? (
                             <span class="faint" title="The indexer has not reported a count">
                               unknown
                             </span>
@@ -1652,8 +1652,9 @@ export function ProviderPage(props: Props) {
           <Show when={limit()} fallback={<Loading />}>
             <big>
               {until() !== undefined ? "Limited" : "Available"}
-              <Show when={remaining()}>
-                {(left) => <span class="unit"> {n(left())} calls left</span>}
+              {/* 0 is the case that matters most, so test for a value, not truthiness. */}
+              <Show when={remaining() !== undefined}>
+                <span class="unit"> {n(remaining()!)} calls left</span>
               </Show>
             </big>
             <div class="d">

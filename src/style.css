@@ -1462,7 +1462,7 @@ dialog::backdrop {
     animation: none !important;
   }
   .flow {
-    overflow-x: auto;
+    overflow: auto;
   }
   .r,
   .pop,

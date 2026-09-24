@@ -167,10 +167,11 @@ export const refresh = internalAction({
 
     // Every request failed: nothing new was learned, so leave the wall as is.
     if (handles.length && failed === handles.length) return null;
-    const rows = pickWall(perAccount);
 
-    // Keep the last wall rather than blanking the home page.
-    if (rows.length) await ctx.runMutation(internal.wall.replace, { rows });
+    // Otherwise the result is authoritative, even when empty: no accounts
+    // left, or every successful search came back with no posts (a failed
+    // account already kept its previous posts above).
+    await ctx.runMutation(internal.wall.replace, { rows: pickWall(perAccount) });
 
     return null;
   },

@@ -163,7 +163,43 @@ describe("wall.refresh / wall.posts", () => {
     expect(authors.has("user249")).toBe(true);
   });
 
+  it("empties the wall when every search succeeds with no posts", async () => {
+    vi.stubEnv("SEARCH_API_URL", "https://search.test/v1/search");
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("accounts", { handle: "openai", userId: "2", name: "OpenAI" });
+      await ctx.db.insert("wallPosts", { ...post("openai", "1", 5), rank: 0 });
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ rows: [] }), { status: 200 })),
+    );
+
+    await t.action(internal.wall.refresh, {});
+
+    expect(await t.query(api.wall.posts, {})).toEqual([]);
+  });
+
+  it("empties the wall when no accounts remain", async () => {
+    vi.stubEnv("SEARCH_API_URL", "https://search.test/v1/search");
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("wallPosts", { ...post("openai", "1", 5), rank: 0 });
+    });
+
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await t.action(internal.wall.refresh, {});
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(await t.query(api.wall.posts, {})).toEqual([]);
+  });
+
   it("does nothing when search isn't configured", async () => {
+    vi.stubEnv("SEARCH_API_URL", "");
     const t = convexTest(schema, modules);
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);

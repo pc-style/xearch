@@ -45,7 +45,7 @@ export function interactionsOf(post) {
  * `indexed` are the handles already in the library; `exclude` are handles a
  * bulk import already exists for (any state). Only posts authored by an
  * indexed account count, and a post reposted by an indexed account counts
- * for that reposter.
+ * for that reposter as one interaction with the original author only.
  */
 export function rankInteractions(posts, { indexed, exclude, minInteractions }) {
   const indexedSet = new Set([...indexed].map((h) => h.toLowerCase()));
@@ -59,12 +59,17 @@ export function rankInteractions(posts, { indexed, exclude, minInteractions }) {
       .map((r) => normalizeHandle(r?.screen_name))
       .filter((h) => h && indexedSet.has(h));
 
-    const sources = author && indexedSet.has(author) ? [author] : reposters;
+    const authored = Boolean(author && indexedSet.has(author));
+    const sources = authored ? [author] : reposters;
 
     if (!sources.length) continue;
 
+    // A reposter only interacted with the original author; the post's own
+    // replies and mentions are the author's, not the reposter's.
+    const targets = authored ? interactionsOf(post) : new Set(author ? [author] : []);
+
     for (const from of sources) {
-      for (const target of interactionsOf(post)) {
+      for (const target of targets) {
         if (target === from || indexedSet.has(target) || excludeSet.has(target)) continue;
         const entry = counts.get(target) ?? { handle: target, interactions: 0, from: new Map() };
         entry.interactions += 1;
