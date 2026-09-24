@@ -24,11 +24,14 @@ import ProviderLimits from "../src/library/ProviderLimits";
  */
 
 const modules = import.meta.glob("../convex/**/*.ts");
+
 const limitsAll = anyApi.limits.all;
+
 const limitsCurrent = anyApi.limits.current;
 
 async function withUser(t: ReturnType<typeof convexTest>) {
   const userId: Id<"users"> = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return t.withIdentity({ subject: `${userId}|session` });
 }
 
@@ -117,6 +120,7 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
       reason: "x.md rate limit reached: 429 from /v2/history.",
       remaining: { kind: "known", value: 3 },
     });
+
     if (result.kind !== "throttled") throw new Error("expected throttled");
     expect(result.nextRetryAt).toBe(observedAt + 30_000);
 
@@ -125,6 +129,7 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
       { kind: "none", provider: "receiver" },
       { kind: "none", provider: "search" },
     ]);
+
     const expectedRetryText = new Date(observedAt + 30_000).toLocaleTimeString();
     console.log(
       "PART2 rendered UI contains real reason:",
@@ -164,6 +169,7 @@ describe("scenario: provider throttling — real reason/retry, unknown allowance
       { kind: "none", provider: "receiver" },
       result as ProviderLimit,
     ]);
+
     console.log(
       "PART3 rendered UI contains 'remaining allowance unknown':",
       html.includes("remaining allowance unknown"),

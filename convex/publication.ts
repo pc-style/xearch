@@ -41,8 +41,10 @@ function publicationServiceToken(env: Record<string, string | undefined> = proce
 
 function bearerToken(request: Request): string | undefined {
   const header = request.headers.get("Authorization");
+
   if (!header) return undefined;
   const [scheme, ...rest] = header.split(" ");
+
   return scheme === "Bearer" && rest.length > 0 ? rest.join(" ") : undefined;
 }
 
@@ -65,9 +67,11 @@ function json(body: unknown, status: number): Response {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
+
 // No unlisted key survives shape-checking, at any level of the envelope.
 // applyUpdate's `args` (below) is `publicationUpdateEnvelope.fields`, a
 // strict Convex object validator that throws an uncaught error on any key
@@ -79,12 +83,17 @@ function isStringArray(value: unknown): value is string[] {
 // same field list `applyUpdate` uses, is what keeps "unknown shape -> 400"
 // true instead of "unknown shape -> uncaught exception".
 const ENVELOPE_KEYS = new Set(Object.keys(publicationUpdateEnvelope.fields));
+
 const PENDING_WORK_KEYS = new Set(["unit", "count"]);
+
 const ERROR_KEYS = new Set(["message", "code"]);
+
 function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
 }
+
 const REPORTED_STATES = new Set(["indexing", "searchable", "failed"]);
+
 const PENDING_WORK_UNITS = new Set(["jobs", "captures", "posts"]);
 
 export // A count of things is a non-negative integer. Applies to uniquePostCount and
@@ -95,33 +104,53 @@ function isCount(value: unknown): value is number {
 
 function parseEnvelope(body: unknown): PublicationUpdateEnvelope | null {
   if (!isRecord(body)) return null;
+
   if (!hasOnlyKeys(body, ENVELOPE_KEYS)) return null;
+
   if (body.version !== 1) return null;
+
   if (typeof body.handle !== "string" || body.handle.length === 0) return null;
+
   if (!isStringArray(body.captureIds)) return null;
+
   if (typeof body.generation !== "number" || !Number.isFinite(body.generation)) return null;
+
   if (typeof body.reportedState !== "string" || !REPORTED_STATES.has(body.reportedState))
     return null;
+
   if (typeof body.observedAt !== "number" || !Number.isFinite(body.observedAt)) return null;
+
   if (body.providerAccountId !== undefined && typeof body.providerAccountId !== "string")
     return null;
+
   if (body.runId !== undefined && typeof body.runId !== "string") return null;
+
   if (body.uniquePostCount !== undefined && !isCount(body.uniquePostCount)) return null;
+
   if (body.uniquePostCountAsOf !== undefined && typeof body.uniquePostCountAsOf !== "number")
     return null;
+
   if (body.pendingWork !== undefined) {
     if (!isRecord(body.pendingWork)) return null;
+
     if (!hasOnlyKeys(body.pendingWork, PENDING_WORK_KEYS)) return null;
+
     if (typeof body.pendingWork.unit !== "string" || !PENDING_WORK_UNITS.has(body.pendingWork.unit))
       return null;
+
     if (!isCount(body.pendingWork.count)) return null;
   }
+
   if (body.error !== undefined) {
     if (!isRecord(body.error)) return null;
+
     if (!hasOnlyKeys(body.error, ERROR_KEYS)) return null;
+
     if (typeof body.error.message !== "string") return null;
+
     if (body.error.code !== undefined && typeof body.error.code !== "string") return null;
   }
+
   return body as PublicationUpdateEnvelope;
 }
 
@@ -133,11 +162,13 @@ export const receiveUpdate = httpAction(async (ctx, request) => {
   // staleness". A missing token configuration fails closed too: an
   // unconfigured receiver is never treated as an open one.
   const expected = publicationServiceToken();
+
   if (!expected || bearerToken(request) !== expected) {
     return json({ outcome: "rejected_unauthorized" }, 401);
   }
 
   let body: unknown;
+
   try {
     body = await request.json();
   } catch {
@@ -145,6 +176,7 @@ export const receiveUpdate = httpAction(async (ctx, request) => {
   }
 
   const envelope = parseEnvelope(body);
+
   if (!envelope)
     return json({ error: "Request body does not match publicationUpdateEnvelope." }, 400);
 
@@ -222,14 +254,17 @@ export const applyUpdate = internalMutation({
         "rejected_invalid",
         'A "failed" update must include an error.',
       );
+
       return {
         outcome: "rejected_invalid" as const,
         rejectionReason: 'A "failed" update must include an error.',
       };
     }
+
     if (args.uniquePostCount !== undefined && args.uniquePostCountAsOf === undefined) {
       const reason = "uniquePostCountAsOf is required whenever uniquePostCount is present.";
       await logUpdate(ctx, args, receivedAt, undefined, "rejected_invalid", reason);
+
       return { outcome: "rejected_invalid" as const, rejectionReason: reason };
     }
 
@@ -238,9 +273,11 @@ export const applyUpdate = internalMutation({
     // An update that cannot resolve to an existing account is rejected, not
     // used to invent one. docs/publication-contract.md "Account identity".
     const accountId = (await resolveAccount(ctx.db, args))?._id;
+
     if (!accountId) {
       const reason = "No known account matches this update's providerAccountId/handle.";
       await logUpdate(ctx, args, receivedAt, undefined, "rejected_invalid", reason);
+
       return { outcome: "rejected_invalid" as const, rejectionReason: reason };
     }
 
@@ -248,6 +285,7 @@ export const applyUpdate = internalMutation({
       .query("accountPublications")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .unique();
+
     const stored = existing?.committedGeneration;
 
     // Generation-based idempotency and staleness, entirely per account.
@@ -255,6 +293,7 @@ export const applyUpdate = internalMutation({
     // means no update has ever been accepted for this account, so this one
     // always applies regardless of its numeric value.
     let outcome: "applied" | "stale_ignored" | "duplicate_ignored";
+
     if (stored === undefined) outcome = "applied";
     else if (args.generation < stored) outcome = "stale_ignored";
     else if (args.generation === stored) outcome = "duplicate_ignored";
@@ -265,6 +304,7 @@ export const applyUpdate = internalMutation({
       // resent generation number must reflect the exact same content, and
       // an "idempotent replay" must be a true no-op, not a reinterpretation.
       await logUpdate(ctx, args, receivedAt, accountId, outcome);
+
       return { outcome, committedGeneration: stored };
     }
 
@@ -304,11 +344,13 @@ export const applyUpdate = internalMutation({
       committedGeneration: args.generation,
       updatedAt: receivedAt,
     };
+
     if (args.reportedState === "searchable" && args.uniquePostCount !== undefined) {
       doc.searchablePostCount = args.uniquePostCount;
       doc.searchablePostCountAsOf = args.uniquePostCountAsOf;
       doc.lastPublishedAt = receivedAt;
     }
+
     if (args.reportedState === "failed" && args.error) {
       doc.lastError = {
         message: args.error.message,
@@ -316,13 +358,16 @@ export const applyUpdate = internalMutation({
         generation: args.generation,
       };
     }
+
     if (args.pendingWork !== undefined) {
       doc.pendingWork = args.pendingWork;
     }
+
     if (existing) await ctx.db.patch(existing._id, doc);
     else await ctx.db.insert("accountPublications", doc);
 
     await logUpdate(ctx, args, receivedAt, accountId, "applied");
+
     return { outcome: "applied" as const, committedGeneration: args.generation };
   },
 });

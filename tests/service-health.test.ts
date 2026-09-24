@@ -13,8 +13,11 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // convex/health.ts. It resolves to the same function references at runtime —
 // see convex/publication.ts's header and tests/publication.test.ts.
 const recordHealth = anyApi.health.record;
+
 const probeSearch = anyApi.health.probeSearch;
+
 const workerPoll = anyApi.worker.poll;
+
 // summary.health is the existing, already-correct READ side; it is called
 // here unmodified, to prove the rows this unit writes are what the dashboard
 // actually ends up saying.
@@ -36,6 +39,7 @@ function setup() {
 
 async function authenticated(t: ReturnType<typeof setup>) {
   const userId = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return t.withIdentity({ subject: `${userId}|session` });
 }
 
@@ -80,11 +84,13 @@ describe("service health reporting (POST /service/health, convex/health.ts)", ()
     it("rejects a report with no Authorization header at all", async () => {
       const t = setup();
       vi.stubEnv("SERVICE_HEALTH_TOKEN", "secret");
+
       const res = await t.fetch("/service/health", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(healthReport()),
       });
+
       expect(res.status).toBe(401);
       expect(await rows(t)).toEqual([]);
     });
@@ -136,10 +142,12 @@ describe("service health reporting (POST /service/health, convex/health.ts)", ()
       // of an uncaught 500.
       const t = setup();
       vi.stubEnv("SERVICE_HEALTH_TOKEN", "secret");
+
       const res = await t.fetch(
         "/service/health",
         report({ ...healthReport(), debugExtra: "should never reach record" }),
       );
+
       expect(res.status).toBe(400);
       expect(await rows(t)).toEqual([]);
     });
@@ -205,6 +213,7 @@ describe("service health reporting (POST /service/health, convex/health.ts)", ()
 
       await tick();
       const failedAt = Date.now();
+
       const res = await t.fetch(
         "/service/health",
         report(
@@ -215,6 +224,7 @@ describe("service health reporting (POST /service/health, convex/health.ts)", ()
           }),
         ),
       );
+
       expect(res.status).toBe(200);
 
       const after = await rows(t);
@@ -335,6 +345,7 @@ describe("search service probe (convex/health.ts probeSearch, scheduled in conve
     let requested: string | undefined;
     vi.stubGlobal("fetch", async (input: string | URL | Request) => {
       requested = typeof input === "string" ? input : input.toString();
+
       return new Response("ok", { status: 200 });
     });
     await t.action(probeSearch, {});
@@ -463,8 +474,10 @@ describe("capture-receiver health via the production worker (convex/worker.ts po
   it("is an observation only: reporting health never moves a job's status", async () => {
     const t = setup();
     outbound();
+
     const { owner, jobId } = await t.run(async (ctx) => {
       const owner = await ctx.db.insert("users", { isAnonymous: true });
+
       const jobId = await ctx.db.insert("jobs", {
         owner,
         kind: "bulk",
@@ -476,8 +489,10 @@ describe("capture-receiver health via the production worker (convex/worker.ts po
         warnings: [],
         updatedAt: 0,
       });
+
       return { owner, jobId };
     });
+
     expect(owner).toBeDefined();
     await t.action(workerPoll, {
       token: "test-worker-secret",
@@ -520,10 +535,12 @@ describe("a long failure message", () => {
     const t = setup();
     vi.stubEnv("SERVICE_HEALTH_TOKEN", "secret");
     const long = "x".repeat(5_000);
+
     const res = await t.fetch(
       "/service/health",
       report(healthReport({ healthy: false, error: { message: long } })),
     );
+
     expect(res.status).toBe(200);
 
     const stored = await rows(t);

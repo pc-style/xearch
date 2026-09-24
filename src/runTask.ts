@@ -19,6 +19,7 @@ export function runTask(
       // The chain is detached. A throw here must not become an unhandled rejection.
     }
   };
+
   const finish = () => {
     try {
       handlers.onSettled?.();
@@ -26,6 +27,7 @@ export function runTask(
       // Same as reportError: cleanup runs, and its failure stays on this chain.
     }
   };
+
   // `Promise.resolve().then(work)` puts a synchronous throw from `work`
   // on the same chain as a rejected promise, so onError and onSettled still run.
   void Promise.resolve()
@@ -37,6 +39,7 @@ export function runTask(
         } catch (error) {
           reportError(error);
         }
+
         finish();
       },
       (error: unknown) => {

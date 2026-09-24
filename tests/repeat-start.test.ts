@@ -9,6 +9,7 @@ async function setup() {
   const t = convexTest(schema, modules);
   const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
   const bob = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return {
     t,
     alice,
@@ -76,20 +77,24 @@ describe("a repeated identical import request", () => {
     const { t, a } = await setup();
     const first = await a.mutation(api.jobs.start, { kind: "bulk", input: "theo" });
     await t.run((ctx) => ctx.db.patch(first, { status: "complete" }));
+
     const withSince = await a.mutation(api.jobs.start, {
       kind: "bulk",
       input: "theo",
       since: "2025-01-01",
     });
+
     expect(withSince).not.toBe(first);
     // Clear it too: the pre-existing guard below refuses a *concurrent*
     // duplicate, and that is not what this test is about.
     await t.run((ctx) => ctx.db.patch(withSince, { status: "complete" }));
+
     const refreshed = await a.mutation(api.jobs.start, {
       kind: "bulk",
       input: "theo",
       refresh: true,
     });
+
     expect(refreshed).not.toBe(first);
     expect(refreshed).not.toBe(withSince);
   });
@@ -167,6 +172,7 @@ describe("rebuilding accounts from captured profiles", () => {
 
   it("makes an already-finished job resolvable, which is the whole point", async () => {
     const { t, alice, a } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -184,6 +190,7 @@ describe("rebuilding accounts from captured profiles", () => {
         updatedAt: Date.now(),
       }),
     );
+
     expect((await a.query(api.library.rows, {})).rows).toHaveLength(0);
     await t.mutation(internal.backfill.accountsFromProfiles, { profiles });
     const { rows } = await a.query(api.library.rows, {});

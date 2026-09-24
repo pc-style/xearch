@@ -23,6 +23,7 @@ const finish = anyApi.jobs.finish as unknown as FunctionReference<
   },
   null
 >;
+
 const libraryRows = anyApi.library.rows as unknown as FunctionReference<
   "query",
   "public",
@@ -33,6 +34,7 @@ const libraryRows = anyApi.library.rows as unknown as FunctionReference<
 async function setup() {
   const t = convexTest(schema, modules);
   const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return { t, alice, a: t.withIdentity({ subject: `${alice}|session` }) };
 }
 
@@ -126,6 +128,7 @@ describe("account identity on the write path", () => {
 
   it("keeps the two identities as separate library rows and never throws on the now-duplicated handle", async () => {
     const { t, alice, a } = await setup();
+
     for (const userId of ["111", "222"]) {
       const job = await runningJob(t, alice, "moved", userId);
       await t.mutation(finish, {
@@ -135,6 +138,7 @@ describe("account identity on the write path", () => {
         profile: { handle: "moved", userId, name: `Owner ${userId}` },
       });
     }
+
     // A by_handle read with two matching rows used to throw (`.unique()`).
     const rows = (await a.query(libraryRows, {})).rows;
     expect(rows).toHaveLength(2);

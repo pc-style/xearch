@@ -17,6 +17,7 @@ function authorize(token: string) {
   )
     throw new ConvexError("Worker authentication failed.");
 }
+
 export const heartbeat = internalMutation({
   args: { online: v.boolean() },
   handler: async (ctx, { online }) => {
@@ -24,15 +25,19 @@ export const heartbeat = internalMutation({
       .query("collector")
       .withIndex("by_name", (q) => q.eq("name", "desktop"))
       .unique();
+
     const lastSeen = Date.now();
+
     if (existing) await ctx.db.patch(existing._id, { online, lastSeen });
     else await ctx.db.insert("collector", { name: "desktop", online, lastSeen });
+
     if (online)
       await ctx.scheduler.runAfter(45_000, internal.worker.expire, {
         lastSeen,
       });
   },
 });
+
 export const expire = internalMutation({
   args: { lastSeen: v.number() },
   handler: async (ctx, { lastSeen }) => {
@@ -40,9 +45,11 @@ export const expire = internalMutation({
       .query("collector")
       .withIndex("by_name", (q) => q.eq("name", "desktop"))
       .unique();
+
     if (row?.lastSeen === lastSeen) await ctx.db.patch(row._id, { online: false });
   },
 });
+
 export const claimNext = internalMutation({
   args: {},
   handler: async (ctx): Promise<Doc<"jobs"> | null> => {
@@ -53,11 +60,14 @@ export const claimNext = internalMutation({
         .first()
     )
       return null;
+
     const jobs = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "queued"))
       .take(20);
+
     const job = jobs.find((j) => (j.readyAt ?? 0) <= Date.now());
+
     if (!job) return null;
     const attempt = job.attempt + 1;
     await ctx.db.patch(job._id, {
@@ -72,9 +82,11 @@ export const claimNext = internalMutation({
       jobId: job._id,
       attempt,
     });
+
     return { ...job, status: "running", attempt };
   },
 });
+
 export const poll = action({
   args: {
     token: v.string(),
@@ -98,6 +110,7 @@ export const poll = action({
     await ctx.runMutation(internal.worker.heartbeat, {
       online: args.online !== false,
     });
+
     if (args.receiver) {
       // Never allowed to break the worker's real work: a health row is a
       // side observation, so a failure to write one is logged and dropped
@@ -117,10 +130,13 @@ export const poll = action({
         );
       }
     }
+
     if (args.heartbeatOnly || args.online === false) return null;
+
     return ctx.runMutation(internal.worker.claimNext, {});
   },
 });
+
 export const report = action({
   args: {
     token: v.string(),
@@ -185,6 +201,7 @@ export const report = action({
   handler: async (ctx, args): Promise<void> => {
     authorize(args.token);
     const base = { jobId: args.jobId, attempt: args.attempt };
+
     if (args.event === "throttle") {
       // A throttle report is an observation, never a job state change: it
       // must not move the job's status, and a job that is no longer this
@@ -197,8 +214,10 @@ export const report = action({
       if (!args.throttle)
         throw new ConvexError("A throttle report must include the provider's own throttle facts.");
       await ctx.runMutation(internal.jobs.recordThrottle, { ...base, ...args.throttle });
+
       return;
     }
+
     if (args.event === "phase")
       await ctx.runMutation(internal.jobs.progress, {
         ...base,

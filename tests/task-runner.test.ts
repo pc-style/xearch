@@ -9,16 +9,19 @@ import { createTaskRunner } from "../src/errors";
 function deferred() {
   let resolve!: () => void;
   let reject!: (error: unknown) => void;
+
   const promise = new Promise<void>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+
   return { promise, resolve, reject };
 }
 
 function spies() {
   const busy: boolean[] = [];
   const messages: string[] = [];
+
   return {
     busy,
     messages,

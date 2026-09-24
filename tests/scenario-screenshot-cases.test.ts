@@ -30,19 +30,26 @@ import OverviewStats from "../src/library/OverviewStats";
  */
 
 const mockState = vi.hoisted(() => ({ responses: new Map<string, unknown>() }));
+
 vi.mock("convex/react", () => ({
   useQuery: (ref: unknown, args: unknown) => {
     if (args === "skip") return undefined;
+
     return mockState.responses.get(getFunctionName(ref as any));
   },
   useMutation: () => vi.fn().mockResolvedValue(undefined),
 }));
+
 const AccountRow = (await import("../src/library/AccountRow")).default;
 
 const modules = import.meta.glob("../convex/**/*.ts");
+
 const libraryRows = anyApi.library.rows;
+
 const libraryHistory = anyApi.library.history;
+
 const summaryQ = anyApi.summary.summary;
+
 const healthQ = anyApi.summary.health;
 
 function renderRow(row: AccountLibraryRow): string {
@@ -51,6 +58,7 @@ function renderRow(row: AccountLibraryRow): string {
 
 async function seedOwner(t: ReturnType<typeof convexTest>) {
   const owner: Id<"users"> = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return { owner, session: t.withIdentity({ subject: `${owner}|session` }) };
 }
 
@@ -59,6 +67,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     const t = convexTest(schema, modules);
     const { owner, session } = await seedOwner(t);
     await t.run((ctx) => ctx.db.insert("accounts", { handle: "bob", userId: "222", name: "Bob" }));
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner,
@@ -112,9 +121,11 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     mockState.responses = new Map();
     const t = convexTest(schema, modules);
     const { owner, session } = await seedOwner(t);
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "carol", userId: "333", name: "Carol" }),
     );
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner,
@@ -129,6 +140,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         updatedAt: Date.now(),
       }),
     );
+
     await t.run((ctx) =>
       ctx.db.insert("accountPublications", {
         accountId,
@@ -189,9 +201,11 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     mockState.responses = new Map();
     const t = convexTest(schema, modules);
     const { owner, session } = await seedOwner(t);
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "dana", userId: "444", name: "Dana" }),
     );
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner,
@@ -206,6 +220,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         updatedAt: Date.now(),
       }),
     );
+
     const failedAt = Date.now();
     await t.run((ctx) =>
       ctx.db.insert("accountPublications", {
@@ -305,6 +320,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
         connected: false,
       } as any),
     );
+
     console.log(
       "CASE5 UI shows stale caution text for indexer (not plain 'Healthy'):",
       html.includes("Stale reading from"),

@@ -27,6 +27,7 @@ describe("a targeted account lookup reports whether it finished", () => {
         userId: "55",
         name: "Mine",
       });
+
       for (const i of [0, 1, 2]) {
         // Alternate owners so the lookup is proven to cross owner
         // boundaries, not just to read one owner's rows.
@@ -73,6 +74,7 @@ describe("a targeted account lookup reports whether it finished", () => {
     const found = await t.run((ctx) =>
       jobsForAccount(ctx.db, strangerAccount as Id<"accounts">),
     );
+
     // Nothing found AND the search finished — only this combination
     // justifies telling someone the account is not there.
     expect(found.jobs).toHaveLength(0);

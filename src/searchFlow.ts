@@ -26,6 +26,7 @@ export const searchFlow = Effect.fn("searchFlow")(function* (
     try: () => dependencies.ensureSession(),
     catch: (error: unknown) => error,
   });
+
   if (dependencies.beforeStart) yield* Effect.sync(dependencies.beforeStart);
   // Callers pass a wider request (attemptId, trigger for telemetry). Convex
   // rejects unknown fields, so send only the mutation's own arguments.

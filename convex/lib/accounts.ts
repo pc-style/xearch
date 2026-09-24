@@ -57,6 +57,7 @@ export async function resolveAccount(
 ): Promise<Doc<"accounts"> | null> {
   if (identity.providerAccountId !== undefined)
     return canonicalAccountForUserId(db, identity.providerAccountId);
+
   // `.take(2)` rather than `.unique()`: two rows sharing a handle is a
   // legitimate state after a reassignment, and `.unique()` throws on it
   // instead of returning. Two matches is unresolvable, not "pick one".
@@ -64,6 +65,7 @@ export async function resolveAccount(
     .query("accounts")
     .withIndex("by_handle", (q) => q.eq("handle", identity.handle))
     .take(2);
+
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -83,14 +85,18 @@ export async function resolveJobAccount(
   cache: Map<string, Doc<"accounts"> | null>,
 ): Promise<Doc<"accounts"> | null> {
   const identity = jobIdentity(job);
+
   const key =
     identity.providerAccountId !== undefined
       ? `id:${identity.providerAccountId}`
       : `handle:${identity.handle}`;
+
   const cached = cache.get(key);
+
   if (cached !== undefined) return cached;
   const found = await resolveAccount(db, identity);
   cache.set(key, found);
+
   return found;
 }
 
@@ -123,7 +129,9 @@ export async function allAccountJobs(
     .withIndex("by_kind", (q) => q.eq("kind", ACCOUNT_JOB_KIND))
     .order("desc")
     .take(MAX_OWNED_ACCOUNT_JOBS + 1);
+
   const truncated = scanned.length > MAX_OWNED_ACCOUNT_JOBS;
+
   return { jobs: truncated ? scanned.slice(0, MAX_OWNED_ACCOUNT_JOBS) : scanned, truncated };
 }
 
@@ -132,6 +140,7 @@ export async function allAccountJobs(
 // reaching either one means the answer is incomplete — which the caller is
 // told, rather than left to mistake for a finished search.
 const MAX_OWNERSHIP_SCAN = 20_000;
+
 const MAX_ACCOUNT_RUNS = 1_000;
 
 /**
@@ -160,15 +169,19 @@ export async function jobsForAccount(
   const cache = new Map<string, Doc<"accounts"> | null>();
   const jobs: Doc<"jobs">[] = [];
   let scanned = 0;
+
   for await (const job of db
     .query("jobs")
     .withIndex("by_kind", (q) => q.eq("kind", ACCOUNT_JOB_KIND))
     .order("desc")) {
     if (++scanned > MAX_OWNERSHIP_SCAN) return { jobs, exhausted: false };
     const account = await resolveJobAccount(db, job, cache);
+
     if (account?._id !== accountId) continue;
     jobs.push(job);
+
     if (jobs.length >= MAX_ACCOUNT_RUNS) return { jobs, exhausted: false };
   }
+
   return { jobs, exhausted: true };
 }

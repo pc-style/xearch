@@ -36,9 +36,11 @@ export default function ActiveQueue({
         )}
       </section>
     );
+
   const active = rows.filter(
     (r) => r.latestJob && (r.latestJob.status === "queued" || r.latestJob.status === "running"),
   );
+
   return (
     <section className="library-section" aria-label="Active queue">
       <h2>Active queue</h2>
@@ -59,19 +61,23 @@ function QueueRow({ row }: { row: AccountLibraryRow }) {
   const job = row.latestJob;
   const cancel = useMutation(api.jobs.cancel);
   const [error, setError] = useState("");
+
   // ActiveQueue only ever passes rows whose latestJob is set (see the
   // filter above); this guard just satisfies the type checker without a
   // non-null assertion — it should never actually render null in practice.
   if (!job) return null;
   const stalled = isStalledRun(job.status, job.updatedAt);
+
   const stop = async (jobId: Id<"jobs">) => {
     setError("");
+
     try {
       await cancel({ jobId });
     } catch (e) {
       setError(describeError(e));
     }
   };
+
   return (
     <div className="library-queue-row">
       <span className="library-queue-identity">

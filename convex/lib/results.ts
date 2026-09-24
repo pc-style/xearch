@@ -9,6 +9,7 @@ const safeLink = Schema.String.check(
     }
   }),
 );
+
 const metric = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 
 /** Wire contract for the external indexer/search service, not a corpus model. */
@@ -25,12 +26,15 @@ export const resultPost = Schema.Struct({
   avatar: Schema.optional(safeLink),
   displayName: Schema.optional(Schema.String.check(Schema.isMaxLength(100))),
 });
+
 export type ResultPost = typeof resultPost.Type;
+
 const stat = Schema.Finite.check(
   Schema.isInt(),
   Schema.isGreaterThanOrEqualTo(0),
   Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
 );
+
 const backendStats = Schema.Struct({
   totalUs: stat,
   reloadUs: stat,
@@ -45,6 +49,7 @@ const backendStats = Schema.Struct({
   indexDocs: stat,
   segments: stat,
 });
+
 const apiStats = Schema.Struct({
   totalUs: stat,
   authUs: stat,
@@ -57,10 +62,12 @@ const apiStats = Schema.Struct({
   postprocessUs: stat,
   cursorSignUs: stat,
 });
+
 export const searchStats = Schema.Struct({
   backend: backendStats,
   api: Schema.optional(apiStats),
 });
+
 export const searchResponse = Schema.Struct({
   rows: Schema.Array(resultPost).pipe(Schema.mutable).check(Schema.isMaxLength(20)),
   nextCursor: Schema.optional(Schema.String.check(Schema.isMaxLength(4000))),
@@ -73,7 +80,9 @@ export const searchResponse = Schema.Struct({
 });
 
 const decode = Schema.decodeUnknownSync(searchResponse);
+
 export function decodeSearchResponse(input: unknown) {
   const result = decode(input);
+
   return { ...result, warnings: result.warnings ?? [] };
 }

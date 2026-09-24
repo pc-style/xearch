@@ -22,7 +22,9 @@ const UNIT_LABEL: Record<Count["unit"], [singular: string, plural: string]> = {
  * whole point of the `Count` shape (a bare number can't say what it counts). */
 export function countWithUnit(count: Count): string {
   const [singular, plural] = UNIT_LABEL[count.unit];
+
   if (count.kind === "unknown") return `unknown ${plural}`;
+
   return `${count.value.toLocaleString()} ${count.value === 1 ? singular : plural}`;
 }
 
@@ -35,7 +37,9 @@ export function countValue(count: Count): string {
 export const formatDuration = (microseconds: number) => `${(microseconds / 1000).toFixed(2)} ms`;
 
 const MINUTE = 60_000;
+
 const HOUR = 60 * MINUTE;
+
 const DAY = 24 * HOUR;
 
 /** "3m ago" / "2h ago" / "5d ago" style relative time, falling back to a
@@ -43,10 +47,15 @@ const DAY = 24 * HOUR;
  * read internally) so a caller can pin it for a stable render / a test. */
 export function formatRelative(ms: number, now: number = Date.now()): string {
   const diff = now - ms;
+
   if (diff < 45_000) return "just now";
+
   if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m ago`;
+
   if (diff < DAY) return `${Math.floor(diff / HOUR)}h ago`;
+
   if (diff < 30 * DAY) return `${Math.floor(diff / DAY)}d ago`;
+
   return new Date(ms).toLocaleDateString();
 }
 
@@ -57,6 +66,7 @@ export function formatRelative(ms: number, now: number = Date.now()): string {
  * "dashboard" mapping run found (no comparison of Date.now()-updatedAt
  * exists anywhere in the app before this file). */
 export const STALL_THRESHOLD_MS = 10 * MINUTE;
+
 export function isStalledRun(
   status: JobStatus,
   updatedAt: number,

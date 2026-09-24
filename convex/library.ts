@@ -29,6 +29,7 @@ import { allAccountJobs, jobsForAccount, resolveJobAccount } from "./lib/account
 // guidelines: no unbounded .collect()). Generous relative to how many runs
 // people work through by hand.
 const MAX_HISTORY_JOBS = 50;
+
 const MAX_HISTORY_RECEIPTS = 100;
 
 type AccountBucket = { account: Doc<"accounts">; jobs: Doc<"jobs">[] };
@@ -45,13 +46,17 @@ async function groupJobsByAccount(
   const { jobs, truncated } = await allAccountJobs(ctx.db);
   const identityCache = new Map<string, Doc<"accounts"> | null>();
   const byAccount = new Map<Id<"accounts">, AccountBucket>();
+
   for (const job of jobs) {
     const account = await resolveJobAccount(ctx.db, job, identityCache);
+
     if (!account) continue;
     const bucket = byAccount.get(account._id);
+
     if (bucket) bucket.jobs.push(job);
     else byAccount.set(account._id, { account, jobs: [job] });
   }
+
   return { byAccount, truncated };
 }
 
@@ -103,6 +108,7 @@ export const rows = query({
     const { byAccount, truncated } = await groupJobsByAccount(ctx);
     const search = args.search?.trim().toLowerCase();
     const out: AccountLibraryRow[] = [];
+
     for (const [accountId, { account, jobs }] of byAccount) {
       if (
         search &&
@@ -110,10 +116,12 @@ export const rows = query({
         !account.name.toLowerCase().includes(search)
       )
         continue;
+
       const publication = await ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique();
+
       // No publication row yet means no publication update has ever arrived
       // for this account; docs/publication-contract.md collapses "downloaded"
       // and "waiting_for_indexing" into the same instant once acquisition has
@@ -121,6 +129,7 @@ export const rows = query({
       // successful acquisition (see groupJobsByAccount), so
       // "waiting_for_indexing" is the honest default.
       const publicationState = publication?.state ?? "waiting_for_indexing";
+
       if (args.status && args.status !== publicationState) continue;
       // Dismissed runs stay in `jobs` (and in this account's expandable
       // history, which is the evidence trail) but must not be what the row
@@ -161,7 +170,9 @@ export const rows = query({
         nextAction: latestJob ? nextActionFor(latestJob) : { kind: "none" },
       });
     }
+
     out.sort((a, b) => (b.latestJob?.updatedAt ?? 0) - (a.latestJob?.updatedAt ?? 0));
+
     return { rows: out, truncated };
   },
 });
@@ -191,6 +202,7 @@ const historyRunValidator = v.object({
     }),
   ),
 });
+
 export type HistoryRun = Infer<typeof historyRunValidator>;
 
 export const history = query({
@@ -224,11 +236,13 @@ export const history = query({
     // own _creationTime order happened to place later.
     const sorted = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_HISTORY_JOBS);
     const out: Infer<typeof historyRunValidator>[] = [];
+
     for (const job of sorted) {
       const receipts = await ctx.db
         .query("receipts")
         .withIndex("by_capture", (q) => q.eq("jobId", job._id))
         .take(MAX_HISTORY_RECEIPTS);
+
       out.push({
         jobId: job._id,
         status: job.status,
@@ -246,6 +260,7 @@ export const history = query({
         })),
       });
     }
+
     return out;
   },
 });

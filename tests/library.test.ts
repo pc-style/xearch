@@ -8,10 +8,12 @@ const modules = import.meta.glob("../convex/**/*.ts");
 
 async function setup() {
   const t = convexTest(schema, modules);
+
   const [alice, bob] = await t.run(async (ctx) => [
     await ctx.db.insert("users", { isAnonymous: true }),
     await ctx.db.insert("users", { isAnonymous: true }),
   ]);
+
   return {
     t,
     alice,
@@ -22,6 +24,7 @@ async function setup() {
 }
 
 type Kind = "bulk" | "live" | "post" | "profile" | "following" | "followers" | "archive";
+
 type Status = "queued" | "running" | "complete" | "partial" | "failed" | "cancelled";
 
 async function insertAccount(
@@ -121,12 +124,14 @@ describe("library.rows", () => {
       status: "failed",
       updatedAt: 2_000,
     });
+
     const latest = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
       status: "complete",
       updatedAt: 3_000,
     });
+
     const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0].handle).toBe("adam");
@@ -202,6 +207,7 @@ describe("library.rows", () => {
       status: "complete",
       updatedAt: 1_000,
     });
+
     const failedRefresh = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -209,6 +215,7 @@ describe("library.rows", () => {
       error: "x.md returned a 500.",
       updatedAt: 2_000,
     });
+
     const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     // Publication state is untouched by an acquisition-side job failure —
@@ -264,16 +271,19 @@ describe("library.rows", () => {
   // to-do.md P0 and is out of scope for this file.
   it("given two pre-existing account rows for different provider ids that shared a handle at different times, keeps them as separate library rows", async () => {
     const { t, alice, a } = await setup();
+
     const oldAccount = await insertAccount(t, {
       handle: "renamed-away",
       userId: "1001",
       name: "Original",
     });
+
     const newAccount = await insertAccount(t, {
       handle: "adam",
       userId: "1002",
       name: "New owner",
     });
+
     await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -313,11 +323,13 @@ describe("library.rows", () => {
 
   it("filters by status and by handle/name search, server-side", async () => {
     const { t, alice, a } = await setup();
+
     const searchableAccount = await insertAccount(t, {
       handle: "searchable-one",
       userId: "1001",
       name: "Findable",
     });
+
     const failedAccount = await insertAccount(t, { handle: "failed-one", userId: "1002" });
     await insertJob(t, alice, {
       input: "searchable-one",
@@ -356,6 +368,7 @@ describe("library.history", () => {
   it("preserves every retry, batch, and failure record instead of collapsing or deleting them", async () => {
     const { t, alice, a } = await setup();
     const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });
+
     const first = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -363,6 +376,7 @@ describe("library.history", () => {
       count: 3,
       updatedAt: 1_000,
     });
+
     const failedRetry = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -370,6 +384,7 @@ describe("library.history", () => {
       error: "timed out",
       updatedAt: 2_000,
     });
+
     const secondBatch = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -377,6 +392,7 @@ describe("library.history", () => {
       count: 7,
       updatedAt: 3_000,
     });
+
     await t.run((ctx) =>
       ctx.db.insert("receipts", {
         jobId: first,

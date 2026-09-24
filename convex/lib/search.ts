@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import type { SummaryScope } from "./contracts";
 
 export type Sort = "relevance" | "engagement" | "likes" | "newest" | "oldest";
+
 // Three spellings of one author filter: `@theo`, `from:@theo` and `from:theo`.
 // The bare `from:handle` form was previously NOT recognised as an author — it
 // fell through to the operator check below and was rejected as an unsupported
@@ -11,16 +12,20 @@ export type Sort = "relevance" | "engagement" | "likes" | "newest" | "oldest";
 // global regex carries `lastIndex` between uses, and this pattern is used
 // twice per parse (matchAll, then replace).
 const authorFilter = () => /(?:^|\s)(?:from:@?|@)([A-Za-z0-9_]{1,15})(?=\s|$)/g;
+
 export function parseQuery(raw: string) {
   if (raw.length > 300) throw new Error("Keep searches under 300 characters.");
   const authors = [...raw.matchAll(authorFilter())].map((m) => m[1].toLowerCase());
+
   if (new Set(authors).size > 1)
     throw new Error("Search one author at a time, or remove the @ filters to search everyone.");
   const text = raw.replace(authorFilter(), " ").trim().replace(/\s+/g, " ");
+
   if (/(?:^|\s)-?(?!https?:\/\/)[a-z_][a-z0-9_]*:/i.test(text))
     throw new Error(
       "Use @handle to filter authors. Other X operators are available through Find on X.",
     );
+
   return { text, author: authors[0] };
 }
 
@@ -37,6 +42,7 @@ export function parseQuery(raw: string) {
  */
 export function canonicalQuery(raw: string): { text: string; author?: string; canonical: string } {
   const { text, author } = parseQuery(raw.trim());
+
   return { text, author, canonical: [author ? `@${author}` : "", text].filter(Boolean).join(" ") };
 }
 
@@ -66,6 +72,7 @@ export function assertAuthorizedScope(scope: SummaryScope | undefined): void {
 // The Rust API maps StaleCursor to HTTP 409 Conflict. Keep cursors opaque:
 // only interpret this status as expired pagination when a cursor was sent.
 export const STALE_CURSOR_STATUS = 409;
+
 export class StaleSearchCursorError extends Error {
   constructor() {
     super("The search cursor is no longer valid.");

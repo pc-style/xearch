@@ -11,6 +11,9 @@ import type { DashboardProps } from "./operatorSurface";
  * than a build-time flag.
  */
 export const OPERATOR_BUILD: boolean = false;
+
 export type { DashboardProps };
+
 export const Dashboard: ComponentType<DashboardProps> | null = null;
+
 export const ConnectionsPanel: ComponentType | null = null;

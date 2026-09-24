@@ -115,6 +115,7 @@ export default function OverviewStats({
                       : status.healthy
                         ? "positive"
                         : "danger";
+
                 return (
                   <Badge key={status.service} tone={tone}>
                     {SERVICE_DISPLAY_NAME[status.service]}: {serviceHealthLabel(status)}
@@ -151,6 +152,7 @@ function Stat({
   caveat?: string;
 }) {
   const unknown = count.kind === "unknown";
+
   const body = (
     <>
       <span className={`value${unknown ? " unknown" : ""}`}>{countValue(count)}</span>
@@ -159,6 +161,7 @@ function Stat({
       {caveat && <span className="library-stat-caveat">{caveat}</span>}
     </>
   );
+
   if (href) {
     return (
       <a className="library-stat library-stat-link" href={href}>
@@ -166,5 +169,6 @@ function Stat({
       </a>
     );
   }
+
   return <div className="library-stat">{body}</div>;
 }

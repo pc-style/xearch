@@ -1,13 +1,16 @@
 import { z } from "zod";
 
 const object = z.record(z.string(), z.unknown());
+
 export type RawObject = Record<string, unknown>;
+
 /**
  * Services this app calls that can throttle it. Mirrors
  * `throttleProviderValidator` in convex/schema.ts, restated as a plain literal
  * union so this provider-client layer never imports Convex.
  */
 export type ThrottleProvider = "xmd" | "receiver" | "search";
+
 /**
  * What a provider told us about its own limits, as facts. Every optional field
  * is present ONLY when the response genuinely carried it: an absent value stays
@@ -29,6 +32,7 @@ export type ProviderThrottle = {
   /** From `Retry-After`, else the problem body's `retry_after` seconds. */
   retryAfterMs?: number;
 };
+
 export class ProviderError extends Error {
   constructor(
     public code: string,
@@ -42,21 +46,28 @@ export class ProviderError extends Error {
     super(message);
   }
 }
+
 export function record(value: unknown): RawObject {
   return object.parse(value);
 }
+
 export function string(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
+
 export function handle(value: string): string {
   const result = value.trim().replace(/^@/, "");
+
   if (!/^[A-Za-z0-9_]{1,15}$/.test(result))
     throw new Error("Enter a valid X handle, without a URL.");
+
   return result.toLowerCase();
 }
+
 export function publicUrl(value: string): string {
   const url = new URL(value);
   const host = url.hostname.toLowerCase();
+
   // Provider-side fetching still enforces its own DNS/private-network protection.
   if (
     url.protocol !== "https:" ||
@@ -72,35 +83,47 @@ export function publicUrl(value: string): string {
   )
     throw new Error("Use a public HTTPS website URL.");
   url.hash = "";
+
   return url.toString();
 }
+
 export function statusUrl(value: string): string {
   const url = new URL(publicUrl(value));
+
   if (
     !["x.com", "www.x.com", "twitter.com", "www.twitter.com"].includes(url.hostname) ||
     !/^\/[A-Za-z0-9_]{1,15}\/status\/\d+$/.test(url.pathname)
   )
     throw new Error("Paste an X post link, including /status/ and its ID.");
+
   return `https://x.com${url.pathname}`;
 }
+
 export function retryDelay(value: string | null, now = Date.now()): number {
   if (!value) return 30_000;
   const seconds = Number(value);
+
   return Math.min(
     86_400_000,
     Math.max(1000, Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now || 30_000),
   );
 }
+
 function compact<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
+
 function finiteNumber(value: unknown): number | undefined {
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+
   if (typeof value !== "string" || value.trim() === "") return undefined;
   const parsed = Number(value);
+
   return Number.isFinite(parsed) ? parsed : undefined;
 }
+
 const unquote = (value: string) => value.replace(/^"([\s\S]*)"$/, "$1");
+
 /**
  * Epoch ms for a `RateLimit-Reset`-style value. The IETF field means
  * delta-seconds, but plenty of services send an absolute epoch instead, so
@@ -113,49 +136,67 @@ export function resetAtFrom(
 ): number | undefined {
   if (value === undefined || value === null || value.trim() === "") return undefined;
   const seconds = finiteNumber(value);
+
   if (seconds === undefined) {
     const parsed = Date.parse(value);
+
     return Number.isFinite(parsed) ? parsed : undefined;
   }
+
   if (seconds < 0) return undefined;
+
   if (seconds < 1e9) return Math.round(now + seconds * 1000);
+
   if (seconds < 1e12) return Math.round(seconds * 1000);
+
   return Math.round(seconds);
 }
+
 type StructuredItem = { name?: string; params: Record<string, string> };
+
 /** `"api-ip";q=600;w=60, "import-key";q=20;w=900` -> one item per policy. */
 function structuredList(value: string | null): StructuredItem[] {
   if (!value) return [];
   const items: StructuredItem[] = [];
+
   for (const entry of value.split(",")) {
     const segments = entry
       .split(";")
       .map((segment) => segment.trim())
       .filter((segment) => segment !== "");
+
     if (!segments.length) continue;
     const item: StructuredItem = { params: {} };
+
     for (const segment of segments) {
       const equals = segment.indexOf("=");
+
       if (equals === -1) {
         if (item.name === undefined) item.name = unquote(segment);
         continue;
       }
+
       item.params[segment.slice(0, equals).trim().toLowerCase()] = unquote(
         segment.slice(equals + 1).trim(),
       );
     }
+
     items.push(item);
   }
+
   return items;
 }
+
 // x.md emits the unprefixed IETF spellings (verified against live response
 // headers); `X-RateLimit-*` is the widespread older convention and is read only
 // as a fallback.
 function headerValue(headers: Headers, name: string): string | null {
   return headers.get(name) ?? headers.get(`X-${name}`);
 }
+
 /** One reported allowance: what is left, and when it comes back. */
 type Allowance = { remaining?: number; resetAt?: number };
+
 /**
  * Every allowance the response reported, as candidates. x.md applies several
  * policies at once (an `api-ip` one and an `import-key` one in the same
@@ -170,43 +211,56 @@ function allowances(headers: Headers, now: number): Allowance[] {
     remaining: finiteNumber(item.params.r ?? item.params.remaining),
     resetAt: resetAtFrom(item.params.t ?? item.params.reset, now),
   }));
+
   candidates.push({
     remaining: finiteNumber(headerValue(headers, "RateLimit-Remaining")),
     resetAt: resetAtFrom(headerValue(headers, "RateLimit-Reset"), now),
   });
+
   return candidates;
 }
+
 /** RFC 9457-style problem body, whether it is the body or nested under `error`. */
 function problemBody(body: unknown): RawObject | undefined {
   if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
   const top = body as RawObject;
   const nested = top.error;
+
   return nested && typeof nested === "object" && !Array.isArray(nested)
     ? (nested as RawObject)
     : top;
 }
+
 function problemReason(problem: RawObject | undefined): string | undefined {
   if (!problem) return undefined;
+
   for (const key of ["detail", "message", "title", "error"]) {
     const value = string(problem[key]);
+
     if (value && value.trim() !== "") return value;
   }
+
   return undefined;
 }
+
 function retryAfterFromHeader(value: string | null, now: number): number | undefined {
   if (value === null || value.trim() === "") return undefined;
+
   // Only accept what `retryDelay` can genuinely read; its 30s fallback for
   // unparseable input is a default, not something the provider told us.
   return Number.isFinite(Number(value)) || Number.isFinite(Date.parse(value))
     ? retryDelay(value, now)
     : undefined;
 }
+
 function retryAfterFromBody(problem: RawObject | undefined, now: number): number | undefined {
   const seconds = finiteNumber(problem?.retry_after ?? problem?.retryAfter);
+
   // Delegate the clamp to `retryDelay`, exactly as the header path does, so the
   // same number of seconds can never mean two different delays.
   return seconds === undefined || seconds < 0 ? undefined : retryDelay(String(seconds), now);
 }
+
 /** `rate_limited`, `upstream_rate_limited`, `.../reliability#rate-limited`. */
 const namesRateLimit = (problem: RawObject | undefined) =>
   ["code", "type"].some((key) =>
@@ -214,6 +268,7 @@ const namesRateLimit = (problem: RawObject | undefined) =>
       (string(problem?.[key]) ?? "").toLowerCase().replace(/[^a-z]/g, ""),
     ),
   );
+
 /**
  * Read provider-reported limit facts off a refused response (and its
  * already-decoded body, when there is one). Returns undefined unless the
@@ -244,19 +299,23 @@ export function readThrottle(
 ): ProviderThrottle | undefined {
   const problem = problemBody(body);
   const deferredMs = retryAfterFromHeader(headers.get("Retry-After"), now);
+
   // A fulfilled response is not a refusal at all.
   if (status < 400) return undefined;
+
   if (status !== 429 && deferredMs === undefined && !namesRateLimit(problem)) return undefined;
   // Several allowances can apply to one call (x.md: per-IP and per-API-key).
   // The most constraining one is what actually gates the next request.
   const candidates = allowances(headers, now);
   let tightest: Allowance | undefined;
+
   for (const candidate of candidates)
     if (
       candidate.remaining !== undefined &&
       (tightest?.remaining === undefined || candidate.remaining < tightest.remaining)
     )
       tightest = candidate;
+
   return compact({
     provider,
     operation,
@@ -267,6 +326,7 @@ export function readThrottle(
     retryAfterMs: deferredMs ?? retryAfterFromBody(problem, now),
   });
 }
+
 /**
  * x.md's documented per-request ceiling for `max_posts`
  * (https://mdfromx.com/docs/bulk-import): "Maximum 5000; meta.truncated=true
@@ -279,6 +339,7 @@ export function readThrottle(
  * budget of ours; nothing here paces or caps our own requests.
  */
 export const MAX_POSTS_PER_PAGE = 5000;
+
 /**
  * Parallel upstream chains per request. The provider documents a default of 16
  * and a maximum of 32, but a real `max_posts=5000` run at 8 already reported
@@ -320,6 +381,7 @@ export class XmdClient {
     origin = "https://mdfromx.com",
   ) {
     const url = new URL(origin);
+
     if (
       !["https://mdfromx.com", "https://x.pcstyle.dev"].includes(url.origin) ||
       url.username ||
@@ -337,6 +399,7 @@ export class XmdClient {
     signal?: AbortSignal,
   ) {
     const url = new URL(path, this.origin);
+
     for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
     let response: Response;
     try {
@@ -368,18 +431,21 @@ export class XmdClient {
     if (!response.ok) {
       let code = `http_${response.status}`;
       let problem: RawObject | undefined;
+
       try {
         problem = record(await response.json());
         code = string(problem.code) ?? code;
       } catch {
         /* status is still actionable */
       }
+
       const message =
         response.status === 401
           ? "x.md rejected the API key. Check X_MD_API_KEY on the backend."
           : response.status === 429
             ? "x.md rate limit reached. The job will retry after the provider's delay."
             : `x.md could not finish this request (${response.status}, ${code}).`;
+
       throw new ProviderError(
         code,
         message,
@@ -389,6 +455,7 @@ export class XmdClient {
         readThrottle("xmd", operation, response.status, response.headers, problem),
       );
     }
+
     return response;
   }
   async read(
@@ -397,8 +464,10 @@ export class XmdClient {
     cursor?: string,
   ) {
     const query: Record<string, string> = { format: "json", limit: "50" };
+
     if (cursor) query.cursor = cursor;
     let path: string;
+
     if (kind === "search") {
       path = "/api/v1/search";
       query.q = input;
@@ -409,8 +478,10 @@ export class XmdClient {
       query.thread = "auto";
     } else {
       path = `/api/v1/profiles/${handle(input)}${kind === "profile" ? "" : kind === "archive" ? "/posts" : `/${kind}`}`;
+
       if (kind === "archive") query.index = "true";
     }
+
     return record(await (await this.request(path, query, kind)).json());
   }
   async history(
@@ -434,9 +505,13 @@ export class XmdClient {
           ? CHAIN_CONCURRENCY
           : String(Math.min(MAX_CHAIN_CONCURRENCY, Math.max(1, Math.floor(options.concurrency)))),
     };
+
     if (options.since) query.since = options.since;
+
     if (options.until) query.until = options.until;
+
     if (options.refresh) query.refresh = "true";
+
     return record(
       await (
         await this.request(`/api/v1/profiles/${handle(input)}/posts`, query, "history")
@@ -459,18 +534,25 @@ export class XmdClient {
       with_reposts: "true",
       concurrency: CHAIN_CONCURRENCY,
     };
+
     if (options.since) query.since = options.since;
+
     if (options.until) query.until = options.until;
+
     if (options.refresh) query.refresh = "true";
     const response = await this.request(`/api/v1/profiles/${handle(input)}/posts`, query, "bulk");
+
     if (!response.body) throw new ProviderError("empty_stream", "x.md returned no import stream.");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+
     let pending = "",
       terminal = false,
       count = 0;
+
     const parse = (line: string) => {
       const item = record(JSON.parse(line));
+
       if (item.error)
         throw new ProviderError(
           "partial_import",
@@ -479,7 +561,9 @@ export class XmdClient {
           false,
           item,
         );
+
       if (item.post) return { ...item, post: record(item.post) };
+
       if (item.meta)
         return {
           ...item,
@@ -488,10 +572,12 @@ export class XmdClient {
         };
       throw new ProviderError("invalid_stream", "x.md returned an unrecognized import record.");
     };
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         pending += decoder.decode(value, { stream: !done });
+
         if (pending.length > 2_000_000)
           throw new ProviderError(
             "oversized_record",
@@ -499,18 +585,22 @@ export class XmdClient {
           );
         const lines = pending.split("\n");
         pending = lines.pop()!;
+
         if (done && pending.trim()) {
           lines.push(pending);
           pending = "";
         }
+
         for (const line of lines) {
           if (!line.trim()) continue;
+
           if (terminal)
             throw new ProviderError(
               "invalid_stream",
               "x.md sent records after the import summary.",
             );
           const item = parse(line);
+
           if ("meta" in item) terminal = true;
           else if (++count > options.maxPosts)
             throw new ProviderError(
@@ -519,8 +609,10 @@ export class XmdClient {
             );
           yield item;
         }
+
         if (done) break;
       }
+
       if (!terminal)
         throw new ProviderError(
           "incomplete_stream",

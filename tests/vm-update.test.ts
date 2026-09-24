@@ -15,7 +15,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scripts = fileURLToPath(new URL("../scripts/", import.meta.url));
+
 const temporary: string[] = [];
+
 afterEach(() => {
   for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
 });
@@ -30,14 +32,17 @@ function fixture() {
   const log = join(root, "commands");
   const marker = join(data, "update-applied-sha");
   const installed = join(bin, "xearch-search");
+
   const write = (path: string, contents: string) => {
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, contents);
   };
+
   const executable = (path: string, contents: string) => {
     write(path, contents);
     chmodSync(path, 0o755);
   };
+
   mkdirSync(data, { recursive: true });
   mkdirSync(join(code, "search"), { recursive: true });
   write(log, "");
@@ -47,10 +52,12 @@ function fixture() {
   const dropIn = join(home, ".config/systemd/user/xearch-search-indexer.service.d/runtime.conf");
   write(dropIn, "fixture runtime override\n");
   write(join(data, "search/state/users.json"), '{"preserved":true}\n');
+
   // Let the old updater reach its unsafe operations when running regressions.
   for (const name of ["test.service", "test.timer", "test.path"]) {
     write(join(code, "deploy/systemd", name), "legacy unit\n");
   }
+
   for (const name of ["vm-update.sh", "reindex.sh"]) {
     executable(join(code, "scripts", name), '#!/bin/sh\nprintf "reindex\\n" >> "$TEST_LOG"\n');
   }
@@ -64,6 +71,7 @@ function fixture() {
       `#!/bin/bash\nset -eu\nprintf '%s\\n' "${name} $*" >> "$TEST_LOG"\n${body}\n`,
     );
   };
+
   mock(
     "git",
     `case "$1" in
@@ -112,6 +120,7 @@ esac`,
   mock("pgrep", 'exit "${TEST_PGREP_STATUS:-1}"');
   mock("curl", 'exit "${TEST_HEALTH_STATUS:-0}"');
   mock("sleep", "exit 0");
+
   const run = (
     script = "vm-update.sh",
     env: Record<string, string | undefined> = {},
@@ -131,6 +140,7 @@ esac`,
       encoding: "utf8",
       timeout: 10_000,
     });
+
   return {
     root,
     home,
@@ -302,10 +312,12 @@ describe("reindex", () => {
     "refuses a manual watcher or a failed process check (status %s)",
     (status) => {
       const f = fixture();
+
       const result = f.run("reindex.sh", {
         TEST_WATCHER_STATE: "inactive",
         TEST_PGREP_STATUS: status,
       });
+
       expect(result.status).not.toBe(0);
       expect(f.commands()).not.toContain("binary");
       expect(existsSync(join(f.data, "search/index"))).toBe(false);

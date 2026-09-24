@@ -36,10 +36,12 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
   // only on manual expand) whenever there is a failure to explain. This is
   // still exclusively convex/library.ts's `history` query.
   const needsFailureDetail = !!job && (job.status === "failed" || job.status === "partial");
+
   const history = useQuery(
     api.library.history,
     expanded || needsFailureDetail ? { accountId: row.accountId } : "skip",
   );
+
   const retry = useMutation(api.jobs.retry);
   const cancel = useMutation(api.jobs.cancel);
 
@@ -177,6 +179,7 @@ function NextActionControl({
           : "Retrying automatically…"}
       </span>
     );
+
   return null;
 }
 
@@ -186,7 +189,9 @@ function NextActionControl({
  * receipt ids) stay behind a `<details>` disclosure per run. */
 function AccountHistory({ history }: { history: HistoryRun[] | undefined }) {
   if (history === undefined) return <p className="library-loading">Loading history…</p>;
+
   if (history.length === 0) return <p className="library-muted">No runs recorded yet.</p>;
+
   return (
     <div className="library-history">
       {history.map((run) => (

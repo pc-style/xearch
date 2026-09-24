@@ -18,6 +18,7 @@ import RecentActivity from "../src/library/RecentActivity";
  * a label.
  */
 const signedOut = { isAuthenticated: false } as const;
+
 const signedIn = { isAuthenticated: true } as const;
 
 describe("signed-out panels never impersonate a loading state", () => {
@@ -31,6 +32,7 @@ describe("signed-out panels never impersonate a loading state", () => {
         ...signedOut,
       }),
     );
+
     expect(html).not.toMatch(/Loading overview/);
     expect(html).not.toMatch(/loading…/);
     expect(html).toMatch(/Connect to see/);
@@ -41,6 +43,7 @@ describe("signed-out panels never impersonate a loading state", () => {
       const html = renderToStaticMarkup(
         createElement(component, { rows: undefined, ...signedOut }),
       );
+
       expect(html).not.toMatch(/Loading/);
       expect(html).toMatch(/Connect to see/);
     }
@@ -50,6 +53,7 @@ describe("signed-out panels never impersonate a loading state", () => {
     const html = renderToStaticMarkup(
       createElement(ProviderLimits, { limits: undefined, ...signedOut }),
     );
+
     expect(html).not.toMatch(/loading…/);
     expect(html).toMatch(/connect to view/);
   });
@@ -58,10 +62,13 @@ describe("signed-out panels never impersonate a loading state", () => {
     const queue = renderToStaticMarkup(
       createElement(ActiveQueue, { rows: undefined, ...signedIn }),
     );
+
     expect(queue).toMatch(/Loading queue/);
+
     const history = renderToStaticMarkup(
       createElement(RecentActivity, { rows: undefined, ...signedIn }),
     );
+
     expect(history).toMatch(/Loading recent activity/);
   });
 });

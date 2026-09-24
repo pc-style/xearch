@@ -16,6 +16,7 @@ import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 
 type T = TestConvex<typeof schema>;
+
 type SentMessage = { to?: string | string[]; subject?: string; text?: string };
 
 // @convex-dev/auth signs real JWTs (RS256) even inside convex-test, so a
@@ -46,6 +47,7 @@ vi.mock("@agentmail/convex", () => ({
 // (neither is installed - see the "component rendering" describe block's
 // leading comment for why this is static-markup-only).
 const authUiResponses = vi.hoisted(() => new Map<string, unknown>());
+
 const authUiActions = vi.hoisted(() => ({ signIn: vi.fn(), signOut: vi.fn() }));
 
 vi.mock("convex/react", () => ({
@@ -62,6 +64,7 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // Imported after the mocks above so both components pick up the mocked
 // convex/react + @convex-dev/auth/react hooks instead of the real ones.
 const { EmailSignIn } = await import("../src/auth/EmailSignIn");
+
 const { AccountBadge } = await import("../src/auth/AccountBadge");
 
 afterEach(() => {
@@ -78,6 +81,7 @@ function setup(opts: { stubRequireVerifiedEmail?: boolean } = {}): T {
   const t = convexTest(schema, modules);
   vi.stubEnv("AGENTMAIL_API_KEY", "test-key");
   vi.stubEnv("AGENTMAIL_INBOX_ID", "inbox_test");
+
   // convex/email.ts's verified-email/matching-recipient gate in `send` is
   // unconditional and does not read this variable any more; it is stubbed
   // here only to prove that stubbing it (true, or not at all - see the
@@ -98,6 +102,7 @@ function setup(opts: { stubRequireVerifiedEmail?: boolean } = {}): T {
       throw new Error("No test in tests/journey.test.ts may perform a real network call.");
     }),
   );
+
   return t;
 }
 
@@ -106,10 +111,12 @@ function setup(opts: { stubRequireVerifiedEmail?: boolean } = {}): T {
  * recipient reads it out of their inbox. */
 async function signInWithEmail(t: T, email: string) {
   sendMessage.mockClear(); // isolate this sign-in's send from any earlier one in the same test
+
   const started = await t.action(api.auth.signIn, {
     provider: "email",
     params: { email },
   });
+
   expect(started).toEqual({ started: true });
   expect(sendMessage).toHaveBeenCalledTimes(1);
   const [, inboxId, message] = sendMessage.mock.calls[0]!;
@@ -117,18 +124,23 @@ async function signInWithEmail(t: T, email: string) {
   expect(message.to).toBe(email);
   const code = /code is (\S+)\./.exec(message.text ?? "")?.[1];
   expect(code).toBeTruthy();
+
   const signedIn = await t.action(api.auth.signIn, {
     provider: "email",
     params: { email, code },
   });
+
   expect(signedIn.tokens).toBeTruthy();
+
   const userId = await t.run(async (ctx) => {
     const account = await ctx.db
       .query("users")
       .withIndex("email", (q) => q.eq("email", email))
       .unique();
+
     return account!._id;
   });
+
   return { userId, identity: t.withIdentity({ subject: `${userId}|session` }) };
 }
 
@@ -175,6 +187,7 @@ describe("digest preview and explicit send", () => {
     const t = setup();
     const { identity, userId } = await signInWithEmail(t, "digest@example.com");
     sendMessage.mockClear(); // isolate the sign-in send from the digest send asserted below
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: userId,
@@ -193,6 +206,7 @@ describe("digest preview and explicit send", () => {
         warnings: [],
       }),
     );
+
     const preview = await identity.query(api.email.preview, { sessionId });
     expect(preview.verifiedEmail).toBe("digest@example.com");
     expect(preview.rowCount).toBe(1);
@@ -210,12 +224,14 @@ describe("digest preview and explicit send", () => {
     // preview and send must never drift: same buildDigest, one digest.
     expect(sent.subject).toBe(preview.subject);
     expect(sent.text).toBe(preview.text);
+
     const deliveries = await t.run((ctx) =>
       ctx.db
         .query("deliveries")
         .withIndex("by_owner", (q) => q.eq("owner", userId))
         .collect(),
     );
+
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]).toMatchObject({ outboundId: "outbound_test_id", query: "@theo convex" });
   });
@@ -224,6 +240,7 @@ describe("digest preview and explicit send", () => {
     const t = setup();
     const { identity, userId } = await signInWithEmail(t, "owner@example.com");
     sendMessage.mockClear();
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: userId,
@@ -236,6 +253,7 @@ describe("digest preview and explicit send", () => {
         warnings: [],
       }),
     );
+
     await expect(identity.query(api.email.preview, { sessionId })).resolves.toBeTruthy();
     await expect(
       identity.mutation(api.email.send, { sessionId, recipient: "someone-else@example.com" }),
@@ -248,6 +266,7 @@ describe("digest preview and explicit send", () => {
     const { identity: owner, userId: ownerId } = await signInWithEmail(t, "owner2@example.com");
     const { identity: intruder } = await signInWithEmail(t, "intruder@example.com");
     sendMessage.mockClear();
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: ownerId,
@@ -260,6 +279,7 @@ describe("digest preview and explicit send", () => {
         warnings: [],
       }),
     );
+
     await expect(intruder.query(api.email.preview, { sessionId })).rejects.toThrow(
       "no completed search results to preview",
     );
@@ -278,6 +298,7 @@ describe("digest preview and explicit send", () => {
     expect(process.env.REQUIRE_VERIFIED_EMAIL).toBeUndefined();
     const { identity, userId } = await signInWithEmail(t, "unset-flag@example.com");
     sendMessage.mockClear();
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: userId,
@@ -290,6 +311,7 @@ describe("digest preview and explicit send", () => {
         warnings: [],
       }),
     );
+
     // Even signed in and even with a verified email on the account, sending
     // to a *different, unverified* recipient must still fail closed with no
     // flag set at all - the default is secure, not "off until configured".
@@ -307,6 +329,7 @@ describe("digest preview and explicit send", () => {
     const t = setup();
     const { userId } = await signInWithEmail(t, "solo@example.com");
     sendMessage.mockClear(); // isolate the sign-in send from the assertion below
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: userId,
@@ -319,6 +342,7 @@ describe("digest preview and explicit send", () => {
         warnings: [],
       }),
     );
+
     await expect(t.query(api.email.preview, { sessionId })).rejects.toThrow("Start a session");
     await expect(
       t.mutation(api.email.send, { sessionId, recipient: "solo@example.com" }),
@@ -346,13 +370,17 @@ describe("an anonymous-only session can never pass the verified-email send gate"
     const t = setup();
     const anon = await t.action(api.auth.signIn, { provider: "anonymous", params: {} });
     expect(anon.tokens).toBeTruthy();
+
     const userId = await t.run(async (ctx) => {
       const anonymousUsers = await ctx.db.query("users").collect();
       expect(anonymousUsers).toHaveLength(1);
       expect(anonymousUsers[0]!.isAnonymous).toBe(true);
+
       return anonymousUsers[0]!._id;
     });
+
     const identity = t.withIdentity({ subject: `${userId}|session` });
+
     const sessionId = await t.run((ctx) =>
       ctx.db.insert("sessions", {
         owner: userId,
@@ -365,6 +393,7 @@ describe("an anonymous-only session can never pass the verified-email send gate"
         warnings: [],
       }),
     );
+
     // Matches src/App.tsx's send-form call shape (sessionId + the verified
     // address) with an anonymous identity standing in for a visitor who has
     // not been through EmailSignIn - the case this describe block covers.

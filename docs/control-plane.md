@@ -248,7 +248,7 @@ any `http://` URL whose host is not loopback — before a configuration, let
 alone a request, exists. `https://` is always accepted; plain `http://` to
 `127.0.0.1`, `::1` or `localhost` stays accepted because those bytes never
 leave the machine, which is what the crate's own tests point at. A name
-that merely *resolves* to loopback is not accepted. An operator who
+that merely _resolves_ to loopback is not accepted. An operator who
 misconfigures this gets publication disabled and one log line naming the
 variable and the host — never the token:
 
@@ -264,7 +264,7 @@ got a response does not spend its generation: the update itself is stored
 (`publications.<handle>.pending` in `users.json`) and replayed byte for
 byte until some response arrives. While that is owed, a later import for
 the same account must not publish at the same generation, so it stands
-down — but what it *would* have reported (`captureIds`, `runId`,
+down — but what it _would_ have reported (`captureIds`, `runId`,
 `providerAccountId`, its state) is retained against the account under
 `publications.<handle>.deferred`, and several stood-down imports coalesce
 into one entry. As soon as the owed update is answered, that entry goes out
@@ -293,14 +293,14 @@ daily import budget.
 
 ## Tests that lock the rules
 
-| File                                         | What it proves                                                                                                       |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `tests/account-identity.test.ts`             | Reassignment forks; rename stays one row; library does not throw on a duplicated handle                              |
-| `tests/job-feed.test.ts`                     | Dismiss/restore; a dismissed run's captures still count as awaiting indexing; live-search canonicalisation           |
-| `tests/provider-limits-writepath.test.ts`    | Real 429 body reaches the panel; absent allowance is unknown; stale `jobs.error` is not current                      |
-| `tests/ownership-lookup.test.ts`             | `ownerJobsForAccount` collects every run for one account and reports whether the scan finished                       |
+| File                                         | What it proves                                                                                                                                                                                      |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/account-identity.test.ts`             | Reassignment forks; rename stays one row; library does not throw on a duplicated handle                                                                                                             |
+| `tests/job-feed.test.ts`                     | Dismiss/restore; a dismissed run's captures still count as awaiting indexing; live-search canonicalisation                                                                                          |
+| `tests/provider-limits-writepath.test.ts`    | Real 429 body reaches the panel; absent allowance is unknown; stale `jobs.error` is not current                                                                                                     |
+| `tests/ownership-lookup.test.ts`             | `ownerJobsForAccount` collects every run for one account and reports whether the scan finished                                                                                                      |
 | `tests/review-fixes.test.ts`                 | Filters apply before the page limit; history opens past the library page but is refused when the scan was incomplete; an applied `failed` update confirms no captures; bounded reads report unknown |
-| `tests/worker-liveness.test.ts`              | Liveness is decided client-side: it goes stale with no new write, and a timestamp that was not disclosed is not "down" |
-| `tests/convex.test.ts`                       | An offline worker makes `integrations.configured` report `handoff: false` and `jobs.start` refuse                    |
-| `tests/connections-ui.test.ts`               | Outbound mode labels the download worker, not capture env vars                                                       |
-| `search/crates/indexer/tests/publication.rs` | Sender envelope, generation spend, owed-update replay, stood-down capture ids folded into a follow-on, and a non-loopback `http://` endpoint refused before any request is built |
+| `tests/worker-liveness.test.ts`              | Liveness is decided client-side: it goes stale with no new write, and a timestamp that was not disclosed is not "down"                                                                              |
+| `tests/convex.test.ts`                       | An offline worker makes `integrations.configured` report `handoff: false` and `jobs.start` refuse                                                                                                   |
+| `tests/connections-ui.test.ts`               | Outbound mode labels the download worker, not capture env vars                                                                                                                                      |
+| `search/crates/indexer/tests/publication.rs` | Sender envelope, generation spend, owed-update replay, stood-down capture ids folded into a follow-on, and a non-loopback `http://` endpoint refused before any request is built                    |

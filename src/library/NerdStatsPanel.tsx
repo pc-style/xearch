@@ -34,14 +34,17 @@ export function NerdStatsPanel({
   result: SessionResult | undefined;
 }) {
   const metrics = deriveSearchMetrics(frontend);
+
   const submitToSession = connectionDelta(
     frontend?.connectionAtSubmit ?? null,
     frontend?.connectionAtSession ?? null,
   );
+
   const sessionToTerminal = connectionDelta(
     frontend?.connectionAtSession ?? null,
     frontend?.connectionAtTerminal ?? null,
   );
+
   const backend = result?.stats?.backend;
   const apiStats = result?.stats?.api;
 
@@ -51,6 +54,7 @@ export function NerdStatsPanel({
         Stats for nerds —{" "}
         {(() => {
           const us = apiStats?.totalUs ?? backend?.totalUs;
+
           return us === undefined ? "—" : formatDuration(us);
         })()}
         {metrics.submitToTerminalMs !== null && (

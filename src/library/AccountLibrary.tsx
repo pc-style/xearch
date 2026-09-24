@@ -30,10 +30,12 @@ export default function AccountLibrary({
 }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<PublicationState | "">("");
+
   const library = useQuery(
     api.library.rows,
     isAuthenticated ? { search: search.trim() || undefined, status: status || undefined } : "skip",
   );
+
   const rows = library?.rows;
   const filtersActive = search.trim().length > 0 || status !== "";
 

@@ -11,10 +11,13 @@ export const run = internalAction({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }): Promise<void> => {
     if (process.env.COLLECTOR_MODE === "outbound") return;
+
     const job: Doc<"jobs"> | null = await ctx.runMutation(internal.jobs.claim, {
       jobId,
     });
+
     if (!job) return;
+
     try {
       if (!process.env.X_MD_API_KEY || !process.env.RAW_CAPTURE_URL)
         throw new ProviderError(
@@ -22,6 +25,7 @@ export const run = internalAction({
           "Configure X_MD_API_KEY and RAW_CAPTURE_URL to run indexing jobs.",
         );
       const xmd = new XmdClient(process.env.X_MD_API_KEY, fetch, process.env.X_MD_BASE_URL);
+
       const result = await collectXmd(
         xmd,
         {
@@ -61,6 +65,7 @@ export const run = internalAction({
           });
         },
       );
+
       const name = result.profile && string(result.profile.screen_name);
       await ctx.runMutation(internal.jobs.finish, {
         jobId,
@@ -114,6 +119,7 @@ export const run = internalAction({
           })
           .catch(() => {});
       }
+
       await ctx.runMutation(internal.jobs.finish, {
         jobId,
         attempt: job.attempt,

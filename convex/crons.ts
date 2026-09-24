@@ -1,7 +1,10 @@
 import { cronJobs, anyApi } from "convex/server";
 import { internal } from "./_generated/api";
+
 const crons = cronJobs();
+
 crons.interval("expire transient UI snapshots", { minutes: 10 }, internal.cleanup.transient, {});
+
 // Ask the search service whether it is actually up and record what comes
 // back (convex/health.ts's `probeSearch`). This is the only way the
 // separately owned search service ever gets a health row: it does not call
@@ -17,4 +20,5 @@ crons.interval("expire transient UI snapshots", { minutes: 10 }, internal.cleanu
 // know about convex/health.ts yet. It resolves to the same function
 // reference at runtime.
 crons.interval("probe search service health", { minutes: 2 }, anyApi.health.probeSearch, {});
+
 export default crons;

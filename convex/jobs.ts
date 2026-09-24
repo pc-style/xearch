@@ -25,12 +25,15 @@ import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 // for the whole-table scan below — it is ordered by `_creationTime`, Convex's
 // default table order, the same as an indexed `.order("desc")` would give.
 const JOB_FEED_SCAN = 2_000;
+
 const JOB_FEED_LIMIT = 20;
+
 // Which kinds a caller wants. "account" is the full-history import that owns
 // a library row; "other" is everything else (live search, single post,
 // profile, follower/following lookups) — the split src/Dashboard.tsx's
 // "Other imports" feed and convex/library.ts already draw.
 const jobScopeValidator = v.union(v.literal("all"), v.literal("other"));
+
 export const list = query({
   args: {
     includeDismissed: v.optional(v.boolean()),
@@ -45,14 +48,19 @@ export const list = query({
     let scanned = 0;
     for await (const job of ctx.db.query("jobs").order("desc")) {
       if (++scanned > JOB_FEED_SCAN) break;
+
       if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
+
       if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
       out.push(job);
+
       if (out.length >= JOB_FEED_LIMIT) break;
     }
+
     return out;
   },
 });
+
 // Local upgrade: recover display statistics from an already-acknowledged capture.
 export const restoreSummary = internalMutation({
   args: {
@@ -64,12 +72,15 @@ export const restoreSummary = internalMutation({
   },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
+
     if (!job || job.kind !== "bulk" || job.status !== "complete" || job.postsReceived !== undefined)
       return;
+
     const receipt = await ctx.db
       .query("receipts")
       .withIndex("by_capture", (q) => q.eq("jobId", job._id).eq("captureId", args.captureId))
       .unique();
+
     if (!receipt || !Number.isInteger(args.posts) || args.posts < 0 || args.posts > 500)
       throw new Error("Invalid saved batch summary");
     await ctx.db.patch(job._id, {
@@ -80,6 +91,7 @@ export const restoreSummary = internalMutation({
     });
   },
 });
+
 // One search, one label. `from:theo`, `@Theo` and `@theo` all mean the same
 // thing to parseQuery, but `start` used to store the raw text verbatim, so
 // the same live search appeared in the job feed under three different names
@@ -97,6 +109,7 @@ function canonicalLiveQuery(raw: string): string {
     throw new ConvexError(error instanceof Error ? error.message : "Enter a valid search.");
   }
 }
+
 /**
  * How long an identical request is answered with the run that was already
  * made rather than a new one. Long enough to absorb a double-click and a
@@ -104,6 +117,7 @@ function canonicalLiveQuery(raw: string): string {
  * mistaken for one.
  */
 const REPEAT_WINDOW_MS = 60_000;
+
 export const start = mutation({
   args: {
     kind: kindValidator,
@@ -119,27 +133,33 @@ export const start = mutation({
     // audit trail of who started the run.
     const owner = await user(ctx);
     const outbound = process.env.COLLECTOR_MODE === "outbound";
+
     const worker = outbound
       ? await ctx.db
           .query("collector")
           .withIndex("by_name", (q) => q.eq("name", "desktop"))
           .unique()
       : null;
+
     if (outbound && (!worker?.online || Date.now() - worker.lastSeen > 45_000))
       throw new ConvexError(
         "The download worker is offline. Imports will resume when it reconnects.",
       );
+
     if (!process.env.X_MD_API_KEY || (!outbound && !process.env.RAW_CAPTURE_URL))
       throw new ConvexError(
         "Connect x.md and the raw-capture receiver before starting an indexing job.",
       );
+
     const input =
       args.kind === "live"
         ? canonicalLiveQuery(args.input)
         : args.kind === "post"
           ? statusUrl(args.input)
           : handle(args.input);
+
     if (!input || input.length > 300) throw new ConvexError("Enter a search under 300 characters.");
+
     if (
       args.since &&
       (!/^\d{4}-\d{2}-\d{2}$/.test(args.since) || !Number.isFinite(Date.parse(args.since)))
@@ -153,6 +173,7 @@ export const start = mutation({
     const previous = args.previous ? await ctx.db.get(args.previous) : null;
     if (args.previous && (!previous || previous.input !== input || previous.kind !== args.kind))
       throw new ConvexError("Continuation does not belong to this indexing job.");
+
     // A second click is not a second import.
     //
     // This only ever refused a *concurrent* duplicate (below), so the instant
@@ -181,6 +202,7 @@ export const start = mutation({
         .withIndex("by_input", (q) => q.eq("kind", args.kind).eq("input", input))
         .order("desc")
         .first();
+
       if (
         recent &&
         // Never a stopped run. A failed/partial/cancelled job has nothing
@@ -196,6 +218,7 @@ export const start = mutation({
       )
         return recent._id;
     }
+
     for (const status of ["running", "queued"] as const) {
       if (
         await ctx.db
@@ -207,6 +230,7 @@ export const start = mutation({
       )
         throw new ConvexError("This indexing job is already active.");
     }
+
     // A handle can be released on X and claimed by a different real account,
     // so `by_handle` is not unique and `.unique()` would throw outright. Two
     // matches means the handle is genuinely ambiguous: seed no identity and
@@ -218,7 +242,9 @@ export const start = mutation({
             .withIndex("by_handle", (q) => q.eq("handle", input))
             .take(2)
         : [];
+
     const account = candidates.length === 1 ? candidates[0] : null;
+
     const id = await ctx.db.insert("jobs", {
       owner,
       kind: args.kind,
@@ -237,14 +263,18 @@ export const start = mutation({
       warnings: [],
       updatedAt: Date.now(),
     });
+
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+
     return id;
   },
 });
+
 export const claim = internalMutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     const job = await ctx.db.get(jobId);
+
     if (!job || job.status !== "queued" || (job.readyAt ?? 0) > Date.now()) return null;
     const attempt = job.attempt + 1;
     await ctx.db.patch(jobId, {
@@ -258,13 +288,16 @@ export const claim = internalMutation({
       jobId,
       attempt,
     });
+
     return { ...job, attempt };
   },
 });
+
 export const progress = internalMutation({
   args: { jobId: v.id("jobs"), attempt: v.number(), phase: v.string() },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
+
     if (!job || job.status !== "running" || job.attempt !== args.attempt)
       throw new Error("Job is no longer active.");
     await ctx.db.patch(job._id, { phase: args.phase, updatedAt: Date.now() });
@@ -281,6 +314,7 @@ async function sharedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
   if (!job) throw new ConvexError("Job not found.");
   return job;
 }
+
 export const cancel = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
@@ -293,12 +327,14 @@ export const cancel = mutation({
     });
   },
 });
+
 export const retry = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     const job = await sharedJob(ctx, jobId);
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
+
     for (const status of ["queued", "running"] as const) {
       const active = await ctx.db
         .query("jobs")
@@ -306,8 +342,10 @@ export const retry = mutation({
           q.eq("kind", job.kind).eq("input", job.input).eq("status", status),
         )
         .first();
+
       if (active) throw new ConvexError("This indexing job is already active.");
     }
+
     await ctx.db.patch(jobId, {
       status: "queued",
       readyAt: 0,
@@ -318,6 +356,7 @@ export const retry = mutation({
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId });
   },
 });
+
 // --- Dismissing finished runs ------------------------------------------
 // A person could stop a run and retry it, but never clear it: the feed grew
 // forever and a pile of old failures buried everything current. Dismissing
@@ -335,10 +374,12 @@ export const dismiss = mutation({
     // Stop it first, then dismiss it.
     if (job.status === "queued" || job.status === "running")
       throw new ConvexError("Stop this run before dismissing it.");
+
     if (job.dismissedAt !== undefined) return;
     await ctx.db.patch(jobId, { dismissedAt: Date.now() });
   },
 });
+
 export const restore = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
@@ -394,12 +435,15 @@ export const receipts = query({
       .take(100);
   },
 });
+
 export const pinIdentity = internalMutation({
   args: { jobId: v.id("jobs"), attempt: v.number(), userId: v.string() },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
+
     if (!job || job.status !== "running" || job.attempt !== args.attempt)
       throw new Error("Indexing job is no longer active.");
+
     if (job.expectedUserId && job.expectedUserId !== args.userId)
       throw new Error("Account identity changed.");
     await ctx.db.patch(job._id, { expectedUserId: args.userId });
@@ -428,6 +472,7 @@ export const expire = internalMutation({
     });
   },
 });
+
 export const ack = internalMutation({
   args: {
     jobId: v.id("jobs"),
@@ -438,12 +483,15 @@ export const ack = internalMutation({
   },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
+
     if (!job || job.status !== "running" || job.attempt !== args.attempt)
       throw new Error("Indexing job is no longer active.");
+
     const existing = await ctx.db
       .query("receipts")
       .withIndex("by_capture", (q) => q.eq("jobId", job._id).eq("captureId", args.captureId))
       .unique();
+
     if (existing) return;
     await ctx.db.insert("receipts", {
       jobId: job._id,
@@ -457,6 +505,7 @@ export const ack = internalMutation({
     });
   },
 });
+
 export const finish = internalMutation({
   args: {
     jobId: v.id("jobs"),
@@ -481,6 +530,7 @@ export const finish = internalMutation({
   },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
+
     if (!job || job.status !== "running" || job.attempt !== args.attempt) return;
 
     // A transient provider failure backs off and requeues on its own — no
@@ -561,14 +611,17 @@ export const finish = internalMutation({
         : {}),
       updatedAt: Date.now(),
     });
+
     if (continueImport)
       await ctx.scheduler.runAfter(2000, internal.importer.run, {
         jobId: job._id,
       });
+
     if (retry)
       await ctx.scheduler.runAfter(retryDelayMs!, internal.importer.run, {
         jobId: job._id,
       });
+
     if (args.profile) await upsertAccount(ctx, args.profile);
   },
 });
@@ -590,6 +643,7 @@ export type Profile = { handle: string; userId: string; name: string; avatar?: s
 export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise<Id<"accounts">> {
   const existing = await canonicalAccountForUserId(ctx.db, profile.userId);
   let accountId: Id<"accounts">;
+
   if (existing) {
     // Same provider id: this IS that account, whatever handle it now uses,
     // so patching is how a rename gets picked up. Skipped when nothing
@@ -610,7 +664,9 @@ export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise
     // handle is exactly a reassignment, and it gets its own row.
     accountId = await ctx.db.insert("accounts", profile);
   }
+
   await recordHandle(ctx, accountId, profile.handle);
+
   return accountId;
 }
 
@@ -618,13 +674,17 @@ export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise
 // from data instead of guessed. Nothing wrote this table before, which is
 // why the reassignment case had no evidence trail at all.
 const MAX_TRACKED_HANDLES = 50;
+
 async function recordHandle(ctx: MutationCtx, accountId: Id<"accounts">, handleText: string) {
   const now = Date.now();
+
   const known = await ctx.db
     .query("accountHandles")
     .withIndex("by_account", (q) => q.eq("accountId", accountId))
     .take(MAX_TRACKED_HANDLES);
+
   const existing = known.find((row) => row.handle === handleText);
+
   if (existing) await ctx.db.patch(existing._id, { lastSeenAt: now });
   else
     await ctx.db.insert("accountHandles", {

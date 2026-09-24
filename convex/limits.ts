@@ -65,6 +65,7 @@ export const remainingAllowanceValidator = v.union(
   v.object({ kind: v.literal("known"), value: v.number() }),
   v.object({ kind: v.literal("unknown") }),
 );
+
 export type RemainingAllowance = Infer<typeof remainingAllowanceValidator>;
 
 export const providerLimitValidator = v.union(
@@ -95,6 +96,7 @@ export const providerLimitValidator = v.union(
   // string, and never an old jobs.error surfaced as a substitute.
   v.object({ kind: v.literal("none"), provider: throttleProviderValidator }),
 );
+
 export type ProviderLimit = Infer<typeof providerLimitValidator>;
 
 async function loadProviderLimit(
@@ -106,8 +108,10 @@ async function loadProviderLimit(
     .withIndex("by_provider", (q) => q.eq("provider", provider))
     .order("desc")
     .take(RECENT_WINDOW);
+
   if (recent.length === 0) return { kind: "none", provider };
   const latest = recent.reduce((a, b) => (b.observedAt > a.observedAt ? b : a));
+
   return {
     kind: "throttled",
     provider: latest.provider,
@@ -134,6 +138,7 @@ export const current = query({
   returns: providerLimitValidator,
   handler: async (ctx, { provider }) => {
     await user(ctx);
+
     return loadProviderLimit(ctx, provider);
   },
 });
@@ -147,7 +152,9 @@ export const all = query({
   handler: async (ctx): Promise<ProviderLimit[]> => {
     await user(ctx);
     const out: ProviderLimit[] = [];
+
     for (const provider of PROVIDERS) out.push(await loadProviderLimit(ctx, provider));
+
     return out;
   },
 });

@@ -30,24 +30,31 @@ const FORBIDDEN = [
 ];
 
 const files = [];
+
 async function walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
+
     if (entry.isDirectory()) await walk(path);
     else if (/\.(?:js|css|html)$/.test(entry.name)) files.push(path);
   }
 }
+
 await walk(DIST);
+
 if (!files.length) {
   console.error(`check-public-bundle: no build output under ${DIST}/`);
   process.exit(1);
 }
 
 const found = [];
+
 for (const path of files) {
   const text = await readFile(path, "utf8");
+
   for (const needle of FORBIDDEN) if (text.includes(needle)) found.push(`${path}: ${needle}`);
 }
+
 if (found.length) {
   console.error(
     "check-public-bundle: operator-only content is in the public bundle.\n" +
@@ -56,4 +63,5 @@ if (found.length) {
   );
   process.exit(1);
 }
+
 console.log(`check-public-bundle: ${files.length} files clean.`);

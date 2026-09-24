@@ -40,6 +40,7 @@ export const accountsFromProfiles = internalMutation({
   handler: async (ctx, { profiles }) => {
     let created = 0;
     let existing = 0;
+
     for (const profile of profiles) {
       // Asked before the write so the caller learns what actually happened:
       // upsertAccount returns the same id whether it inserted or patched.
@@ -47,6 +48,7 @@ export const accountsFromProfiles = internalMutation({
       else created++;
       await upsertAccount(ctx, profile);
     }
+
     return { created, existing };
   },
 });

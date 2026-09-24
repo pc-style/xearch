@@ -13,15 +13,18 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // function references at runtime as the generated `internal`/`api` objects
 // would once codegen has run.
 const current = anyApi.limits.current;
+
 const all = anyApi.limits.all;
 
 function setup() {
   const t = convexTest(schema, modules);
+
   return t;
 }
 
 async function withUser(t: ReturnType<typeof setup>) {
   const userId: Id<"users"> = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
   return { a: t.withIdentity({ subject: `${userId}|session` }), userId };
 }
 

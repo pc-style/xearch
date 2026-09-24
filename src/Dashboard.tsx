@@ -21,20 +21,24 @@ function Job({ job }: { job: Doc<"jobs"> }) {
   // already uses for its own queries.
   const now = useDashboardClock();
   const receipts = useQuery(api.jobs.receipts, expanded ? { jobId: job._id } : "skip");
+
   const cancel = useMutation(api.jobs.cancel),
     retry = useMutation(api.jobs.retry),
     dismiss = useMutation(api.jobs.dismiss),
     restore = useMutation(api.jobs.restore);
   const act = async (fn: () => Promise<unknown>) => {
     setError("");
+
     try {
       await fn();
     } catch (e) {
       setError(describeError(e));
     }
   };
+
   const active = job.status === "queued" || job.status === "running";
   const dismissed = job.dismissedAt !== undefined;
+
   return (
     <article className={dismissed ? "control-job is-dismissed" : "control-job"}>
       <div className="control-job-heading">
@@ -137,6 +141,7 @@ export default function Dashboard({
   // first load, not an edge case.
   const config = useQuery(api.integrations.operator, isAuthenticated ? {} : "skip");
   const [showDismissed, setShowDismissed] = useState(false);
+
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
   // out here, after the server had already limited the page, could hide
   // older non-account runs behind 20 newer account imports.
@@ -151,11 +156,14 @@ export default function Dashboard({
   // following, archive). The split is applied server-side via `scope`.
 
   const start = useMutation(api.jobs.start);
+
   const [kind, setKind] = useState<Doc<"jobs">["kind"]>("bulk"),
     [input, setInput] = useState(""),
     [since, setSince] = useState(""),
     [refresh, setRefresh] = useState(false);
+
   const { busy, message, setMessage, run } = useTask();
+
   return (
     <main className="control-room">
       <header className="control-header">

@@ -4,11 +4,17 @@ import { ConvexHttpClient } from "convex/browser";
 import { collectXmd } from "../convex/lib/collect";
 import { XmdClient, ProviderError, string } from "../convex/lib/xmd";
 import { deliverCapture } from "../convex/lib/handoff";
+
 const env = parseEnv(await readFile(".env.local", "utf8"));
+
 if (!env.X_MD_API_KEY) throw new Error("Local X_MD_API_KEY is required.");
+
 const token = (await readFile(".local-captures/worker-token", "utf8")).trim();
+
 const captureToken = (await readFile(".local-captures/token", "utf8")).trim();
+
 const client = new ConvexHttpClient("https://utmost-kudu-321.convex.cloud");
+
 let stopping = false;
 /** Delay before a job interrupted by something other than the provider is retried. */
 const TRANSIENT_RETRY_MS = 30_000;
@@ -34,6 +40,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     stopping = true;
   });
+
 // One real observation of the loopback capture receiver, with the failure
 // text kept verbatim: it is both this worker's own "can I still save
 // anything" check AND, forwarded through worker:poll, the only thing that
@@ -45,6 +52,7 @@ async function receiverHealth(): Promise<{ healthy: boolean; error?: string }> {
     const response = await fetch("http://127.0.0.1:4319/health", {
       signal: AbortSignal.timeout(3000),
     });
+
     return response.ok
       ? { healthy: true }
       : { healthy: false, error: `Capture receiver answered HTTP ${response.status}.` };
@@ -58,17 +66,21 @@ async function receiverHealth(): Promise<{ healthy: boolean; error?: string }> {
 log(
   "Production download worker started. Connections are outbound only; raw posts stay on this machine.",
 );
+
 // `stopping` is flipped by the SIGINT/SIGTERM handlers above; the break keeps
 // the shutdown check explicit without a loop condition the linter must track.
 for (;;) {
   if (stopping) break;
+
   try {
     const receiver = await receiverHealth();
+
     const job = await client.action("worker:poll" as any, {
       token,
       online: receiver.healthy,
       receiver,
     });
+
     if (job) {
       log(`Downloading ${job.kind} for ${job.input} (attempt ${job.attempt})`);
       const report = (args: Record<string, unknown>) =>
@@ -97,6 +109,7 @@ for (;;) {
           )
           .catch(() => {});
       }, 15000);
+
       try {
         const result = await collectXmd(
           new XmdClient(env.X_MD_API_KEY, fetch, env.X_MD_BASE_URL),
@@ -130,6 +143,7 @@ for (;;) {
             await report({ event: "phase", phase });
           },
         );
+
         // The profile is what creates the account row, so it must travel —
         // it used to be destructured off and dropped here, which left the
         // production `accounts` table permanently empty even though every
@@ -177,6 +191,7 @@ for (;;) {
             },
           }).catch(() => {});
         }
+
         await report({
           event: "finish",
           error:
@@ -202,8 +217,10 @@ for (;;) {
   } catch (error) {
     log(`Worker connection unavailable (${describeFailure(error)}). Retrying shortly.`);
   }
+
   if (!stopping) await new Promise((resolve) => setTimeout(resolve, 5000));
 }
+
 // Shutdown: `online: false` is a statement about this worker, not about the
 // receiver, so no `receiver` field goes with it. Claiming the receiver is
 // down because we are stopping would be an observation we never made.

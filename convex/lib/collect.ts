@@ -19,12 +19,16 @@ import { CAPTURE_MAX_BYTES, jsonBytes, type Capture, type Receipt } from "./hand
  * ask the provider for.
  */
 const CAPTURE_BUDGET = CAPTURE_MAX_BYTES - 1_000_000;
+
 /** Per-record allowance for the `part` metadata and record framing. */
 const RECORD_OVERHEAD = 256;
+
 /** Ordinary stream records per capture (docs/integration-contract.md). */
 const RECORDS_PER_CAPTURE = 25;
+
 /** A payload and the serialized size that was measured while producing it. */
 export type SizedPayload = { payload: RawObject; bytes: number };
+
 /**
  * Split one oversized history page into envelope-shaped parts that each fit in
  * a capture. Every part repeats the page's own envelope (profile, meta, and any
@@ -40,6 +44,7 @@ export type SizedPayload = { payload: RawObject; bytes: number };
  */
 export function splitHistoryPage(envelope: RawObject, budget = CAPTURE_BUDGET): SizedPayload[] {
   const posts = envelope.posts;
+
   if (!Array.isArray(posts) || posts.length < 2)
     return [{ payload: envelope, bytes: jsonBytes(envelope) }];
   // `{...envelope, posts: []}` keeps the provider's key order, so this is the
@@ -50,23 +55,29 @@ export function splitHistoryPage(envelope: RawObject, budget = CAPTURE_BUDGET): 
   // Exactly what serializing the whole page would report, without doing it:
   // the empty envelope, every post, and the n-1 commas between them.
   const whole = sizes.reduce((total, size) => total + size, empty + posts.length - 1);
+
   if (whole <= budget) return [{ payload: envelope, bytes: whole }];
   const overhead = empty + RECORD_OVERHEAD;
   const parts: SizedPayload[] = [];
   let slice: unknown[] = [];
   let size = overhead;
   const push = () => parts.push({ payload: { ...envelope, posts: slice }, bytes: size });
+
   for (const [index, post] of posts.entries()) {
     const cost = sizes[index] + 1; // the separating comma
+
     if (slice.length && size + cost > budget) {
       push();
       slice = [];
       size = overhead;
     }
+
     slice.push(post);
     size += cost;
   }
+
   if (slice.length) push();
+
   return parts;
 }
 
@@ -109,6 +120,7 @@ export type CollectionRequest = {
   /** NDJSON is for bounded streaming, never oldest-based backfill pagination. */
   format?: "json" | "ndjson";
 };
+
 export async function collectXmd(
   client: XmdClient,
   request: CollectionRequest,
@@ -121,11 +133,14 @@ export async function collectXmd(
   let sequence = 0,
     pending: Capture["records"] = [],
     bytes = 0;
+
   let metadata: RawObject = {},
     profile: RawObject | undefined,
     expectedUserId = request.expectedUserId;
+
   let postsReceived = 0;
   const warnings: string[] = [];
+
   const descriptor = {
     origin: client.origin,
     resource: request.kind,
@@ -136,9 +151,11 @@ export async function collectXmd(
     refresh: request.refresh,
     format: request.format ?? "json",
   };
+
   const flush = async (terminal: Capture["terminal"]) => {
     if (!pending.length && terminal === "more") return;
     await onStage?.("Saving raw capture");
+
     const receipt = await sink({
       version: 1,
       runId: request.runId,
@@ -149,11 +166,13 @@ export async function collectXmd(
       records: pending,
       terminal,
     });
+
     await onReceipt(receipt, pending.length);
     pending = [];
     bytes = 0;
     sequence++;
   };
+
   // `size` is the payload's serialized bytes. Split history parts were already
   // measured while being sliced, so they pass theirs in rather than paying for
   // a second serialization of an up-to-3 MB record.
@@ -167,22 +186,27 @@ export async function collectXmd(
         "oversized_record",
         "A provider record is too large for this handoff. It was not shortened or normalized.",
       );
+
     if (pending.length && (pending.length >= RECORDS_PER_CAPTURE || bytes + size > CAPTURE_BUDGET))
       await flush("more");
     pending.push({ receivedAt: now(), payload, ...(part ? { part } : {}) });
     bytes += size;
   };
+
   // One history page can hold up to MAX_POSTS_PER_PAGE posts, which is more
   // than a single 4 MB capture can carry. Hand the page off in parts rather
   // than failing the whole import with `capture_too_large`; the parts flush
   // into separate captures through `add` above.
   const addHistory = async (envelope: RawObject) => {
     const parts = splitHistoryPage(envelope);
+
     if (parts.length === 1) return add(parts[0].payload, parts[0].bytes);
     const totalPosts = Array.isArray(envelope.posts) ? envelope.posts.length : 0;
+
     for (const [index, part] of parts.entries())
       await add(part.payload, part.bytes, { index, of: parts.length, totalPosts });
   };
+
   try {
     if (request.kind === "bulk") {
       await onStage?.("Checking account identity");
@@ -196,11 +220,13 @@ export async function collectXmd(
       descriptor.format = request.format ?? "json";
       profile = record(response.profile);
       const id = string(profile.id);
+
       if (!id || !/^\d+$/.test(id))
         throw new ProviderError(
           "missing_identity",
           "x.md did not return a stable account ID. Raw profile was handed off for inspection.",
         );
+
       if (expectedUserId && expectedUserId !== id)
         throw new ProviderError(
           "identity_mismatch",
@@ -210,6 +236,7 @@ export async function collectXmd(
       await onIdentity?.(id);
       await onStage?.("Fetching account history from x.md");
       let terminal: RawObject | undefined;
+
       const options = {
         // Ask for the provider's documented per-request maximum. x.md returns
         // `meta.truncated` when a range exceeds it, and `nextUntil` continues
@@ -220,10 +247,12 @@ export async function collectXmd(
         until: request.until,
         refresh: request.refresh,
       };
+
       if (request.format !== "ndjson") {
         const response = await historyPage(client, request.input, options, onStage);
         // Preserve the complete provider envelope, including future fields.
         await addHistory(response);
+
         if (!Array.isArray(response.posts) || !response.meta)
           throw new ProviderError(
             "invalid_history",
@@ -231,8 +260,10 @@ export async function collectXmd(
           );
         metadata = record(response.meta);
         postsReceived = response.posts.length;
+
         if (response.posts.length > options.maxPosts)
           throw new ProviderError("import_limit", "x.md exceeded the requested history size.");
+
         // x.md's own /posts endpoint omits the embedded `profile` field on
         // continuation requests (any call carrying `until`), even though the
         // rest of the envelope is a fully valid, complete page. Identity was
@@ -248,6 +279,7 @@ export async function collectXmd(
             "invalid_history",
             "x.md history is missing its embedded profile on a first (non-continuation) page.",
           );
+
         if (
           response.profile !== undefined &&
           string(record(response.profile).id) !== expectedUserId
@@ -263,40 +295,48 @@ export async function collectXmd(
             terminal = event;
           } else await add(event);
         }
+
       // A terminal provider record is accepted only after a clean stream EOF.
       if (terminal) {
         await add(terminal);
         const finalProfile = terminal.profile ? record(terminal.profile) : undefined;
+
         if (finalProfile && string(finalProfile.id) !== expectedUserId)
           throw new ProviderError(
             "identity_mismatch",
             "Account identity changed during the import. Raw captures need downstream review.",
           );
       }
+
       if (metadata.truncated)
         warnings.push(
           request.format === "ndjson"
             ? "This unordered stream was capped. No oldest-based continuation is safe; repeat the range using JSON history."
             : "More posts are available from x.md.",
         );
+
       if (metadata.floor_reached)
         warnings.push(
           "Reached the history available from X; this does not guarantee a complete account archive.",
         );
     } else {
       await onStage?.(`Fetching ${request.kind} from x.md`);
+
       const response = await client.read(
         request.kind === "live" ? "search" : request.kind,
         request.input,
         request.cursor,
       );
+
       await add(response);
       metadata = response;
+
       if (response.degraded)
         warnings.push(
           "x.md returned web-indexed search results because live search was unavailable.",
         );
     }
+
     if (Array.isArray(metadata.warnings))
       warnings.push(
         ...metadata.warnings
@@ -304,6 +344,7 @@ export async function collectXmd(
           .map((x) => x.slice(0, 500)),
       );
     await flush("complete");
+
     return {
       warnings,
       expectedUserId,

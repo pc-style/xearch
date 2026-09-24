@@ -32,6 +32,7 @@ export type Capture = {
   }[];
   terminal: "more" | "complete" | "partial";
 };
+
 /**
  * The receiver's hard ceiling on one capture body, in bytes. Exported because
  * the splitter in convex/lib/collect.ts derives its slicing budget from it:
@@ -39,23 +40,31 @@ export type Capture = {
  * stale size.
  */
 export const CAPTURE_MAX_BYTES = 4_000_000;
+
 // One encoder for the whole process: `new TextEncoder()` per measurement cost
 // an allocation per post on the import hot path.
 const encoder = new TextEncoder();
+
 /** UTF-8 bytes of an already-serialized body. */
 export const utf8Bytes = (value: string): number => encoder.encode(value).byteLength;
+
 /** UTF-8 bytes of a value once serialized — the unit every capture budget is in. */
 export const jsonBytes = (value: unknown): number => utf8Bytes(JSON.stringify(value));
+
 const receiptSchema = z.object({
   captureId: z.string(),
   durable: z.literal(true),
   receiptId: z.string().min(1).max(200),
 });
+
 export type Receipt = z.infer<typeof receiptSchema>;
+
 export async function captureId(body: string): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", encoder.encode(body));
+
   return [...new Uint8Array(hash)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
+
 export async function deliverCapture(
   url: string,
   token: string | undefined,
@@ -63,15 +72,18 @@ export async function deliverCapture(
   fetcher: typeof fetch = fetch,
 ): Promise<Receipt> {
   const body = JSON.stringify(capture);
+
   if (utf8Bytes(body) > CAPTURE_MAX_BYTES)
     throw new ProviderError(
       "capture_too_large",
       "A raw capture exceeded 4 MB. No data was truncated; downstream transport must support this record before retrying.",
     );
   const id = await captureId(body);
+
   // Same bytes and idempotency key on a transport retry, including lost responses.
   for (let attempt = 0; attempt < 2; attempt++) {
     let response: Response;
+
     try {
       response = await fetcher(url, {
         method: "POST",
@@ -93,13 +105,16 @@ export async function deliverCapture(
         true,
       );
     }
+
     if (!response.ok) {
       let problem: unknown;
+
       try {
         problem = await response.json();
       } catch {
         /* status is still actionable */
       }
+
       throw new ProviderError(
         "handoff_rejected",
         `The storage service rejected the raw capture (${response.status}).`,
@@ -109,13 +124,17 @@ export async function deliverCapture(
         readThrottle("receiver", "capture-handoff", response.status, response.headers, problem),
       );
     }
+
     const parsed = receiptSchema.safeParse(await response.json());
+
     if (!parsed.success || parsed.data.captureId !== id)
       throw new ProviderError(
         "invalid_receipt",
         "Storage must acknowledge this exact capture with durable:true before indexing progress can advance.",
       );
+
     return parsed.data;
   }
+
   throw new Error("Unreachable");
 }

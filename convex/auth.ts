@@ -62,9 +62,12 @@ export const me = query({
   args: {},
   handler: async (ctx) => {
     const id = await getAuthUserId(ctx);
+
     if (!id) return null;
     const account = await ctx.db.get(id);
+
     if (!account) return null;
+
     return {
       isAnonymous: account.isAnonymous ?? false,
       email: account.email ?? null,

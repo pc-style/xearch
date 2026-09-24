@@ -36,6 +36,7 @@ vi.mock("convex/react", () => ({
   useConvexConnectionState: () => ({ isWebSocketConnected: mockState.connected }),
   useQuery: (ref: Parameters<typeof getFunctionName>[0], args: unknown) => {
     if (args === "skip") return undefined;
+
     return mockState.responses.get(getFunctionName(ref));
   },
   useMutation: () => vi.fn().mockResolvedValue(undefined),
@@ -46,6 +47,7 @@ import Library from "../src/library/Library";
 function accountId(id: string) {
   return id as unknown as Id<"accounts">;
 }
+
 function jobId(id: string) {
   return id as unknown as Id<"jobs">;
 }
@@ -158,6 +160,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
 
   it("shows a failed publication next to its still-good corpus, and never the removed contradictory copy", () => {
     reset();
+
     const failedButIndexed = makeRow({
       accountId: accountId("acct-failed"),
       handle: "big",
@@ -171,6 +174,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
         updatedAt: Date.now(),
       },
     });
+
     setQuery(api.library.rows, { rows: [failedButIndexed], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
@@ -200,6 +204,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
     setQuery(api.library.rows, { rows: [], truncated: false });
     setQuery(summaryQuery, makeSummary());
     setQuery(healthQuery, makeHealth());
+
     const limits: ProviderLimit[] = [
       { kind: "none", provider: "xmd" },
       {
@@ -212,6 +217,7 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
       },
       { kind: "none", provider: "search" },
     ];
+
     setQuery(limitsAllQuery, limits);
     const html = renderLibrary();
     expect(html).toContain("Provider limits");

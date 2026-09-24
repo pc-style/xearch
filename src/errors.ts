@@ -47,8 +47,10 @@ export async function runTask(
 ) {
   report.setMessage("");
   report.setBusy(true);
+
   try {
     await fn();
+
     if (options.success) report.setMessage(options.success);
   } catch (e) {
     report.setMessage(describeError(e));
@@ -96,6 +98,7 @@ export function createTaskRunner(
 ): TaskRunner {
   let inFlight = 0;
   let latest = 0;
+
   return (fn, options = {}) => {
     const settings: TaskOptions = typeof options === "string" ? { success: options } : options;
     const listening = settings.alive;
@@ -105,17 +108,21 @@ export function createTaskRunner(
     // cleaned up); `token` is this runner's. Both must hold to say anything.
     const publishes = () => token === latest && (!listening || listening());
     inFlight += 1;
+
     return runTask(
       fn,
       {
         setBusy: (value) => {
           if (value) {
             if (!listening || listening()) setBusy(true);
+
             return;
           }
+
           // Counted down even when this run has gone stale, or the count
           // would leak and the spinner would never clear.
           inFlight = Math.max(0, inFlight - 1);
+
           if (inFlight === 0) setBusy(false);
         },
         setMessage: (value) => {
@@ -142,5 +149,6 @@ export function useTask(): Task {
   // bookkeeping survives re-renders — which is the whole point of it living
   // outside the render body.
   const [run] = useState(() => createTaskRunner(setBusy, setMessage));
+
   return { busy, message, setMessage, run };
 }

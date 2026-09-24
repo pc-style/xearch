@@ -16,6 +16,7 @@ vi.mock("convex/react", () => ({
   useQuery: () => undefined,
   useMutation: () => vi.fn().mockResolvedValue(undefined),
 }));
+
 const AccountRow = (await import("../src/library/AccountRow")).default;
 
 /**
@@ -35,7 +36,9 @@ const AccountRow = (await import("../src/library/AccountRow")).default;
  */
 
 const modules = import.meta.glob("../convex/**/*.ts");
+
 const applyUpdate = anyApi.publication.applyUpdate;
+
 const libraryRows = anyApi.library.rows;
 
 afterEach(() => {
@@ -57,6 +60,7 @@ function envelope(overrides: Record<string, unknown> = {}) {
 
 function renderedLabel(row: AccountLibraryRow): string {
   const html = renderToStaticMarkup(createElement(AccountRow, { row } as any));
+
   return html;
 }
 
@@ -67,9 +71,11 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     // --- Seed: an account this user owns, with one completed acquisition
     // job (a "downloaded capture") and NO publication update yet. ---
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "alice", userId: "111", name: "Alice" }),
     );
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner,
@@ -84,6 +90,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         updatedAt: Date.now(),
       }),
     );
+
     await t.run((ctx) =>
       ctx.db.insert("receipts", { jobId, captureId: "cap1", receiptId: "r1", records: 500 }),
     );
@@ -105,6 +112,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
 
     // --- Step 2: confirmed publication update -> searchable, no reacquisition ---
     const jobsBeforeUpdate = await t.run((ctx) => ctx.db.query("jobs").collect());
+
     const applied = await t.mutation(
       applyUpdate,
       envelope({
@@ -114,6 +122,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         uniquePostCountAsOf: Date.now(),
       }),
     );
+
     console.log("STEP2 applyUpdate result:", JSON.stringify(applied));
     expect(applied).toEqual({ outcome: "applied", committedGeneration: 1 });
 
@@ -141,14 +150,17 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         uniquePostCountAsOf: Date.now(),
       }),
     );
+
     console.log("STEP3 duplicate result:", JSON.stringify(duplicate));
     expect(duplicate).toEqual({ outcome: "duplicate_ignored", committedGeneration: 1 });
+
     const rowAfterDup = await t.run((ctx) =>
       ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique(),
     );
+
     console.log("STEP3 stored row after duplicate:", JSON.stringify(rowAfterDup));
     expect(rowAfterDup?.searchablePostCount).toBe(480); // not doubled, not re-summed
     const updateLog = await t.run((ctx) => ctx.db.query("publicationUpdates").collect());
@@ -164,14 +176,17 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         error: { message: "an old retry, arriving late" },
       }),
     );
+
     console.log("STEP4 stale result:", JSON.stringify(stale));
     expect(stale).toEqual({ outcome: "stale_ignored", committedGeneration: 1 });
+
     const rowAfterStale = await t.run((ctx) =>
       ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique(),
     );
+
     console.log("STEP4 stored row after stale update:", JSON.stringify(rowAfterStale));
     expect(rowAfterStale?.state).toBe("searchable"); // did not regress to "failed"
     const rowsAfterStale = (await session.query(libraryRows, {})).rows;
@@ -179,6 +194,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
 
     // --- Step 5: unauthorized request over HTTP -> fails closed ---
     vi.stubEnv("PUBLICATION_SERVICE_TOKEN", "correct-secret");
+
     const unauth = await t.fetch("/publication/update", {
       method: "POST",
       headers: { Authorization: "Bearer wrong-secret", "Content-Type": "application/json" },
@@ -191,6 +207,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
         }),
       ),
     });
+
     console.log(
       "STEP5 unauthorized HTTP status:",
       unauth.status,
@@ -202,12 +219,14 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
       ),
     );
     expect(unauth.status).toBe(401);
+
     const rowAfterUnauth = await t.run((ctx) =>
       ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique(),
     );
+
     console.log(
       "STEP5 stored row after unauthorized attempt (unchanged):",
       JSON.stringify(rowAfterUnauth),
