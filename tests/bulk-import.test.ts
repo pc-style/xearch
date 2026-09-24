@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   XmdClient,
   MAX_POSTS_PER_PAGE,
+  MAX_CHAIN_CONCURRENCY,
   HISTORY_TIMEOUT_MS,
   REQUEST_TIMEOUT_MS,
   timeoutFor,
@@ -542,6 +543,56 @@ describe("a history page the provider is slow to deliver", () => {
     expect(timeoutFor("profile")).toBe(REQUEST_TIMEOUT_MS);
     expect(HISTORY_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
   });
+  it("asks x.md once more with its maximum chain concurrency when x.md ran out of time", async () => {
+    const asked: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(requestUrl(input));
+      if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
+      asked.push(url.searchParams.get("concurrency") ?? "");
+      if (asked.length === 1) return new Response("gateway timeout", { status: 504 });
+      return Response.json(page(3));
+    });
+    const store = receiver();
+    const phases: string[] = [];
+    const result = await collectXmd(
+      new XmdClient("test-key", fetcher),
+      request,
+      (capture) =>
+        deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
+      async () => {},
+      () => NOW,
+      undefined,
+      async (phase) => {
+        phases.push(phase);
+      },
+    );
+    expect(asked).toEqual(["8", String(MAX_CHAIN_CONCURRENCY)]);
+    expect(result.postsReceived).toBe(3);
+    expect(phases).toContain(
+      `x.md ran out of time; asking again with ${MAX_CHAIN_CONCURRENCY} chains`,
+    );
+  });
+  it("does not keep asking after the second try also ran out of time", async () => {
+    const asked: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(requestUrl(input));
+      if (!url.pathname.endsWith("/posts")) return Response.json({ profile });
+      asked.push(url.searchParams.get("concurrency") ?? "");
+      return new Response("gateway timeout", { status: 504 });
+    });
+    const store = receiver();
+    const failure = await collectXmd(
+      new XmdClient("test-key", fetcher),
+      request,
+      (capture) =>
+        deliverCapture("https://data.example/captures", "capture-token", capture, store.fetcher),
+      async () => {},
+      () => NOW,
+    ).catch((error: unknown) => error);
+    expect((failure as ProviderError).code).toBe("http_504");
+    expect((failure as ProviderError).retryable).toBe(true);
+    expect(asked).toEqual(["8", String(MAX_CHAIN_CONCURRENCY)]);
+  });
   it("asks for the same full page again on the next attempt rather than a smaller one", async () => {
     const asked: string[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input) => {
@@ -560,6 +611,7 @@ describe("a history page the provider is slow to deliver", () => {
       () => NOW,
     ).catch((error: unknown) => error);
     expect((failure as ProviderError).code).toBe("provider_timeout");
-    expect(asked).toEqual(["5000"]);
+    // The second ask (more chains) still wants the full page.
+    expect(asked).toEqual(["5000", "5000"]);
   });
 });

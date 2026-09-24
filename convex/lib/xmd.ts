@@ -289,6 +289,13 @@ export const MAX_POSTS_PER_PAGE = 5000;
  * exchange for more upstream retries. Left at the value in production use.
  */
 const CHAIN_CONCURRENCY = "8";
+/**
+ * The provider's documented maximum. Used only as a second try after x.md
+ * itself gave up on a page (its gateway answers 504 at about two minutes):
+ * the huggingface and lauren_tan pages died there at every page size, and
+ * more parallel chains is the one lever left that shortens x.md's own work.
+ */
+export const MAX_CHAIN_CONCURRENCY = 32;
 /** How long an ordinary x.md request may take before it is reported as `provider_timeout`. */
 export const REQUEST_TIMEOUT_MS = 120_000;
 /**
@@ -413,6 +420,8 @@ export class XmdClient {
       until?: string;
       maxPosts: number;
       refresh?: boolean;
+      /** Parallel upstream chains; defaults to CHAIN_CONCURRENCY, capped at the provider's maximum. */
+      concurrency?: number;
     },
   ): Promise<RawObject> {
     const query: Record<string, string> = {
@@ -420,7 +429,10 @@ export class XmdClient {
       max_posts: String(Math.min(MAX_POSTS_PER_PAGE, Math.max(1, options.maxPosts))),
       with_replies: "true",
       with_reposts: "true",
-      concurrency: CHAIN_CONCURRENCY,
+      concurrency:
+        options.concurrency === undefined
+          ? CHAIN_CONCURRENCY
+          : String(Math.min(MAX_CHAIN_CONCURRENCY, Math.max(1, Math.floor(options.concurrency)))),
     };
     if (options.since) query.since = options.since;
     if (options.until) query.until = options.until;
