@@ -459,6 +459,50 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     }
   });
 
+  // /tmp/issues.md items 2/3: a deep-history backfill window job's own
+  // `input` is a full `from:<handle> since:... until:...` search string, not
+  // a bare handle, so resolving it the way every other job resolves account
+  // identity (convex/lib/accounts.ts `jobIdentity`/`resolveAccount`, which
+  // treats an unpinned job's `input` as a plain handle) never matched the
+  // `by_handle` index — this timeline (and the account library) always
+  // showed it with no account at all. `historyFor` (set by
+  // convex/jobs.ts `insertHistoryWindowJob`) is now used directly instead.
+  it("resolves a deep-history backfill window job to its account via historyFor, not by parsing its search-string input", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const accountId: Id<"accounts"> = await t.run((ctx) =>
+      ctx.db.insert("accounts", { handle: "theo", userId: "theo-provider-id", name: "Theo" }),
+    );
+
+    const windowJobId = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner: userId,
+        kind: "live",
+        input: "from:theo since:2025-11-01 until:2025-12-01",
+        since: "2025-11-01",
+        until: "2025-12-01",
+        origin: "history",
+        historyFor: accountId,
+        refresh: false,
+        status: "running",
+        count: 0,
+        attempt: 1,
+        warnings: [],
+        postsReceived: 0,
+        updatedAt: now,
+      }),
+    );
+
+    const result = await a.query(timeline, { now });
+    const entry = result.entries.find((e) => e.jobId === windowJobId);
+    expect(entry?.account).toEqual({ accountId, handle: "theo", name: "Theo", avatar: undefined });
+    expect(entry?.origin).toBe("history");
+    expect(entry?.since).toBe("2025-11-01");
+    expect(entry?.until).toBe("2025-12-01");
+  });
+
   it("sets truncated when the whole-table scan hits its bound", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);

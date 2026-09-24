@@ -341,7 +341,14 @@ export default defineSchema({
     // totals, and needs an index on kind alone to do that without reading
     // (and filtering out) every live search, single-post, and profile job
     // any owner has ever run.
-    .index("by_kind", ["kind"]),
+    .index("by_kind", ["kind"])
+    // Every history-window job for one account, without a full-table scan
+    // filtered after the fact — convex/lib/accounts.ts `latestHistoryWindowJob`
+    // is the one place this is queried, to find the account library row's
+    // (and the queue timeline's) current/most-recent deep-history backfill
+    // job. Only `origin: "history"` jobs ever set `historyFor`, so this index
+    // stays small regardless of how many other jobs exist.
+    .index("by_history_for", ["historyFor"]),
   // One row per account: the current publication pipeline state plus the
   // last confirmed-searchable snapshot. These are deliberately separate
   // fields so a failed refresh can move `state` to "failed" while leaving

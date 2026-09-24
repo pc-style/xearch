@@ -222,6 +222,29 @@ export const accountLibraryRowValidator = v.object({
     }),
   ),
   nextAction: nextActionValidator,
+  // The account's most recent deep-history backfill WINDOW JOB
+  // (kind: "live", origin: "history", historyFor: accountId), when one has
+  // ever been scheduled — separate from `latestJob` above, which only ever
+  // holds a "bulk" job (see convex/lib/accounts.ts ACCOUNT_JOB_KIND) and so
+  // can never itself carry a running/queued backfill window. This is what
+  // lets the active-queue strip (src/library/ActiveQueue.tsx) and the
+  // account row's own headline (src/library/AccountRow.tsx) show a backfill
+  // that is currently downloading, which `latestJob` alone cannot. `since`/
+  // `until` are this window's own dated slice (always set — see
+  // convex/jobs.ts `insertHistoryWindowJob`), for the "@handle · older
+  // history YYYY-MM → YYYY-MM" label (src/jobText.ts `historyWindowLabel`).
+  historyJob: v.optional(
+    v.object({
+      jobId: v.id("jobs"),
+      status: jobStatusValidator,
+      phase: v.optional(v.string()),
+      updatedAt: v.number(),
+      postsReceived: v.optional(v.number()),
+      since: v.optional(v.string()),
+      until: v.optional(v.string()),
+      retryable: v.optional(v.boolean()),
+    }),
+  ),
   // The account's deep-history backfill (convex/jobs.ts, convex/lib/
   // historyWindow.ts), when one has ever been started for it. Absent for
   // every account that has never needed one (its bulk import never hit

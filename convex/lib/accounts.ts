@@ -87,6 +87,25 @@ export async function resolveJobAccount(
   job: Doc<"jobs">,
   cache: Map<string, Doc<"accounts"> | null>,
 ): Promise<Doc<"accounts"> | null> {
+  // A deep-history backfill window (origin: "history") carries its account
+  // as `historyFor` directly — its own `input` is a full `from:<handle>
+  // since:... until:...` search string, not a bare handle, so resolving it
+  // through `jobIdentity`/`resolveAccount` below (which treats a job with no
+  // pinned id as a plain handle) would never match the `by_handle` index and
+  // this job would permanently resolve to no account. `historyFor` is the
+  // exact account this app already scheduled the window for, so it is
+  // authoritative here — no separate identity resolution needed.
+  if (job.historyFor !== undefined) {
+    const key = `history:${job.historyFor}`;
+    const cached = cache.get(key);
+
+    if (cached !== undefined) return cached;
+    const found = await db.get(job.historyFor);
+    cache.set(key, found);
+
+    return found;
+  }
+
   const identity = jobIdentity(job);
 
   const key =
@@ -101,6 +120,28 @@ export async function resolveJobAccount(
   cache.set(key, found);
 
   return found;
+}
+
+/**
+ * The most recently created deep-history backfill window job for one
+ * account (`kind: "live"`, `origin: "history"`, `historyFor: accountId`),
+ * or `null` if that account has never had one. Backed by the `by_history_for`
+ * index (convex/schema.ts) rather than a `by_kind`-then-filter scan: only
+ * one window job is ever in flight per account (`launchNextWindow` schedules
+ * the next one only after the previous reaches a terminal state), so the
+ * newest by creation time is also the current one. Used by
+ * `convex/library.ts rows` to surface an account's active backfill in the
+ * account library alongside its base `latestJob`.
+ */
+export function latestHistoryWindowJob(
+  db: Db,
+  accountId: Id<"accounts">,
+): Promise<Doc<"jobs"> | null> {
+  return db
+    .query("jobs")
+    .withIndex("by_history_for", (q) => q.eq("historyFor", accountId))
+    .order("desc")
+    .first();
 }
 
 // Bounded read. Every account import in the shared corpus, newest first —
