@@ -51,6 +51,8 @@ async function insertJob(
     status?: Status;
     count?: number;
     postsReceived?: number;
+    oldest?: string;
+    floorReached?: boolean;
     nextUntil?: string;
     nextCursor?: string;
     readyAt?: number;
@@ -70,6 +72,8 @@ async function insertJob(
       status: args.status ?? "complete",
       count: args.count ?? 0,
       postsReceived: args.postsReceived,
+      oldest: args.oldest,
+      floorReached: args.floorReached,
       nextUntil: args.nextUntil,
       nextCursor: args.nextCursor,
       readyAt: args.readyAt,
@@ -109,6 +113,55 @@ async function insertPublication(
 }
 
 describe("library.rows", () => {
+  it("picks the row with the highest committedGeneration when an account has duplicate accountPublications rows — CodeRabbit #4089340887 / #4089916545", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await insertAccount(t, { handle: "adam", userId: "1001", name: "Adam" });
+
+    await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
+    // Two publication rows for the same account — a bare `.unique()` would
+    // throw (by_account has no uniqueness guarantee), and a bare `.first()`
+    // would pick whichever row Convex's default `_creationTime` order puts
+    // first — here, the OLDER "indexing" row, which is the wrong (stale)
+    // answer. The row with the higher committedGeneration (the contract's
+    // own definition of "more current") must win regardless of insertion
+    // order.
+    await insertPublication(t, { accountId, state: "indexing", committedGeneration: 1 });
+    await insertPublication(t, {
+      accountId,
+      state: "searchable",
+      committedGeneration: 2,
+      searchablePostCount: 5,
+    });
+
+    const rows = (await a.query(api.library.rows, {})).rows;
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].publicationState).toBe("searchable");
+    expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 5 });
+  });
+
+  it('carries the latest job\'s postsReceived/oldest/floorReached through to the row (for copy like "3,155 posts back to 2026-07-11")', async () => {
+    const { t, alice, a } = await setup();
+    await insertAccount(t, { handle: "adam", userId: "1001", name: "Adam" });
+
+    const latest = await insertJob(t, alice, {
+      input: "adam",
+      expectedUserId: "1001",
+      status: "complete",
+      updatedAt: 1_000,
+      postsReceived: 3_155,
+      oldest: "2026-07-11",
+      floorReached: true,
+    });
+
+    const rows = (await a.query(api.library.rows, {})).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].latestJob?.jobId).toBe(latest);
+    expect(rows[0].latestJob?.postsReceived).toBe(3_155);
+    expect(rows[0].latestJob?.oldest).toBe("2026-07-11");
+    expect(rows[0].latestJob?.floorReached).toBe(true);
+  });
+
   it("collapses repeated runs for one account into a single row", async () => {
     const { t, alice, a } = await setup();
     await insertAccount(t, { handle: "adam", userId: "1001", name: "Adam" });
@@ -365,6 +418,30 @@ describe("library.rows", () => {
 });
 
 describe("library.history", () => {
+  it("carries postsReceived/oldest/floorReached on each run", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });
+
+    const job = await insertJob(t, alice, {
+      input: "adam",
+      expectedUserId: "1001",
+      status: "complete",
+      postsReceived: 3_155,
+      oldest: "2026-07-11",
+      floorReached: true,
+    });
+
+    const runs = await a.query(api.library.history, { accountId });
+    expect(runs).toEqual([
+      expect.objectContaining({
+        jobId: job,
+        postsReceived: 3_155,
+        oldest: "2026-07-11",
+        floorReached: true,
+      }),
+    ]);
+  });
+
   it("preserves every retry, batch, and failure record instead of collapsing or deleting them", async () => {
     const { t, alice, a } = await setup();
     const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });

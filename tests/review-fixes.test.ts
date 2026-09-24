@@ -100,7 +100,7 @@ describe("the job feed filters before it limits", () => {
 
     for (let i = 0; i < 20; i++) await job(t, alice, { input: `@live${i}`, kind: "live" });
 
-    const other = await a.query(api.jobs.list, { scope: "other" });
+    const other = (await a.query(api.jobs.list, { scope: "other" })).jobs;
     expect(other).toHaveLength(20);
     expect(other.every((row) => row.kind !== "bulk")).toBe(true);
   });
@@ -114,7 +114,7 @@ describe("the job feed filters before it limits", () => {
     for (let i = 0; i < 30; i++)
       await job(t, alice, { input: `@cleared${i}`, kind: "live", dismissedAt: Date.now() });
 
-    const visible = await a.query(api.jobs.list, {});
+    const visible = (await a.query(api.jobs.list, {})).jobs;
     expect(visible).toHaveLength(20);
     expect(visible.every((row) => row.dismissedAt === undefined)).toBe(true);
   });

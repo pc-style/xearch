@@ -375,6 +375,64 @@ describe("summary.summary", () => {
     });
   });
 
+  it("contributes 0 when the account's searchable publication postdates its receipts (e.g. a manual publish reconcile with no captureIds)", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await insertAccount(t, { handle: "adam", userId: "1" });
+    const job = await insertJob(t, alice, { input: "adam", expectedUserId: "1" });
+    // A receipt with no publicationUpdate ever naming its captureId — the
+    // indexer's manual `publish <handle>` reconcile reports "searchable"
+    // handle-only, with no captureIds at all.
+    const receiptId = await insertReceipt(t, { jobId: job, captureId: "cap-1" });
+    const receipt = await t.run((ctx) => ctx.db.get(receiptId));
+    // Set explicitly relative to the receipt's own `_creationTime` rather
+    // than relying on wall-clock insert order: this field and
+    // `receipts._creationTime` are stamped from different clocks
+    // (`updatedAt` is `Date.now()` at write time; `_creationTime` is
+    // convex-test's own monotonic per-write clock), so only an explicit,
+    // receipt-relative value makes "the publication is newer" unambiguous.
+    await t.run((ctx) =>
+      ctx.db.insert("accountPublications", {
+        accountId,
+        state: "searchable",
+        committedGeneration: 1,
+        searchablePostCount: 10,
+        updatedAt: receipt!._creationTime + 1,
+      }),
+    );
+    const result = await a.query(summaryQuery, { now: Date.now() });
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
+    });
+  });
+
+  it("still counts a receipt written after the account's last searchable report", async () => {
+    const { t, alice, a } = await setup();
+    const accountId = await insertAccount(t, { handle: "adam", userId: "1" });
+    const job = await insertJob(t, alice, { input: "adam", expectedUserId: "1" });
+    const receiptId = await insertReceipt(t, { jobId: job, captureId: "cap-new" });
+    const receipt = await t.run((ctx) => ctx.db.get(receiptId));
+    // The searchable report is set explicitly BEFORE the receipt's own
+    // `_creationTime`, so it cannot possibly have swept up content
+    // downloaded afterward — see the timing note in the previous test.
+    await t.run((ctx) =>
+      ctx.db.insert("accountPublications", {
+        accountId,
+        state: "searchable",
+        committedGeneration: 1,
+        searchablePostCount: 10,
+        updatedAt: receipt!._creationTime - 1,
+      }),
+    );
+    const result = await a.query(summaryQuery, { now: Date.now() });
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 1,
+    });
+  });
+
   it("includes every owner's jobs in the queue — the queue is shared infrastructure, not one person's own", async () => {
     const { t, alice, bob, a } = await setup();
     await insertJob(t, alice, { input: "mine", status: "queued" });

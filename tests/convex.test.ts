@@ -16,9 +16,21 @@ afterEach(() => {
 async function setup() {
   const t = convexTest(schema, modules);
 
+  // Verified email lives on the `users` row itself
+  // (`emailVerificationTime`), never on the identity/JWT `email` claim —
+  // convex/access.ts `requireOperator` only ever trusts the row (CodeRabbit
+  // #4089340875, CWE-863).
   const [alice, bob] = await t.run(async (ctx) => [
-    await ctx.db.insert("users", { isAnonymous: true }),
-    await ctx.db.insert("users", { isAnonymous: true }),
+    await ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "alice@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
+    await ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "bob@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
   ]);
 
   return {
@@ -489,7 +501,7 @@ describe("Convex application boundaries", () => {
       }),
     ).rejects.toThrow("no longer active");
     await t.mutation(internal.jobs.finish, { jobId, attempt: 1, warnings: [] });
-    expect((await a.query(api.jobs.list, {}))[0].status).toBe("cancelled");
+    expect((await a.query(api.jobs.list, {})).jobs[0].status).toBe("cancelled");
   });
   it("still refuses an unauthenticated caller entirely", async () => {
     const { t, alice } = await setup();
@@ -640,7 +652,7 @@ describe("Convex application boundaries", () => {
     vi.stubGlobal("fetch", fetcher);
     await expect(
       t.action(api.integrations.readLink, { url: "https://example.com" }),
-    ).rejects.toThrow("Start a session");
+    ).rejects.toThrow("Sign in as an operator to import.");
     expect(fetcher).not.toHaveBeenCalled();
   });
   it("bounds stored web previews and preserves their collection time on cache hits", async () => {

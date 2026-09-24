@@ -71,26 +71,22 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
     expect(logs[0]).toMatchObject({ outcome: "applied", accountId, generation: 1 });
   });
 
-  it("is idempotent: a duplicate generation never double-applies and returns the same acceptance", async () => {
+  it("is idempotent: an identical resend under the same generation never double-applies and returns the same acceptance", async () => {
     const t = setup();
     const accountId = await seedAccount(t);
-    await t.mutation(
-      applyUpdate,
-      envelope({ providerAccountId: "111", generation: 1, reportedState: "indexing" }),
-    );
 
-    // Resend the same generation with different content on purpose: a
-    // duplicate must be a true no-op, not a reinterpretation of the stored
-    // state, even when the resent payload disagrees with what's on record.
-    const result = await t.mutation(
-      applyUpdate,
-      envelope({
-        providerAccountId: "111",
-        generation: 1,
-        reportedState: "failed",
-        error: { message: "boom" },
-      }),
-    );
+    const original = envelope({
+      providerAccountId: "111",
+      generation: 1,
+      reportedState: "indexing",
+    });
+
+    await t.mutation(applyUpdate, original);
+
+    // Resent verbatim: same material fields (reportedState, captureIds,
+    // uniquePostCount, pendingWork, error), just a later observedAt — a true
+    // idempotent replay must be a no-op.
+    const result = await t.mutation(applyUpdate, { ...original, observedAt: Date.now() + 1 });
 
     expect(result).toEqual({ outcome: "duplicate_ignored", committedGeneration: 1 });
 
@@ -105,6 +101,88 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
     const logs = await t.run((ctx) => ctx.db.query("publicationUpdates").collect());
     expect(logs).toHaveLength(2);
     expect(logs[1]).toMatchObject({ outcome: "duplicate_ignored", generation: 1 });
+  });
+
+  it("rejects a same-generation resend whose material fields conflict with what was committed", async () => {
+    const t = setup();
+    const accountId = await seedAccount(t);
+    await t.mutation(
+      applyUpdate,
+      envelope({ providerAccountId: "111", generation: 1, reportedState: "indexing" }),
+    );
+
+    // Same generation number, but a DIFFERENT report: this is not a replay
+    // of the same content, so it must not be silently accepted as a no-op —
+    // silently ignoring it would let a buggy or compromised sender resend a
+    // generation with conflicting facts and have the audit log record it as
+    // a benign duplicate.
+    const result = await t.mutation(
+      applyUpdate,
+      envelope({
+        providerAccountId: "111",
+        generation: 1,
+        reportedState: "failed",
+        error: { message: "boom" },
+      }),
+    );
+
+    expect(result).toEqual({
+      outcome: "rejected_invalid",
+      committedGeneration: 1,
+      rejectionReason: "conflicting replay of generation 1",
+    });
+
+    const row = await t.run((ctx) =>
+      ctx.db
+        .query("accountPublications")
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .unique(),
+    );
+
+    // The committed row is untouched by the rejected conflict.
+    expect(row?.state).toBe("indexing");
+    const logs = await t.run((ctx) => ctx.db.query("publicationUpdates").collect());
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toMatchObject({
+      outcome: "rejected_invalid",
+      generation: 1,
+      rejectionReason: "conflicting replay of generation 1",
+    });
+  });
+
+  it("rejects a same-generation resend that repeats uniquePostCount but with a different uniquePostCountAsOf (CodeRabbit #4089340892)", async () => {
+    const t = setup();
+    await seedAccount(t);
+    await t.mutation(
+      applyUpdate,
+      envelope({
+        providerAccountId: "111",
+        generation: 1,
+        reportedState: "searchable",
+        uniquePostCount: 480,
+        uniquePostCountAsOf: 1_000,
+      }),
+    );
+
+    // Same reportedState, same uniquePostCount — but a different observation
+    // time for that count. This is a different report, not a byte-for-byte
+    // replay, so it must not be silently accepted as duplicate_ignored.
+    const result = await t.mutation(
+      applyUpdate,
+      envelope({
+        providerAccountId: "111",
+        generation: 1,
+        reportedState: "searchable",
+        uniquePostCount: 480,
+        uniquePostCountAsOf: 2_000,
+      }),
+    );
+
+    expect(result).toEqual({
+      outcome: "rejected_invalid",
+      committedGeneration: 1,
+      rejectionReason: "conflicting replay of generation 1",
+    });
   });
 
   it("rejects a stale, out-of-order update without regressing the displayed state", async () => {

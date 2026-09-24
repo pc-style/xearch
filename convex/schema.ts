@@ -218,7 +218,14 @@ export default defineSchema({
     lastSeenAt: v.number(),
   })
     .index("by_handle", ["handle"])
-    .index("by_account", ["accountId"]),
+    .index("by_account", ["accountId"])
+    // One account's handle history is bounded by how many times X has
+    // actually reassigned/renamed it, not by an arbitrary read cap — see
+    // convex/jobs.ts `recordHandle`, which uses this to look up "has this
+    // exact account already seen this exact handle" directly instead of
+    // scanning a capped page of the account's rows (a scan silently
+    // re-inserted a handle once an account passed its 50th tracked one).
+    .index("by_account_and_handle", ["accountId", "handle"]),
   jobs: defineTable({
     owner: v.id("users"),
     kind: kindValidator,
@@ -303,6 +310,21 @@ export default defineSchema({
     ),
     pendingWork: v.optional(v.object({ unit: pendingWorkUnitValidator, count: v.number() })),
     updatedAt: v.number(),
+    // A digest of the material fields (reportedState, captureIds,
+    // uniquePostCount, uniquePostCountAsOf, pendingWork, error) of the most
+    // recently APPLIED update, so a later update resent under the SAME
+    // generation number can
+    // be told apart from a true idempotent replay: matching digest means
+    // the sender resent the identical content (duplicate_ignored); a
+    // different digest under the same generation means two different
+    // reports claim to be the same generation, which is a contract
+    // violation (rejected_invalid), not a no-op. Optional and unbackfilled
+    // on purpose (no migration) — a row written before this field existed
+    // simply cannot be checked for a conflicting replay, and falls back to
+    // the old duplicate_ignored behavior. See convex/publication.ts
+    // `applyUpdate` and docs/publication-contract.md "Idempotency and
+    // staleness".
+    lastAppliedDigest: v.optional(v.string()),
   })
     .index("by_account", ["accountId"])
     .index("by_state", ["state"]),

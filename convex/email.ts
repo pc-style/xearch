@@ -1,8 +1,9 @@
 import { mutation, query } from "./_generated/server";
 import { components } from "./_generated/api";
-import { AgentMail, type OutboundId } from "@agentmail/convex";
+import { AgentMail, vOutboundStatus, type OutboundId } from "@agentmail/convex";
 import { v, ConvexError } from "convex/values";
 import { user } from "./access";
+import schema from "./schema";
 import type { Doc } from "./_generated/dataModel";
 
 const mail = new AgentMail(components.agentmail);
@@ -30,6 +31,13 @@ function buildDigest(result: Doc<"sessions">) {
 // commits to an explicit send.
 export const preview = query({
   args: { sessionId: v.id("sessions") },
+  returns: v.object({
+    subject: v.string(),
+    text: v.string(),
+    rowCount: v.number(),
+    totalCount: v.number(),
+    verifiedEmail: v.union(v.string(), v.null()),
+  }),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
     const result = await ctx.db.get(args.sessionId);
@@ -51,7 +59,8 @@ export const preview = query({
 
 export const send = mutation({
   args: { sessionId: v.id("sessions"), recipient: v.string() },
-  handler: async (ctx, args): Promise<void> => {
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
     const owner = await user(ctx);
     // Unconditional: an authenticated identity (including an Anonymous-
     // provider guest, see convex/auth.ts) must have a verified email that
@@ -86,11 +95,26 @@ export const send = mutation({
     });
 
     await ctx.db.insert("deliveries", { owner, outboundId, query: result.raw });
+
+    return null;
   },
 });
 
 export const deliveries = query({
   args: {},
+  returns: v.array(
+    schema.doc("deliveries").extend({
+      delivery: v.union(
+        v.object({
+          status: vOutboundStatus,
+          agentmailMessageId: v.union(v.string(), v.null()),
+          threadId: v.union(v.string(), v.null()),
+          errorMessage: v.union(v.string(), v.null()),
+        }),
+        v.null(),
+      ),
+    }),
+  ),
   handler: async (ctx) => {
     const owner = await user(ctx);
 

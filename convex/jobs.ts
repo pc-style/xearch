@@ -5,7 +5,8 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { kindValidator, throttleProviderValidator } from "./schema";
-import { user } from "./access";
+import schema from "./schema";
+import { user, requireOperator } from "./access";
 import { handle, statusUrl } from "./lib/xmd";
 import { canonicalQuery } from "./lib/search";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
@@ -40,6 +41,15 @@ export const list = query({
     includeDismissed: v.optional(v.boolean()),
     scope: v.optional(jobScopeValidator),
   },
+  returns: v.object({
+    jobs: v.array(schema.doc("jobs")),
+    // True when the whole-table scan hit JOB_FEED_SCAN before filling the
+    // page, i.e. this feed page may be missing older eligible jobs. NOT set
+    // just because the page filled up (that is a complete, ordinary page) —
+    // same distinction convex/library.ts `rows` makes with its own
+    // `truncated`.
+    truncated: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     // Authenticated callers only; every signed-in caller sees the same
     // shared feed, so nothing about the identity narrows what comes back.
@@ -47,9 +57,13 @@ export const list = query({
     const scope = args.scope ?? "all";
     const out: Doc<"jobs">[] = [];
     let scanned = 0;
+    let truncated = false;
 
     for await (const job of ctx.db.query("jobs").order("desc")) {
-      if (++scanned > JOB_FEED_SCAN) break;
+      if (++scanned > JOB_FEED_SCAN) {
+        truncated = true;
+        break;
+      }
 
       if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
 
@@ -59,7 +73,7 @@ export const list = query({
       if (out.length >= JOB_FEED_LIMIT) break;
     }
 
-    return out;
+    return { jobs: out, truncated };
   },
 });
 
@@ -128,12 +142,15 @@ export const start = mutation({
     refresh: v.optional(v.boolean()),
     previous: v.optional(v.id("jobs")),
   },
+  returns: v.id("jobs"),
   handler: async (ctx, args) => {
-    // Authentication only. The job this creates is not scoped back to this
-    // caller for reads or actions on it — imports are shared infrastructure,
-    // not personal data (to-do.md) — `owner` below is written purely as an
-    // audit trail of who started the run.
-    const owner = await user(ctx);
+    // Starting any kind of import spends provider allowance (x.md, and via
+    // the raw-capture handoff). Per the authorization-boundary decision,
+    // this requires a signed-in OPERATOR (a verified email on
+    // OPERATOR_EMAILS), not merely a signed-in session — an anonymous guest
+    // is refused here. `owner` below is still written purely as an audit
+    // trail of who started the run, not a visibility boundary.
+    const owner = await requireOperator(ctx);
     const outbound = process.env.COLLECTOR_MODE === "outbound";
 
     const worker = outbound
@@ -306,13 +323,21 @@ export const progress = internalMutation({
   },
 });
 
-// Load a job, requiring only that the caller is authenticated. Jobs are
-// shared infrastructure, not personal data (to-do.md): any signed-in caller
-// may cancel, retry, dismiss, or restore any job, not only the one they
-// started. `job.owner` still records who started it (an audit trail); it is
-// no longer a permission check.
-async function sharedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
-  await user(ctx);
+// Load a job, requiring the caller pass `auth`. Jobs are shared
+// infrastructure, not personal data (to-do.md): any caller `auth` admits may
+// act on any job, not only the one they started. `job.owner` still records
+// who started it (an audit trail); it is no longer a permission check.
+//
+// `auth` is `user` for read-only or already-stopped-work paths and
+// `requireOperator` for anything that starts, resumes, or would otherwise
+// let a job keep spending provider allowance — see the authorization-
+// boundary decision in convex/access.ts.
+async function sharedJob(
+  ctx: QueryCtx | MutationCtx,
+  jobId: Id<"jobs">,
+  auth: (ctx: QueryCtx | MutationCtx) => Promise<Id<"users">> = user,
+) {
+  await auth(ctx);
   const job = await ctx.db.get(jobId);
 
   if (!job) throw new ConvexError("Job not found.");
@@ -322,22 +347,26 @@ async function sharedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
 
 export const cancel = mutation({
   args: { jobId: v.id("jobs") },
+  returns: v.null(),
   handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId);
+    const job = await sharedJob(ctx, jobId, requireOperator);
 
-    if (!["queued", "running"].includes(job.status)) return;
+    if (!["queued", "running"].includes(job.status)) return null;
     await ctx.db.patch(jobId, {
       status: "cancelled",
       phase: "Stopped; an in-flight request may still finish. Retained captures are not deleted.",
       updatedAt: Date.now(),
     });
+
+    return null;
   },
 });
 
 export const retry = mutation({
   args: { jobId: v.id("jobs") },
+  returns: v.null(),
   handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId);
+    const job = await sharedJob(ctx, jobId, requireOperator);
 
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
@@ -361,6 +390,8 @@ export const retry = mutation({
       updatedAt: Date.now(),
     });
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId });
+
+    return null;
   },
 });
 
@@ -374,8 +405,9 @@ export const retry = mutation({
 // to hide duplicates".
 export const dismiss = mutation({
   args: { jobId: v.id("jobs") },
+  returns: v.null(),
   handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId);
+    const job = await sharedJob(ctx, jobId, requireOperator);
 
     // Deliberately refuses queued/running work: hiding a run that is still
     // spending provider allowance would make it unstoppable from the UI.
@@ -383,17 +415,22 @@ export const dismiss = mutation({
     if (job.status === "queued" || job.status === "running")
       throw new ConvexError("Stop this run before dismissing it.");
 
-    if (job.dismissedAt !== undefined) return;
+    if (job.dismissedAt !== undefined) return null;
     await ctx.db.patch(jobId, { dismissedAt: Date.now() });
+
+    return null;
   },
 });
 
 export const restore = mutation({
   args: { jobId: v.id("jobs") },
+  returns: v.null(),
   handler: async (ctx, { jobId }) => {
-    // Ownership is the whole check here; the row itself is not needed.
-    await sharedJob(ctx, jobId);
+    // Authorization is the whole check here; the row itself is not needed.
+    await sharedJob(ctx, jobId, requireOperator);
     await ctx.db.patch(jobId, { dismissedAt: undefined });
+
+    return null;
   },
 });
 
@@ -435,6 +472,7 @@ export const recordThrottle = internalMutation({
 
 export const receipts = query({
   args: { jobId: v.id("jobs") },
+  returns: v.array(schema.doc("receipts")),
   handler: async (ctx, { jobId }) => {
     await sharedJob(ctx, jobId);
 
@@ -676,8 +714,18 @@ export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise
       existing.handle !== profile.handle ||
       existing.name !== profile.name ||
       existing.avatar !== profile.avatar
-    )
+    ) {
+      // Record the CURRENT handle before it is overwritten below.
+      // accountHandles is append-only evidence written only by this
+      // function, and most accounts have never had a rename yet, so this is
+      // very often the first row ever written for this account — if it were
+      // skipped, an account's handle at the moment of its very first rename
+      // would already be gone from history, with only the new handle
+      // recorded by the call at the bottom of this function.
+      await recordHandle(ctx, existing._id, existing.handle);
       await ctx.db.patch(existing._id, profile);
+    }
+
     accountId = existing._id;
   } else {
     // No row for this provider id. Deliberately does NOT adopt a row that
@@ -694,17 +742,28 @@ export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise
 // Append-only handle history, so "which account held @x when" is answerable
 // from data instead of guessed. Nothing wrote this table before, which is
 // why the reassignment case had no evidence trail at all.
-const MAX_TRACKED_HANDLES = 50;
-
+//
+// Looked up by the exact (accountId, handle) pair via `by_account_and_handle`
+// rather than scanning a capped page of the account's rows: a `.take(N)` scan
+// would silently re-insert a handle the account had already seen once it
+// accumulated more than N tracked handles, since the earlier row could fall
+// outside the scanned page. The indexed lookup is exact regardless of how
+// many handles this account has ever had.
 async function recordHandle(ctx: MutationCtx, accountId: Id<"accounts">, handleText: string) {
   const now = Date.now();
 
-  const known = await ctx.db
+  // `.first()`, not `.unique()`: Convex does not enforce uniqueness on this
+  // (or any) index, and the comment above this function already describes
+  // how a duplicate (accountId, handle) pair could exist from before this
+  // exact-lookup fix — `.unique()` throws on a second match and would fail
+  // the whole import page mutation for every account that already has one
+  // (CodeRabbit #4089340879).
+  const existing = await ctx.db
     .query("accountHandles")
-    .withIndex("by_account", (q) => q.eq("accountId", accountId))
-    .take(MAX_TRACKED_HANDLES);
-
-  const existing = known.find((row) => row.handle === handleText);
+    .withIndex("by_account_and_handle", (q) =>
+      q.eq("accountId", accountId).eq("handle", handleText),
+    )
+    .first();
 
   if (existing) await ctx.db.patch(existing._id, { lastSeenAt: now });
   else

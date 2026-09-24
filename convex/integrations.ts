@@ -3,7 +3,7 @@ import type { QueryCtx } from "./_generated/server";
 import { internal, components } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import { FirecrawlClient } from "@firecrawl/firecrawl-convex";
-import { user } from "./access";
+import { user, requireOperator } from "./access";
 import { publicUrl, record, string, XmdClient } from "./lib/xmd";
 import { z } from "zod";
 import { deliverCapture } from "./lib/handoff";
@@ -122,13 +122,18 @@ export const operator = query({
   },
 });
 
+// Every action that spends Firecrawl/OpenAI/x.md allowance calls this right
+// before it does, so gating it here is the one place that covers
+// readLink/webContext/interpret/account at once. Per the authorization-
+// boundary decision (convex/access.ts), a signed-in OPERATOR is required —
+// not merely a signed-in (possibly anonymous) session.
 export const reserve = internalMutation({
   args: {
     service: v.union(v.literal("firecrawl"), v.literal("openai"), v.literal("xmd")),
   },
   returns: v.null(),
   handler: async (ctx) => {
-    await user(ctx);
+    await requireOperator(ctx);
 
     return null;
   },
@@ -184,7 +189,10 @@ export const readLink = action({
     url: string;
     collectedAt: number;
   }> => {
-    if (!(await ctx.auth.getUserIdentity())) throw new ConvexError("Start a session first.");
+    // Gated even on a cache hit (below): reading a linked page is one of the
+    // provider-spending actions in the authorization-boundary decision, not
+    // only the Firecrawl call it can lead to.
+    await requireOperator(ctx);
     const url = publicUrl(args.url);
     const cached = await ctx.runQuery(internal.integrations.page, { url });
 
@@ -252,6 +260,11 @@ export const webContext = action({
   args: { query: v.string() },
   returns: v.array(readResultValidator),
   handler: async (ctx, { query }) => {
+    // Authorization before configuration: a non-operator must not be able
+    // to learn whether Firecrawl is even configured on this deployment by
+    // probing which error comes back.
+    await requireOperator(ctx);
+
     if (!query.trim() || query.length > 300)
       throw new ConvexError("Enter a search under 300 characters.");
 
@@ -347,6 +360,11 @@ export const interpret = action({
   args: { raw: v.string() },
   returns: v.object({ query: v.string(), explanation: v.string() }),
   handler: async (ctx, { raw }) => {
+    // Authorization before configuration: a non-operator must not be able
+    // to learn whether OpenAI is even configured on this deployment by
+    // probing which error comes back.
+    await requireOperator(ctx);
+
     if (!raw.trim() || raw.length > 300)
       throw new ConvexError("Enter a search under 300 characters.");
     // Reject unsupported hard operators before spending tokens, and pin any author.

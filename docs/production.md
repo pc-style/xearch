@@ -60,6 +60,8 @@ A TLS probe against the production route mutated no account state: an unknown ha
 
 Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; a guest session cannot send production email.
 
+Starting or retrying an import (`jobs.start`/`jobs.retry`, any kind), reading web context or a linked page and "Help me search" (the `integrations.*` actions calling Firecrawl/x.md/OpenAI), and cancel/dismiss/restore on a job all require a signed-in OPERATOR, not merely a signed-in guest session — ordinary search stays public. `convex/access.ts`'s `requireOperator` checks the caller's verified email (from the stock Email OTP provider, `convex/auth.ts` and `src/auth/EmailSignIn.tsx`) against `OPERATOR_EMAILS`, a comma-separated, case-insensitive list of addresses set on the production deployment. An anonymous guest and a verified-but-unlisted email are both refused with the same message ("Sign in as an operator to import."), so the allowlist is never confirmed or denied to the caller. This is authorization, not a quota — nothing about it counts or throttles requests, and it adds no rate limit on top of what x.md/Firecrawl/OpenAI themselves report.
+
 Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. Browser visual checks were unavailable during deployment.
 
 ## Service health

@@ -7,8 +7,25 @@ const modules = import.meta.glob("../convex/**/*.ts");
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const alice = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
-  const bob = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
+  // Verified email lives on the `users` row (`emailVerificationTime`), never
+  // on the identity/JWT `email` claim — convex/access.ts `requireOperator`
+  // only ever trusts the row (CodeRabbit #4089340875, CWE-863).
+  const alice = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "alice@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
+  );
+
+  const bob = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      isAnonymous: false,
+      email: "bob@test.xearch",
+      emailVerificationTime: Date.now(),
+    }),
+  );
 
   return {
     t,

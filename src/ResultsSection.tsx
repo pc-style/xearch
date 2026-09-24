@@ -1,4 +1,4 @@
-import { useDeferredValue, useState } from "react";
+import { useDeferredValue, useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
   Bookmark,
@@ -18,6 +18,7 @@ import { keyLinkifySegments, linkifyText, truncateSegments } from "./linkify";
 import type { ResultPost } from "../convex/lib/results";
 import type { Sort } from "../convex/lib/search";
 import { NerdStatsPanel } from "./library/NerdStatsPanel";
+import { OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { OPERATOR_BUILD } from "./operatorSurface";
 import type { SearchAttemptSnapshot } from "./searchTelemetry";
 import { ModalKind, ViewMode } from "./uiState";
@@ -89,6 +90,7 @@ export function PostCard({
   onRead,
   onAuthor,
   threadStatus,
+  isOperator,
 }: {
   post: ResultPost;
   query: string;
@@ -98,6 +100,8 @@ export function PostCard({
   onRead: (url: string) => void;
   onAuthor: () => void;
   threadStatus?: string | null;
+  /** Gates "Fetch conversation from X" (a paid x.md import) — see OPERATOR_SIGN_IN_NOTICE. */
+  isOperator: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const createdAt = post.createdAt === undefined ? null : new Date(post.createdAt);
@@ -172,12 +176,24 @@ export function PostCard({
       {post.links.length > 0 && (
         <div className="links">
           {post.links.slice(0, 3).map((url) => (
-            <button type="button" key={url} onClick={() => onRead(url)} title={url}>
+            <button
+              type="button"
+              key={url}
+              disabled={!isOperator}
+              onClick={() => onRead(url)}
+              title={url}
+            >
               <Link2 size={14} />
               <span>{safeHostname(url)}</span>
               <ArrowUpRight size={13} />
             </button>
           ))}
+          {/* onRead sends the URL to the protected readLink action
+              (Firecrawl) — gated the same as every other paid action
+              (CodeRabbit #4089730732). The sign-in reason for this AND
+              "Fetch conversation from X" is shown once, in the footer
+              below, rather than repeated on every card with links
+              (CodeRabbit #4089916567). */}
         </div>
       )}
       <footer>
@@ -206,13 +222,20 @@ export function PostCard({
               doesn't open a preview — the label says so, and the status
               line below tracks the job it starts instead of only surfacing
               it in the Recent imports modal. */}
-          <button type="button" onClick={onThread}>
+          <button type="button" disabled={!isOperator} onClick={onThread}>
             Fetch conversation from X
           </button>
           <a href={post.url} target="_blank" rel="noreferrer">
             Open on X <ArrowUpRight size={14} />
           </a>
         </div>
+        {/* Single visible reason for BOTH gated controls on this card
+            ("Fetch conversation from X" above and any linked-page buttons
+            in the links section) — shown once per card, not once per
+            control (CodeRabbit #4089916567). A disabled `title` alone is
+            also unreliable for keyboard/touch users (CodeRabbit
+            #4089730724), which is why this exists as visible text at all. */}
+        {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
         {threadStatus && (
           <p className="scope-note" role="status">
             {threadStatus}
@@ -244,6 +267,35 @@ const safeHostname = (url: string) => {
   }
 };
 
+/** One "More actions" menu entry that also spends provider allowance,
+ * gated the same way as every other paid action — see OPERATOR_SIGN_IN_NOTICE
+ * (src/integrationStatus.ts). Pulled out of ResultsSection so the two
+ * (Web context, Import from X) menu entries don't each carry their own
+ * copy of this wrapper/reason markup inline in an already-large component. */
+function OperatorGatedMenuItem({
+  icon,
+  label,
+  disabled,
+  isOperator,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  disabled: boolean;
+  isOperator: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div className="result-menu-item">
+      <button type="button" disabled={disabled || !isOperator} onClick={onClick}>
+        {icon}
+        {label}
+      </button>
+      {!isOperator && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
+    </div>
+  );
+}
+
 export function ResultsSection({
   view,
   raw,
@@ -271,6 +323,7 @@ export function ResultsSection({
   alreadySaved,
   statsForNerds,
   onToggleStats,
+  isOperator,
 }: {
   view: ViewMode;
   raw: string;
@@ -300,6 +353,8 @@ export function ResultsSection({
   alreadySaved?: boolean;
   statsForNerds?: boolean;
   onToggleStats?: () => void;
+  /** Gates every paid action shown here — see OPERATOR_SIGN_IN_NOTICE. */
+  isOperator: boolean;
 }) {
   // Effect-free focus/scroll: callback ref runs at commit time, no useEffect.
   function resultsTitleRef(node: HTMLHeadingElement | null) {
@@ -364,14 +419,13 @@ export function ResultsSection({
                   <MoreHorizontal size={15} />
                 </summary>
                 <div className="result-menu-items">
-                  <button
-                    type="button"
+                  <OperatorGatedMenuItem
+                    icon={<Link2 size={15} />}
+                    label="Web context (fetches page)"
                     disabled={busy || !configured?.firecrawl}
+                    isOperator={isOperator}
                     onClick={onWebContext}
-                  >
-                    <Link2 size={15} />
-                    Web context (fetches page)
-                  </button>
+                  />
                   <div className="result-menu-item">
                     <button
                       type="button"
@@ -389,14 +443,13 @@ export function ResultsSection({
                       the label says so, and the status line below tracks the
                       job instead of only surfacing it in the Recent imports
                       modal. */}
-                  <button
-                    type="button"
+                  <OperatorGatedMenuItem
+                    icon={<Search size={15} />}
+                    label="Import from X"
                     disabled={busy || !configured?.indexing}
+                    isOperator={isOperator}
                     onClick={onLiveSearch}
-                  >
-                    <Search size={15} />
-                    Import from X
-                  </button>
+                  />
                 </div>
               </details>
             )}
@@ -467,7 +520,7 @@ export function ResultsSection({
                   the one place actually meant to go get more). */}
               <button
                 type="button"
-                disabled={busy || !!queryError || !configured?.indexing}
+                disabled={busy || !!queryError || !configured?.indexing || !isOperator}
                 onClick={onLiveSearch}
               >
                 <Search size={15} />
@@ -477,6 +530,8 @@ export function ResultsSection({
                 <Plus size={15} />
                 Import an account
               </button>
+              {/* Visible reason, not just a disabled `title` (CodeRabbit #4089730724). */}
+              {!isOperator && <p className="scope-note">{OPERATOR_SIGN_IN_NOTICE}</p>}
             </div>
           )}
         </div>
@@ -504,6 +559,7 @@ export function ResultsSection({
                 onThread={() => onThread(post)}
                 onRead={onRead}
                 threadStatus={threadStatus?.(post.tweetId)}
+                isOperator={isOperator}
               />
             ))}
           </div>

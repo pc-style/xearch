@@ -152,15 +152,14 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     // --- Step 2: confirmed publication update -> searchable, no reacquisition ---
     const jobsBeforeUpdate = await t.run((ctx) => ctx.db.query("jobs").collect());
 
-    const applied = await t.mutation(
-      applyUpdate,
-      envelope({
-        generation: 1,
-        reportedState: "searchable",
-        uniquePostCount: 480,
-        uniquePostCountAsOf: Date.now(),
-      }),
-    );
+    const step2Envelope = envelope({
+      generation: 1,
+      reportedState: "searchable",
+      uniquePostCount: 480,
+      uniquePostCountAsOf: Date.now(),
+    });
+
+    const applied = await t.mutation(applyUpdate, step2Envelope);
 
     console.log("STEP2 applyUpdate result:", JSON.stringify(applied));
     expect(applied).toEqual({ outcome: "applied", committedGeneration: 1 });
@@ -179,16 +178,12 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     const uiAfter = renderedLabel(rowsAfter[0]);
     expect(uiAfter).toContain("Searchable");
 
-    // --- Step 3: the same update sent twice -> idempotent, no double count ---
-    const duplicate = await t.mutation(
-      applyUpdate,
-      envelope({
-        generation: 1,
-        reportedState: "searchable",
-        uniquePostCount: 480,
-        uniquePostCountAsOf: Date.now(),
-      }),
-    );
+    // --- Step 3: the exact same update resent verbatim -> idempotent, no
+    // double count. Resent verbatim (not merely with the same numbers
+    // recomputed) is the point: a real duplicate off the wire replays the
+    // same envelope byte-for-byte, including `uniquePostCountAsOf`, which
+    // is now part of the replay digest (CodeRabbit #4089340892).
+    const duplicate = await t.mutation(applyUpdate, step2Envelope);
 
     console.log("STEP3 duplicate result:", JSON.stringify(duplicate));
     expect(duplicate).toEqual({ outcome: "duplicate_ignored", committedGeneration: 1 });

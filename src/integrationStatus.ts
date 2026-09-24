@@ -18,6 +18,17 @@ export type IndexingStatus = {
  */
 export const IMPORTS_UNAVAILABLE = "Imports are not available on this site.";
 
+/**
+ * Starting/retrying an import, reading web context or a linked page, "Help
+ * me search", Find on X, and Conversation all spend provider allowance
+ * (x.md/Firecrawl/OpenAI) and therefore require a signed-in OPERATOR —
+ * convex/access.ts `requireOperator` — not merely a signed-in guest
+ * session. Every surface that offers one of those actions to a non-operator
+ * shows this exact copy, so the boundary reads the same everywhere instead
+ * of one place explaining it and another silently failing.
+ */
+export const OPERATOR_SIGN_IN_NOTICE = "Sign in as an operator to use this action.";
+
 /** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {
   if (config.indexing) return undefined;

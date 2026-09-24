@@ -156,10 +156,12 @@ export default function Dashboard({
   // Ask the server for exactly the kinds this feed shows. Filtering "bulk"
   // out here, after the server had already limited the page, could hide
   // older non-account runs behind 20 newer account imports.
-  const jobs = useQuery(
+  const jobFeed = useQuery(
     api.jobs.list,
     isAuthenticated ? { includeDismissed: showDismissed, scope: "other" } : "skip",
   );
+
+  const jobs = jobFeed?.jobs;
   // Account-history ("bulk") jobs are represented per-account in <Library>
   // above (convex/library.ts groups exactly this kind); this feed exists
   // only for the non-account job kinds to-do.md P0 says must stay out of
@@ -177,7 +179,7 @@ export default function Dashboard({
     isAuthenticated && !showDismissed ? { includeDismissed: true, scope: "other" } : "skip",
   );
 
-  const everRan = showDismissed ? (jobs?.length ?? 0) > 0 : (everJobs?.length ?? 0) > 0;
+  const everRan = showDismissed ? (jobs?.length ?? 0) > 0 : (everJobs?.jobs.length ?? 0) > 0;
 
   const start = useMutation(api.jobs.start);
 

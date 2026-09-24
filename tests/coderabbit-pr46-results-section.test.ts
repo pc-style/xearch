@@ -113,6 +113,7 @@ function render(props: Partial<Parameters<typeof ResultsSection>[0]> = {}) {
       onRead: noop,
       onBookmark: noop,
       onThread: noop,
+      isOperator: true,
       ...props,
     }),
   );

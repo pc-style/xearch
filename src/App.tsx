@@ -35,7 +35,7 @@ import {
 import * as Effect from "effect/Effect";
 import { ResultsSection, Avatar } from "./ResultsSection";
 import { EmailSignIn } from "./auth/EmailSignIn";
-import { IMPORTS_UNAVAILABLE } from "./integrationStatus";
+import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { useLiveNow } from "./library/clock";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
 import { describeError } from "./errors";
@@ -418,6 +418,13 @@ export default function App() {
   // there is nothing to type or get wrong at send time.
   const me = useQuery(api.auth.me);
   const verifiedEmail = me?.emailVerified ? (me.email ?? null) : null;
+  // Provider-spending actions (starting/retrying an import, web context,
+  // "Help me search", Find on X, Conversation) require a signed-in
+  // OPERATOR — convex/access.ts `requireOperator` — not merely a signed-in
+  // guest. This is only used to show the sign-in path before someone hits
+  // the server's ConvexError; the server enforces the boundary regardless
+  // of what this reads.
+  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip") ?? false;
   let queryError = "";
 
   try {
@@ -438,7 +445,7 @@ export default function App() {
       ? snapshot
       : undefined;
 
-  const jobs = useQuery(api.jobs.list, isAuthenticated ? {} : "skip") ?? [];
+  const jobs = useQuery(api.jobs.list, isAuthenticated ? {} : "skip")?.jobs ?? [];
   const saved = useQuery(api.search.saved, isAuthenticated ? {} : "skip") ?? [];
   const bookmarks = useQuery(api.search.bookmarks, isAuthenticated ? {} : "skip") ?? [];
   const deliveries = useQuery(api.email.deliveries, isAuthenticated ? {} : "skip") ?? [];
@@ -1055,16 +1062,22 @@ export default function App() {
                 Search everything, select a creator, or start with <b>@</b> to filter by account.
               </span>
               {configured?.openai && (
-                <button
-                  type="button"
-                  className="text-button ai"
-                  disabled={busy || !draft.trim()}
-                  title="Suggest a clearer search"
-                  onClick={() => void task(proposeSearch())}
-                >
-                  <Sparkles size={13} />
-                  Help me search
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="text-button ai"
+                    disabled={busy || !draft.trim() || !isOperator}
+                    title={isOperator ? "Suggest a clearer search" : undefined}
+                    onClick={() => void task(proposeSearch())}
+                  >
+                    <Sparkles size={13} />
+                    Help me search
+                  </button>
+                  {/* A disabled `title` alone is unreliable for keyboard/touch
+                      users (CodeRabbit #4089730724) — the reason is also shown
+                      as visible text. */}
+                  {!isOperator && <span className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</span>}
+                </>
               )}
             </div>
           </form>
@@ -1166,6 +1179,7 @@ export default function App() {
                 statsForNerds={statsForNerds}
                 onToggleStats={() => setStatsForNerds((v) => !v)}
                 alreadySaved={alreadySaved}
+                isOperator={isOperator}
               />
             </div>
           </Profiler>
@@ -1190,6 +1204,17 @@ export default function App() {
           <p className="muted-copy">
             Collect an account's public history from X. You'll see its progress below.
           </p>
+          {isAuthenticated && !isOperator && (
+            <>
+              <p className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</p>
+              <EmailSignIn
+                className="stack-form"
+                onSignedIn={() =>
+                  setNotice("Signed in. Imports unlock if this email is an operator address.")
+                }
+              />
+            </>
+          )}
           <form className="stack-form" onSubmit={importAccount}>
             <label htmlFor="account">X handle</label>
             <input
@@ -1211,7 +1236,11 @@ export default function App() {
               value={since}
               onChange={(e) => setSince(e.target.value)}
             />
-            <button className="primary" type="submit" disabled={busy || !configured?.indexing}>
+            <button
+              className="primary"
+              type="submit"
+              disabled={busy || !configured?.indexing || !isOperator}
+            >
               <Download size={16} />
               Import posts
             </button>
@@ -1250,7 +1279,8 @@ export default function App() {
                 {(job.status === "failed" || job.status === "partial") && (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || !isOperator}
+                    title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
                     onClick={() =>
                       void task(
                         (async () => {

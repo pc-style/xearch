@@ -59,6 +59,62 @@ function json(body: JsonValue, status: number): Response {
   });
 }
 
+// --- Same-generation replay conflict detection ----------------------------
+// A resend under the SAME generation number is only a true idempotent
+// replay if it reflects the exact same content as what was already applied
+// — docs/publication-contract.md is explicit that a resent generation
+// "must reflect the exact same content". Comparing every material field by
+// hand on every duplicate would be brittle to add to, so instead a small
+// digest of exactly those fields (reportedState, captureIds, uniquePostCount,
+// pendingWork, error — deliberately NOT runId/observedAt/handle/
+// providerAccountId, which can legitimately vary between an original send
+// and a resend of the same report) is computed and stored once, on every
+// applied update, and compared on the next one claiming the same generation.
+//
+// A non-cryptographic hash (FNV-1a) is enough here: this is integrity
+// detection against an accidental or buggy resend, not an adversarial
+// collision search, and it avoids depending on Web Crypto's async
+// SubtleCrypto API being available in every Convex runtime this mutation
+// might run in.
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5;
+
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function materialDigest(args: {
+  reportedState: string;
+  captureIds: string[];
+  uniquePostCount?: number;
+  uniquePostCountAsOf?: number;
+  pendingWork?: { unit: string; count: number };
+  error?: { message: string; code?: string };
+}): string {
+  // captureIds sorted before hashing: the same set of confirmed captures
+  // resent in a different order is the same report, not a conflicting one.
+  //
+  // `uniquePostCountAsOf` is included alongside `uniquePostCount`: two
+  // reports can state the same count as of two different observation
+  // times, which is a different report even though the number matches
+  // (CodeRabbit #4089340892) — omitting it would let such a resend under
+  // the same generation number pass as a true replay.
+  return fnv1a(
+    JSON.stringify({
+      reportedState: args.reportedState,
+      captureIds: [...args.captureIds].sort(),
+      uniquePostCount: args.uniquePostCount ?? null,
+      uniquePostCountAsOf: args.uniquePostCountAsOf ?? null,
+      pendingWork: args.pendingWork ?? null,
+      error: args.error ?? null,
+    }),
+  );
+}
+
 // --- Inbound envelope narrowing -------------------------------------------
 // `await request.json()` is `unknown`; decode it with a schema and fail
 // closed with 400 on anything that doesn't match the shape, per
@@ -198,6 +254,11 @@ type AccountPublicationDoc = {
   lastPublishedAt?: number;
   lastError?: { message: string; observedAt: number; generation: number };
   pendingWork?: { unit: "jobs" | "captures" | "posts"; count: number };
+  // A digest of this update's material fields (reportedState, captureIds,
+  // uniquePostCount, pendingWork, error), recorded on every applied update
+  // so a later resend claiming the SAME generation can be told apart from a
+  // true idempotent replay — see `materialDigest` below.
+  lastAppliedDigest: string;
 };
 
 export const applyUpdate = internalMutation({
@@ -256,23 +317,41 @@ export const applyUpdate = internalMutation({
       .unique();
 
     const stored = existing?.committedGeneration;
+    const digest = materialDigest(args);
 
     // Generation-based idempotency and staleness, entirely per account.
     // docs/publication-contract.md "Idempotency and staleness". No row yet
     // means no update has ever been accepted for this account, so this one
     // always applies regardless of its numeric value.
-    let outcome: "applied" | "stale_ignored" | "duplicate_ignored";
+    let outcome: "applied" | "stale_ignored" | "duplicate_ignored" | "rejected_invalid";
+    let conflictReason: string | undefined;
 
     if (stored === undefined) outcome = "applied";
     else if (args.generation < stored) outcome = "stale_ignored";
-    else if (args.generation === stored) outcome = "duplicate_ignored";
-    else outcome = "applied";
+    else if (args.generation === stored) {
+      // A resend of the SAME generation must reflect the exact same
+      // content to be a true no-op. When the committed row has a digest to
+      // compare against (see accountPublications.lastAppliedDigest — rows
+      // written before this field existed have none, and fall back to the
+      // old duplicate_ignored behavior since there is nothing to compare),
+      // a mismatch means two different reports claim to be the same
+      // generation — a contract violation, not an idempotent replay.
+      if (existing?.lastAppliedDigest !== undefined && existing.lastAppliedDigest !== digest) {
+        outcome = "rejected_invalid";
+        conflictReason = `conflicting replay of generation ${args.generation}`;
+      } else {
+        outcome = "duplicate_ignored";
+      }
+    } else outcome = "applied";
 
     if (outcome !== "applied") {
       // Never restate a different reportedState on the stored row: a
       // resent generation number must reflect the exact same content, and
       // an "idempotent replay" must be a true no-op, not a reinterpretation.
-      await logUpdate(ctx, args, receivedAt, accountId, outcome);
+      await logUpdate(ctx, args, receivedAt, accountId, outcome, conflictReason);
+
+      if (conflictReason !== undefined)
+        return { outcome, committedGeneration: stored, rejectionReason: conflictReason };
 
       return { outcome, committedGeneration: stored };
     }
@@ -302,6 +381,11 @@ export const applyUpdate = internalMutation({
       state: args.reportedState,
       committedGeneration: args.generation,
       updatedAt: receivedAt,
+      // Recorded on every applied update (not only when reportedState is
+      // "searchable") so the very next update — of ANY reported state —
+      // resent under this same generation number has something to compare
+      // against.
+      lastAppliedDigest: digest,
     };
 
     if (args.reportedState === "searchable" && args.uniquePostCount !== undefined) {

@@ -173,13 +173,25 @@ Ordering and deduplication are entirely generation-based, per account:
   → **stale**. Reject without applying; log to `publicationUpdates` with
   `outcome: "stale_ignored"`. This is what makes an out-of-order delivery (a slow
   retry of an old update arriving after a newer one already landed) harmless.
-- Incoming `generation` **equal to** the stored value → **duplicate**. Treat as an
-  idempotent replay: do not reapply, log with `outcome: "duplicate_ignored"`, and
-  return the same acceptance response as the original. This holds even if the resent
-  payload's other fields differ from what is on record — a generation number must
-  never be reused for two different pieces of content; if the log shows a duplicate
-  generation with different content, that is a sender-side bug to raise, not something
-  the receiver reinterprets.
+- Incoming `generation` **equal to** the stored value → **duplicate, conditionally**.
+  A generation number must never be reused for two different pieces of content, so the
+  receiver verifies that rather than assuming it: it compares the incoming update's
+  material fields (`reportedState`, `captureIds`, `uniquePostCount`,
+  `uniquePostCountAsOf`, `pendingWork`, `error`) against what was accepted for that
+  generation, via a stored digest (`accountPublications.lastAppliedDigest`).
+  - **Fields match** → an idempotent replay: do not reapply, log with
+    `outcome: "duplicate_ignored"`, and respond with that outcome and the
+    `committedGeneration` (the original application answered `"applied"`). This
+    is what makes an out-of-order delivery (a slow retry of an already-applied
+    update) harmless.
+  - **Fields differ** → a contract violation, not a replay: reject without applying,
+    log with `outcome: "rejected_invalid"` and a `rejectionReason` naming the
+    generation. Two different reports claiming the same generation number is a
+    sender-side bug to raise, and the receiver must not silently accept whichever
+    one arrived — see "the same content" above, and convex/publication.ts's
+    `materialDigest`.
+  - A row written before `lastAppliedDigest` existed has nothing to compare against
+    and falls back to `duplicate_ignored` — there is no migration backfilling it.
 - Incoming `generation` **greater than** the stored value → **apply**. Set `state` to
   `reportedState`; set `committedGeneration` to the incoming `generation`; on
   `"searchable"`, additionally set `searchablePostCount`, `searchablePostCountAsOf`,

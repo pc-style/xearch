@@ -186,3 +186,46 @@ export async function jobsForAccount(
 
   return { jobs, exhausted: true };
 }
+
+/**
+ * The one `accountPublications` row that reflects an account's CURRENT
+ * state, tolerant of duplicate rows existing for it.
+ *
+ * `.first()` on `by_account` alone picks whichever row Convex's default
+ * `_creationTime`-ascending order puts first for that index — the OLDEST
+ * row, which is not the same claim as "the current one" (CodeRabbit
+ * #4089916545): a stale duplicate can predate the row that has actually
+ * been receiving every applied update since. `committedGeneration` is this
+ * contract's own definition of "more current" (docs/publication-contract.md
+ * "Idempotency and staleness" — a strictly higher generation is a strictly
+ * later, accepted report), so the row with the highest one wins; `updatedAt`
+ * breaks a tie only in the coincidental case two rows share a generation.
+ */
+export function currentPublication(
+  rows: Doc<"accountPublications">[],
+): Doc<"accountPublications"> | null {
+  if (rows.length === 0) return null;
+
+  return rows.reduce((current, row) =>
+    row.committedGeneration > current.committedGeneration ||
+    (row.committedGeneration === current.committedGeneration && row.updatedAt > current.updatedAt)
+      ? row
+      : current,
+  );
+}
+
+/**
+ * Every `accountPublications` row for one account. The receiver writes one
+ * row per account, so this is normally a single document; it is read in full
+ * rather than capped because a cap would silently drop the newest generation
+ * for an account that somehow has more rows than the cap.
+ */
+export function accountPublicationCandidates(
+  db: Db,
+  accountId: Id<"accounts">,
+): Promise<Doc<"accountPublications">[]> {
+  return db
+    .query("accountPublications")
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .collect();
+}
