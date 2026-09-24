@@ -82,8 +82,10 @@ function latestOf(jobs: Doc<"jobs">[]): Doc<"jobs"> {
 function nextActionFor(job: Doc<"jobs">): NextAction {
   if (job.status === "failed" || job.status === "partial" || job.status === "cancelled")
     return { kind: "retry", jobId: job._id };
+
   if (job.status === "queued" && job.readyAt !== undefined)
     return { kind: "wait", jobId: job._id, readyAt: job.readyAt };
+
   return { kind: "none" };
 }
 
@@ -217,6 +219,7 @@ export const history = query({
     // an account that genuinely exists, and lost both its run history and
     // the evidence behind a dismissed run.
     const { jobs, exhausted } = await jobsForAccount(ctx.db, args.accountId);
+
     // Checked BEFORE looking at what was found, not only when nothing was.
     // An incomplete scan that happened to find some runs is still incomplete:
     // the scan walks _creationTime order while this list is presented by
@@ -228,6 +231,7 @@ export const history = query({
       throw new ConvexError(
         "Could not read this account's full history — there are too many imports to search in one request.",
       );
+
     // Same message whether the account does not exist or has no jobs yet —
     // never confirm state beyond what the corpus actually shows.
     if (jobs.length === 0) throw new ConvexError("Account not found.");

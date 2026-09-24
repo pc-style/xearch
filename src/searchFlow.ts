@@ -31,9 +31,10 @@ export const searchFlow = Effect.fn("searchFlow")(function* (
   // Callers pass a wider request (attemptId, trigger for telemetry). Convex
   // rejects unknown fields, so send only the mutation's own arguments.
   const { raw, sort, cursor, includeStats } = request;
+
   return yield* Effect.tryPromise({
     try: () => dependencies.startSearch({ raw, sort, cursor, includeStats }),
-    catch: (error: unknown) => error,
+    catch: (cause: unknown) => cause,
   });
 });
 

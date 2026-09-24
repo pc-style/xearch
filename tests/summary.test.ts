@@ -45,8 +45,8 @@ const healthQuery = anyApi.summary.health as import("convex/server").FunctionRef
 // convex/library.ts's `rows` — not owned by this unit, but read here
 // (unmodified) to prove how summary.summary's global indexedAccounts/
 // indexedPosts relate to the shared account list every caller sees.
-const libraryRowsQuery = anyApi.library
-  .rows as unknown as import("convex/server").FunctionReference<
+// SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
+const libraryRowsQuery = anyApi.library.rows as import("convex/server").FunctionReference<
   "query",
   "public",
   { search?: string; status?: string },

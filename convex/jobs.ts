@@ -47,6 +47,7 @@ export const list = query({
     const scope = args.scope ?? "all";
     const out: Doc<"jobs">[] = [];
     let scanned = 0;
+
     for await (const job of ctx.db.query("jobs").order("desc")) {
       if (++scanned > JOB_FEED_SCAN) break;
 
@@ -171,6 +172,7 @@ export const start = mutation({
     // must match — a continuation is only ever the SAME request picking up
     // where it left off.
     const previous = args.previous ? await ctx.db.get(args.previous) : null;
+
     if (args.previous && (!previous || previous.input !== input || previous.kind !== args.kind))
       throw new ConvexError("Continuation does not belong to this indexing job.");
 
@@ -303,6 +305,7 @@ export const progress = internalMutation({
     await ctx.db.patch(job._id, { phase: args.phase, updatedAt: Date.now() });
   },
 });
+
 // Load a job, requiring only that the caller is authenticated. Jobs are
 // shared infrastructure, not personal data (to-do.md): any signed-in caller
 // may cancel, retry, dismiss, or restore any job, not only the one they
@@ -311,7 +314,9 @@ export const progress = internalMutation({
 async function sharedJob(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">) {
   await user(ctx);
   const job = await ctx.db.get(jobId);
+
   if (!job) throw new ConvexError("Job not found.");
+
   return job;
 }
 
@@ -319,6 +324,7 @@ export const cancel = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     const job = await sharedJob(ctx, jobId);
+
     if (!["queued", "running"].includes(job.status)) return;
     await ctx.db.patch(jobId, {
       status: "cancelled",
@@ -332,6 +338,7 @@ export const retry = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     const job = await sharedJob(ctx, jobId);
+
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
 
@@ -369,6 +376,7 @@ export const dismiss = mutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     const job = await sharedJob(ctx, jobId);
+
     // Deliberately refuses queued/running work: hiding a run that is still
     // spending provider allowance would make it unstoppable from the UI.
     // Stop it first, then dismiss it.
@@ -429,6 +437,7 @@ export const receipts = query({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     await sharedJob(ctx, jobId);
+
     return ctx.db
       .query("receipts")
       .withIndex("by_capture", (q) => q.eq("jobId", jobId))
@@ -544,6 +553,7 @@ export const finish = internalMutation({
     const RETRY_CAP_MS = 15 * 60_000;
     const pageAttempt = job.pageAttempt ?? 0;
     const retry = args.retryAfter !== undefined && pageAttempt < MAX_PAGE_ATTEMPTS;
+
     const retryDelayMs = retry
       ? Math.min(RETRY_CAP_MS, Math.max(args.retryAfter!, RETRY_BASE_MS * 2 ** pageAttempt))
       : undefined;
@@ -564,19 +574,22 @@ export const finish = internalMutation({
       wantsMoreUntil &&
       (!Number.isFinite(Date.parse(args.nextUntil!)) ||
         (job.until !== undefined && Date.parse(args.nextUntil!) >= Date.parse(job.until)));
+
     // A cursor identical to the one this attempt was given back means the
     // provider made no progress; continuing would loop on the same page
     // forever instead of ever finishing.
     const stalledCursor =
       wantsMoreCursor && job.cursor !== undefined && args.nextCursor === job.cursor;
+
     const pause = stalledUntil
       ? "Paused because x.md did not return an older page. Your downloaded posts are safe."
       : stalledCursor
         ? "Paused because x.md did not return a further page. Your downloaded posts are safe."
         : undefined;
+
     const continueImport = (wantsMoreUntil || wantsMoreCursor) && !pause;
 
-    await ctx.db.patch(job._id, {
+    const patch: Partial<Doc<"jobs">> = {
       status:
         retry || continueImport
           ? "queued"
@@ -602,20 +615,13 @@ export const finish = internalMutation({
       postsReceived: (job.postsReceived ?? 0) + (args.error ? 0 : (args.postsReceived ?? 0)),
       oldest: args.oldest ?? job.oldest,
       floorReached: args.floorReached ?? job.floorReached,
-      ...(continueImport
-        ? {
-            ...(wantsMoreUntil ? { until: args.nextUntil } : {}),
-            pageAttempt: 0,
-            phase: wantsMoreUntil ? "Downloading older posts" : "Downloading the next page",
-          }
-        : {}),
       updatedAt: Date.now(),
     };
 
     if (continueImport) {
-      patch.until = args.nextUntil;
+      if (wantsMoreUntil) patch.until = args.nextUntil;
       patch.pageAttempt = 0;
-      patch.phase = "Downloading older posts";
+      patch.phase = wantsMoreUntil ? "Downloading older posts" : "Downloading the next page";
     }
 
     await ctx.db.patch(job._id, patch);

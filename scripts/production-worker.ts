@@ -20,26 +20,31 @@ const captureToken = (await readFile(".local-captures/token", "utf8")).trim();
 const client = new ConvexHttpClient("https://utmost-kudu-321.convex.cloud");
 
 let stopping = false;
+
 /** Delay before a job interrupted by something other than the provider is retried. */
 const TRANSIENT_RETRY_MS = 30_000;
+
 // Timestamped so a failure can be lined up against the indexer's journal and
 // Convex's job timestamps; the old bare lines could not be dated at all.
 function log(message: string) {
   console.log(`${new Date().toISOString()} ${message}`);
 }
+
 // Name and message only — never a stack (it can carry request URLs) — with the
 // provider key redacted in case a transport error echoes a request. Before
 // this, every non-provider failure was logged as the same "Job interrupted"
 // line, which hid a client-side timeout for seven consecutive retries.
-function describeFailure(error: unknown): string {
+function describeFailure(cause: unknown): string {
   const text =
-    error instanceof ProviderError
-      ? `${error.code}: ${error.message}`
-      : error instanceof Error
-        ? `${error.name}: ${error.message}`
-        : String(error);
+    cause instanceof ProviderError
+      ? `${cause.code}: ${cause.message}`
+      : cause instanceof Error
+        ? `${cause.name}: ${cause.message}`
+        : String(cause);
+
   return text.replaceAll(env.X_MD_API_KEY!, "[redacted]");
 }
+
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     stopping = true;
@@ -67,6 +72,7 @@ async function receiverHealth(): Promise<{ healthy: boolean; error?: string }> {
     };
   }
 }
+
 log(
   "Production download worker started. Connections are outbound only; raw posts stay on this machine.",
 );
@@ -87,8 +93,9 @@ for (;;) {
 
     if (job) {
       log(`Downloading ${job.kind} for ${job.input} (attempt ${job.attempt})`);
-      const report = (args: Record<string, unknown>) =>
-        client.action("worker:report" as any, {
+
+      const report = (args: ReportArgs) =>
+        client.action(api.worker.report, {
           token,
           jobId: job._id,
           attempt: job.attempt,

@@ -165,12 +165,14 @@ function NextActionControl({
   // The query reports the scheduled time; whether it has passed is decided
   // here against the dashboard's ticking clock (see convex/library.ts).
   const now = useDashboardClock();
+
   if (action.kind === "retry")
     return (
       <button disabled={busy} onClick={() => onRetry(action.jobId)}>
         {busy ? "Retrying…" : "Retry"}
       </button>
     );
+
   if (action.kind === "wait")
     return (
       <span className="library-muted">

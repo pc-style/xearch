@@ -7,6 +7,7 @@ export function jobLabel(job: Doc<"jobs">) {
   // reports a `nextUntil`/`nextCursor` to continue from, so nobody has to
   // ask for the next page — "complete" only means genuinely done.
   if (job.status === "complete") return job.error ? "Paused" : "Downloaded";
+
   return {
     queued: "Waiting",
     running: "Downloading",

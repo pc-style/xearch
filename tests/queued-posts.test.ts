@@ -242,7 +242,11 @@ describe("summary.summary providerQueuedWork", () => {
       pendingWork: { unit: "posts", count: 4 },
     });
     const bobsAfter = await b.query(summaryQuery, { now: Date.now() });
-    expect(bobsAfter.providerQueuedWork.posts).toEqual({ kind: "known", unit: "posts", value: 103 });
+    expect(bobsAfter.providerQueuedWork.posts).toEqual({
+      kind: "known",
+      unit: "posts",
+      value: 103,
+    });
 
     // Alice reads the identical combined figure.
     const alices = await a.query(summaryQuery, { now: Date.now() });
@@ -261,7 +265,11 @@ describe("summary.summary providerQueuedWork", () => {
     });
     await seedImportedAccount(t, alice, { handle: "alice-account", userId: "1" });
     const alices = await a.query(summaryQuery, { now: Date.now() });
-    expect(alices.providerQueuedWork.captures).toEqual({ kind: "known", unit: "captures", value: 12 });
+    expect(alices.providerQueuedWork.captures).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 12,
+    });
   });
 
   it("requires authentication", async () => {

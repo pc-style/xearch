@@ -29,7 +29,7 @@ export interface SessionGate {
 
 export const SESSION_TIMEOUT_MESSAGE = "Session connection timed out. Try again.";
 
-export function createSessionGate(signIn: () => Promise<unknown>, timeoutMs = 20_000): SessionGate {
+export function createSessionGate<T>(signIn: () => Promise<T>, timeoutMs = 20_000): SessionGate {
   let state: AuthState = { isLoading: true, isAuthenticated: false };
   let watchers: (() => void)[] = [];
   let pending: Promise<void> | null = null;
@@ -49,6 +49,7 @@ export function createSessionGate(signIn: () => Promise<unknown>, timeoutMs = 20
 
           return;
         }
+
         clearTimeout(timer);
         resolve();
       };

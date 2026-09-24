@@ -597,7 +597,9 @@ describe("a history page the provider is slow to deliver", () => {
     const xmd = new XmdClient("test-key", async () => {
       throw timeout();
     });
-    const failure = await xmd.history("theo", { maxPosts: 5000 }).catch((error: unknown) => error);
+
+    const failure = await xmd.history("theo", { maxPosts: 5000 }).catch((cause: unknown) => cause);
+
     expect(failure).toBeInstanceOf(ProviderError);
     expect((failure as ProviderError).code).toBe("provider_timeout");
     expect((failure as ProviderError).retryable).toBe(true);

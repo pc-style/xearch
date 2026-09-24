@@ -209,6 +209,7 @@ describe("the publication receiver and the library agree on identity", () => {
 describe("bounded reads never pass as complete data", () => {
   it("reports unknown queue counts once the owner has more jobs than one read covers", async () => {
     const { t, alice, a } = await setup();
+
     // One past the 1,000-job bound `allJobs` reads. Every queue figure is
     // derived from that page, so a "known" count here would be a partial
     // presented as a total.
@@ -303,6 +304,7 @@ describe("a caller is never refused an account that genuinely exists", () => {
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "alices", userId: "4242", name: "Alice's" }),
     );
+
     const run = await job(t, alice, { input: "alices", kind: "bulk", expectedUserId: "4242" });
     const runs = await b.query(libraryHistory, { accountId });
     expect(runs.map((r) => String(r.jobId))).toEqual([String(run)]);
@@ -358,6 +360,7 @@ describe("a capture the indexer could not index", () => {
 describe("a capped account scope", () => {
   it("reports unknown rather than presenting the part it could read as the whole", async () => {
     const { t, alice, a } = await setup();
+
     // One past the 500 cap allAccountJobs reads.
     for (let i = 0; i < 501; i++)
       await job(t, alice, { input: `acct${i}`, kind: "bulk", expectedUserId: `${i}` });

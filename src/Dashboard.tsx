@@ -13,6 +13,7 @@ import { useDashboardClock } from "./library/clock";
 function Job({ job }: { job: Doc<"jobs"> }) {
   const [expanded, setExpanded] = useState(false),
     [error, setError] = useState("");
+
   // convex/_generated/ai/guidelines.md "Do not read the wall clock inside a
   // query" applies just as much to a render body: a bare `Date.now()` here
   // would freeze at whatever instant last re-rendered this row instead of
@@ -27,7 +28,8 @@ function Job({ job }: { job: Doc<"jobs"> }) {
     retry = useMutation(api.jobs.retry),
     dismiss = useMutation(api.jobs.dismiss),
     restore = useMutation(api.jobs.restore);
-  const act = async (fn: () => Promise<unknown>) => {
+
+  const act = async <T,>(fn: () => Promise<T>) => {
     setError("");
 
     try {

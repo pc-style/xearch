@@ -412,11 +412,13 @@ describe("library.history", () => {
   it("shows an account's history to any authenticated caller — imports are shared, not owner-scoped", async () => {
     const { t, alice, b } = await setup();
     const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });
+
     const job = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
       status: "complete",
     });
+
     const runs = await b.query(api.library.history, { accountId });
     expect(runs.map((r) => r.jobId)).toEqual([job]);
   });

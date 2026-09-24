@@ -111,7 +111,7 @@ found plus `exhausted`, and `library.history` checks `exhausted` **before**
 it looks at what was found — not only when nothing was:
 
 - Incomplete scan → `ConvexError("Could not read this account's full
-  history — there are too many imports to search in one request.")`,
+history — there are too many imports to search in one request.")`,
   whatever it collected. The scan walks the index's `_creationTime` order
   while history is presented newest-by-`updatedAt`, so a run it never
   reached can belong in the fifty rows (`MAX_HISTORY_JOBS`) it would

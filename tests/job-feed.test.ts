@@ -260,9 +260,11 @@ describe("one live search, one name", () => {
 describe("the imported corpus is shared across owners", () => {
   it("lets a different signed-in user see and continue a bulk import someone else started", async () => {
     const { t, alice, b } = await setup();
+
     const accountId = await t.run((ctx) =>
       ctx.db.insert("accounts", { handle: "theo", userId: "1", name: "Theo" }),
     );
+
     const job = await insertJob(t, alice, { input: "theo", kind: "bulk", status: "complete" });
     await t.run((ctx) =>
       ctx.db.patch(job, {
@@ -286,11 +288,13 @@ describe("the imported corpus is shared across owners", () => {
     vi.stubEnv("X_MD_API_KEY", "test");
     vi.stubEnv("RAW_CAPTURE_URL", "http://127.0.0.1:4319/captures");
     vi.stubEnv("COLLECTOR_MODE", "receiver");
+
     const next = await b.mutation(api.jobs.start, {
       kind: "bulk",
       input: "theo",
       previous: job,
     });
+
     expect(next).not.toBe(job);
   });
 });

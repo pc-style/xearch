@@ -195,16 +195,19 @@ export default function App() {
       query: string;
       explanation: string;
     } | null>(null);
+
   // `signIn` is memoized by ConvexAuthProvider for the provider's lifetime, so
   // capturing it once is safe. See src/sessionGate.ts for why the gate waits
   // for `isLoading` before it ever creates an anonymous session.
   const [sessionGate] = useState(() => createSessionGate(() => signIn("anonymous")));
+
   // Commit-phase ref callback: runs after every render with the auth values
   // of that render, so the gate always sees the latest state without an effect.
   function authProbe(node: HTMLSpanElement | null) {
     if (!node) return;
     sessionGate.update({ isLoading: authLoading, isAuthenticated });
   }
+
   const ensureSession = sessionGate.ensure;
 
   if (route.version !== appliedRouteVersion) {

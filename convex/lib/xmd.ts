@@ -447,6 +447,13 @@ export class XmdClient {
 
     for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
     let response: Response;
+
+    const headers = new Headers({
+      Accept: query.format === "ndjson" ? "application/x-ndjson" : "application/json",
+    });
+
+    if (this.key) headers.set("Authorization", `Bearer ${this.key}`);
+
     try {
       response = await this.fetcher(url, {
         headers: {
@@ -473,6 +480,7 @@ export class XmdClient {
         );
       throw error;
     }
+
     if (!response.ok) {
       let code = `http_${response.status}`;
       let problem: RawObject | undefined;

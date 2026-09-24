@@ -299,6 +299,7 @@ describe("Convex application boundaries", () => {
   });
   it("requeues a bulk import with a further nextUntil on its own — nobody calls jobs.start to get the next page", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -317,6 +318,7 @@ describe("Convex application boundaries", () => {
         postsReceived: 0,
       }),
     );
+
     await t.mutation(internal.jobs.finish, {
       jobId,
       attempt: 1,
@@ -342,6 +344,7 @@ describe("Convex application boundaries", () => {
   });
   it("requeues a non-bulk kind with a nextCursor on its own, and the next attempt reads that cursor", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -356,6 +359,7 @@ describe("Convex application boundaries", () => {
         updatedAt: Date.now(),
       }),
     );
+
     await t.mutation(internal.jobs.finish, {
       jobId,
       attempt: 1,
@@ -376,6 +380,7 @@ describe("Convex application boundaries", () => {
   });
   it("backs off a retryable failure with growing delay, and stops as a failed job after 10 attempts", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -390,7 +395,9 @@ describe("Convex application boundaries", () => {
         readyAt: 0,
       }),
     );
+
     const now = Date.parse("2026-01-01T00:00:00.000Z");
+
     for (let pageAttempt = 1; pageAttempt <= 10; pageAttempt++) {
       vi.setSystemTime(now);
       await t.mutation(internal.jobs.claim, { jobId });
@@ -402,6 +409,7 @@ describe("Convex application boundaries", () => {
         retryAfter: 1_000,
       });
       const job = await t.run((ctx) => ctx.db.get(jobId));
+
       if (pageAttempt < 10) {
         // Backoff grows with each attempt (30s * 2^pageAttempt), capped at
         // 15 minutes — by pageAttempt 5 the formula (960s) has already
@@ -418,6 +426,7 @@ describe("Convex application boundaries", () => {
         expect(job?.readyAt).toBeUndefined();
       }
     }
+
     vi.useRealTimers();
   });
   it("lets any signed-in caller cancel a job someone else started, and still rejects progress from a stopped worker", async () => {
@@ -436,6 +445,7 @@ describe("Convex application boundaries", () => {
         updatedAt: Date.now(),
       }),
     );
+
     // Imports are shared infrastructure, not personal data: bob (a
     // different signed-in caller) can see the job's receipts and cancel it,
     // even though alice started it.
@@ -453,6 +463,7 @@ describe("Convex application boundaries", () => {
   });
   it("still refuses an unauthenticated caller entirely", async () => {
     const { t, alice } = await setup();
+
     const jobId = await t.run((ctx) =>
       ctx.db.insert("jobs", {
         owner: alice,
@@ -466,6 +477,7 @@ describe("Convex application boundaries", () => {
         updatedAt: Date.now(),
       }),
     );
+
     await expect(t.mutation(api.jobs.cancel, { jobId })).rejects.toThrow();
     await expect(t.query(api.jobs.receipts, { jobId })).rejects.toThrow();
   });

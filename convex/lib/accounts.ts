@@ -120,9 +120,7 @@ export const MAX_OWNED_ACCOUNT_JOBS = 500;
  * "unknown" instead of presenting the part it managed to read as a complete
  * total.
  */
-export async function allAccountJobs(
-  db: Db,
-): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
+export async function allAccountJobs(db: Db): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
   // Indexed on kind rather than `.filter()`ed: a filter is applied after the
   // index scan and does not reduce documents read, so filtering here would
   // read every job any owner has ever run — including thousands of live

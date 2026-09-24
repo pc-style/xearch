@@ -196,7 +196,11 @@ async function allJobs(ctx: QueryCtx): Promise<{ jobs: Doc<"jobs">[]; truncated:
   // would describe a queue this deployment no longer has. No index needed
   // for a whole-table scan ordered by `_creationTime` (Convex's default
   // table order) — the same pattern convex/jobs.ts `list` already uses.
-  const scanned = await ctx.db.query("jobs").order("desc").take(MAX_OWNED_JOBS + 1);
+  const scanned = await ctx.db
+    .query("jobs")
+    .order("desc")
+    .take(MAX_OWNED_JOBS + 1);
+
   const truncated = scanned.length > MAX_OWNED_JOBS;
 
   return { jobs: truncated ? scanned.slice(0, MAX_OWNED_JOBS) : scanned, truncated };
@@ -391,6 +395,7 @@ export const summary = query({
     const accountIds: Id<"accounts">[] = [];
     const seen = new Set<Id<"accounts">>();
     const accountJobs = await allAccountJobs(ctx.db);
+
     for (const job of accountJobs.jobs) {
       const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
 
@@ -399,6 +404,7 @@ export const summary = query({
         accountIds.push(accountId);
       }
     }
+
     // Truncation is a fact about the read, not part of summing: past the
     // bound none of these can honestly describe "every account in the
     // corpus", which is what the scope below claims — including the

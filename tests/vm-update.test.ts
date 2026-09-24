@@ -61,10 +61,12 @@ function fixture() {
   for (const name of ["vm-update.sh", "reindex.sh"]) {
     executable(join(code, "scripts", name), '#!/bin/sh\nprintf "reindex\\n" >> "$TEST_LOG"\n');
   }
+
   executable(
     join(code, "scripts/deploy-operator-site.sh"),
     '#!/bin/sh\nprintf "operator-site\\n" >> "$TEST_LOG"\nexit "${TEST_OPERATOR_STATUS:-0}"\n',
   );
+
   const mock = (name: string, body: string) => {
     executable(
       join(bin, name),

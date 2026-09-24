@@ -30,6 +30,7 @@ describe("searchFlow", () => {
       startSearch: async (receivedRequest) => {
         events.push("startSearch");
         expect(receivedRequest).toEqual(request);
+
         return sessionId;
       },
     };
@@ -40,13 +41,16 @@ describe("searchFlow", () => {
 
   it("sends only the mutation's own arguments, not caller telemetry fields", async () => {
     let received: object | undefined;
+
     const dependencies: SearchFlowDependencies = {
       ensureSession: async () => {},
       startSearch: async (receivedRequest) => {
         received = receivedRequest;
+
         return sessionId;
       },
     };
+
     const wider = { ...request, attemptId: 7, trigger: "submit" };
 
     await Effect.runPromise(searchFlow(dependencies, wider));

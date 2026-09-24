@@ -22,6 +22,7 @@ import ProviderLimits from "./ProviderLimits";
  */
 function scopeLabel(scope: DashboardSummary["scope"]): string {
   if (scope.kind === "owner") return "your imports only";
+
   return scope.kind === "global" ? "shared across every signed-in user" : "one account";
 }
 

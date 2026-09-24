@@ -128,11 +128,13 @@ describe("a repeated identical import request", () => {
     await t.run((ctx) =>
       ctx.db.patch(first, { status: "complete", nextUntil: "2025-01-01T00:00:00.000Z" }),
     );
+
     const next = await b.mutation(api.jobs.start, {
       kind: "bulk",
       input: "theo",
       previous: first,
     });
+
     expect(next).not.toBe(first);
     expect(await countJobs(t)).toBe(2);
   });
