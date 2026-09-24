@@ -123,10 +123,16 @@ export const start = mutation({
       throw new ConvexError(
         "Connect x.md and the raw-capture receiver before starting an indexing job.",
       );
-    const input =
-      args.kind === "live"
+    // A continuation carries on the stored run, so its kind and input come
+    // from that run, not the client. The library row sends the account's
+    // current handle, which is not always the handle the run started with.
+    const previous = args.previous ? await ownedJob(ctx, args.previous) : null;
+    const kind = previous?.kind ?? args.kind;
+    const input = previous
+      ? previous.input
+      : kind === "live"
         ? canonicalLiveQuery(args.input)
-        : args.kind === "post"
+        : kind === "post"
           ? statusUrl(args.input)
           : handle(args.input);
     if (!input || input.length > 300) throw new ConvexError("Enter a search under 300 characters.");
@@ -135,15 +141,6 @@ export const start = mutation({
       (!/^\d{4}-\d{2}-\d{2}$/.test(args.since) || !Number.isFinite(Date.parse(args.since)))
     )
       throw new ConvexError("Choose a valid start date.");
-    const previous = args.previous ? await ctx.db.get(args.previous) : null;
-    if (
-      args.previous &&
-      (!previous ||
-        previous.owner !== owner ||
-        previous.input !== input ||
-        previous.kind !== args.kind)
-    )
-      throw new ConvexError("Continuation does not belong to this indexing job.");
     // A second click is not a second import.
     //
     // This only ever refused a *concurrent* duplicate (below), so the instant
@@ -164,7 +161,7 @@ export const start = mutation({
       const recent = await ctx.db
         .query("jobs")
         .withIndex("by_owner_and_input", (q) =>
-          q.eq("owner", owner).eq("kind", args.kind).eq("input", input),
+          q.eq("owner", owner).eq("kind", kind).eq("input", input),
         )
         .order("desc")
         .first();
@@ -187,9 +184,7 @@ export const start = mutation({
       if (
         await ctx.db
           .query("jobs")
-          .withIndex("by_input", (q) =>
-            q.eq("kind", args.kind).eq("input", input).eq("status", status),
-          )
+          .withIndex("by_input", (q) => q.eq("kind", kind).eq("input", input).eq("status", status))
           .first()
       )
         throw new ConvexError("This indexing job is already active.");
@@ -199,7 +194,7 @@ export const start = mutation({
     // matches means the handle is genuinely ambiguous: seed no identity and
     // let the run pin its own via `pinIdentity`, rather than guessing one.
     const candidates =
-      args.kind === "bulk"
+      kind === "bulk"
         ? await ctx.db
             .query("accounts")
             .withIndex("by_handle", (q) => q.eq("handle", input))
@@ -208,13 +203,13 @@ export const start = mutation({
     const account = candidates.length === 1 ? candidates[0] : null;
     const id = await ctx.db.insert("jobs", {
       owner,
-      kind: args.kind,
+      kind,
       input,
       since: previous?.since ?? args.since,
       until: previous?.nextUntil,
       cursor: previous?.nextCursor,
       refresh: args.refresh ?? false,
-      autoContinue: args.kind === "bulk",
+      autoContinue: kind === "bulk",
       pages: 0,
       postsReceived: 0,
       expectedUserId: previous?.expectedUserId ?? account?.userId,
