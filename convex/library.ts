@@ -109,6 +109,7 @@ export const rows = query({
     await user(ctx);
     const { byAccount, truncated } = await groupJobsByAccount(ctx);
     const search = args.search?.trim().toLowerCase();
+
     // The search filter doesn't depend on publication state, so it is
     // applied first to shrink which accounts need a publication lookup at
     // all. What remains is then fetched CONCURRENTLY — one indexed
@@ -121,6 +122,7 @@ export const rows = query({
         account.handle.toLowerCase().includes(search) ||
         account.name.toLowerCase().includes(search),
     );
+
     const publications = await Promise.all(
       candidates.map(([accountId]) =>
         ctx.db
@@ -129,6 +131,7 @@ export const rows = query({
           .unique(),
       ),
     );
+
     const out: AccountLibraryRow[] = [];
 
     for (let i = 0; i < candidates.length; i++) {
@@ -259,6 +262,7 @@ export const history = query({
     // sorting, so ordering by updatedAt cannot drop a job that the index's
     // own _creationTime order happened to place later.
     const sorted = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_HISTORY_JOBS);
+
     // One receipts query per displayed run is unavoidable (receipts are
     // indexed by jobId, and the caller needs each run's actual receipts, not
     // a count), but issuing all of them CONCURRENTLY rather than one run at
@@ -272,6 +276,7 @@ export const history = query({
           .take(MAX_HISTORY_RECEIPTS),
       ),
     );
+
     return sorted.map((job, i) => ({
       jobId: job._id,
       status: job.status,

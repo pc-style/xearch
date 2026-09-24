@@ -78,10 +78,12 @@ function json(body: JsonValue, status: number): Response {
 // might run in.
 function fnv1a(input: string): string {
   let hash = 0x811c9dc5;
+
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);
   }
+
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
@@ -340,11 +342,10 @@ export const applyUpdate = internalMutation({
       // an "idempotent replay" must be a true no-op, not a reinterpretation.
       await logUpdate(ctx, args, receivedAt, accountId, outcome, conflictReason);
 
-      return {
-        outcome,
-        committedGeneration: stored,
-        ...(conflictReason ? { rejectionReason: conflictReason } : {}),
-      };
+      if (conflictReason !== undefined)
+        return { outcome, committedGeneration: stored, rejectionReason: conflictReason };
+
+      return { outcome, committedGeneration: stored };
     }
 
     // Apply. `state` and `committedGeneration` always move; the sticky

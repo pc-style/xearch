@@ -322,6 +322,7 @@ export const progress = internalMutation({
     await ctx.db.patch(job._id, { phase: args.phase, updatedAt: Date.now() });
   },
 });
+
 // Load a job, requiring the caller pass `auth`. Jobs are shared
 // infrastructure, not personal data (to-do.md): any caller `auth` admits may
 // act on any job, not only the one they started. `job.owner` still records
@@ -334,7 +335,7 @@ export const progress = internalMutation({
 async function sharedJob(
   ctx: QueryCtx | MutationCtx,
   jobId: Id<"jobs">,
-  auth: (ctx: QueryCtx | MutationCtx) => Promise<unknown> = user,
+  auth: (ctx: QueryCtx | MutationCtx) => Promise<Id<"users">> = user,
 ) {
   await auth(ctx);
   const job = await ctx.db.get(jobId);
@@ -356,6 +357,7 @@ export const cancel = mutation({
       phase: "Stopped; an in-flight request may still finish. Retained captures are not deleted.",
       updatedAt: Date.now(),
     });
+
     return null;
   },
 });
@@ -388,6 +390,7 @@ export const retry = mutation({
       updatedAt: Date.now(),
     });
     await ctx.scheduler.runAfter(0, internal.importer.run, { jobId });
+
     return null;
   },
 });
@@ -411,8 +414,10 @@ export const dismiss = mutation({
     // Stop it first, then dismiss it.
     if (job.status === "queued" || job.status === "running")
       throw new ConvexError("Stop this run before dismissing it.");
+
     if (job.dismissedAt !== undefined) return null;
     await ctx.db.patch(jobId, { dismissedAt: Date.now() });
+
     return null;
   },
 });
@@ -424,6 +429,7 @@ export const restore = mutation({
     // Authorization is the whole check here; the row itself is not needed.
     await sharedJob(ctx, jobId, requireOperator);
     await ctx.db.patch(jobId, { dismissedAt: undefined });
+
     return null;
   },
 });
@@ -719,6 +725,7 @@ export async function upsertAccount(ctx: MutationCtx, profile: Profile): Promise
       await recordHandle(ctx, existing._id, existing.handle);
       await ctx.db.patch(existing._id, profile);
     }
+
     accountId = existing._id;
   } else {
     // No row for this provider id. Deliberately does NOT adopt a row that

@@ -160,6 +160,7 @@ export default function Dashboard({
     api.jobs.list,
     isAuthenticated ? { includeDismissed: showDismissed, scope: "other" } : "skip",
   );
+
   const jobs = jobFeed?.jobs;
   // Account-history ("bulk") jobs are represented per-account in <Library>
   // above (convex/library.ts groups exactly this kind); this feed exists

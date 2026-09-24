@@ -74,11 +74,13 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
   it("is idempotent: an identical resend under the same generation never double-applies and returns the same acceptance", async () => {
     const t = setup();
     const accountId = await seedAccount(t);
+
     const original = envelope({
       providerAccountId: "111",
       generation: 1,
       reportedState: "indexing",
     });
+
     await t.mutation(applyUpdate, original);
 
     // Resent verbatim: same material fields (reportedState, captureIds,
@@ -108,6 +110,7 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
       applyUpdate,
       envelope({ providerAccountId: "111", generation: 1, reportedState: "indexing" }),
     );
+
     // Same generation number, but a DIFFERENT report: this is not a replay
     // of the same content, so it must not be silently accepted as a no-op —
     // silently ignoring it would let a buggy or compromised sender resend a
@@ -122,17 +125,20 @@ describe("publication update receiver (docs/publication-contract.md)", () => {
         error: { message: "boom" },
       }),
     );
+
     expect(result).toEqual({
       outcome: "rejected_invalid",
       committedGeneration: 1,
       rejectionReason: "conflicting replay of generation 1",
     });
+
     const row = await t.run((ctx) =>
       ctx.db
         .query("accountPublications")
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
         .unique(),
     );
+
     // The committed row is untouched by the rejected conflict.
     expect(row?.state).toBe("indexing");
     const logs = await t.run((ctx) => ctx.db.query("publicationUpdates").collect());

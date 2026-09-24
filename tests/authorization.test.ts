@@ -24,6 +24,7 @@ async function setup() {
   const operatorUser = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: false }));
   const guestUser = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
   const outsiderUser = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: false }));
+
   return {
     t,
     // A verified email ON the OPERATOR_EMAILS allowlist.
@@ -91,14 +92,17 @@ describe("the operator authorization boundary", () => {
   it("allows an operator to cancel/dismiss/restore a job, including one a different operator started", async () => {
     const { t, operator } = await setup();
     const otherOperatorUser = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: false }));
+
     const otherOperator = t.withIdentity({
       subject: `${otherOperatorUser}|s`,
       email: "bob@test.xearch",
     });
+
     const jobId = await otherOperator.mutation(api.jobs.start, {
       kind: "live",
       input: "from:theo",
     });
+
     // Jobs are shared infrastructure (to-do.md); a different operator may
     // act on a run they did not personally start.
     await operator.mutation(api.jobs.cancel, { jobId });

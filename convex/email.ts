@@ -95,6 +95,7 @@ export const send = mutation({
     });
 
     await ctx.db.insert("deliveries", { owner, outboundId, query: result.raw });
+
     return null;
   },
 });

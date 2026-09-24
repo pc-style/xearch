@@ -3,7 +3,13 @@ import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import type { QueryCtx, MutationCtx, ActionCtx } from "./_generated/server";
 
-export async function user(ctx: QueryCtx | MutationCtx) {
+// `getAuthUserId` only ever reads `ctx.auth` (see @convex-dev/auth/server's
+// own signature, `ctx: { auth: Auth }`), so this accepts every context kind
+// that has one — including ActionCtx — rather than narrowing to
+// QueryCtx | MutationCtx and forcing every action-side caller (like
+// `requireOperator` below) to cast its way past a restriction the callee
+// itself doesn't have.
+export async function user(ctx: QueryCtx | MutationCtx | ActionCtx) {
   const id = await getAuthUserId(ctx);
 
   if (!id) throw new ConvexError("Start a session to use your workspace.");
@@ -46,11 +52,13 @@ function operatorEmails(env: Record<string, string | undefined> = process.env): 
 export async function requireOperator(ctx: QueryCtx | MutationCtx | ActionCtx) {
   const identity = await ctx.auth.getUserIdentity();
   const email = identity?.email?.trim().toLowerCase();
+
   if (!email || !operatorEmails().has(email))
     throw new ConvexError("Sign in as an operator to import.");
+
   // Also asserts a session exists at all (getUserIdentity() already implies
   // this when email is present), and gives callers the stable user id.
-  return user(ctx as QueryCtx | MutationCtx);
+  return user(ctx);
 }
 
 /**
@@ -65,6 +73,7 @@ export const isOperator = query({
   handler: async (ctx) => {
     try {
       await requireOperator(ctx);
+
       return true;
     } catch {
       return false;

@@ -127,6 +127,7 @@ async function computeAccountTotals(
   let unknown = false;
   let searchableAccounts = 0;
   const pendingWork = emptyPendingWorkTallies();
+
   // One indexed `.first()` per account is unavoidable without a join Convex
   // doesn't offer (see the module doc comment on N+1 above this function),
   // but issuing them all CONCURRENTLY rather than one-at-a-time in a
@@ -144,6 +145,7 @@ async function computeAccountTotals(
         .first(),
     ),
   );
+
   for (const publication of publications) {
     if (!publication) continue;
 
@@ -262,12 +264,15 @@ async function searchableAsOf(
   cache: Map<Id<"accounts">, number | undefined>,
 ): Promise<number | undefined> {
   if (cache.has(accountId)) return cache.get(accountId);
+
   const publication = await ctx.db
     .query("accountPublications")
     .withIndex("by_account", (q) => q.eq("accountId", accountId))
     .first();
+
   const asOf = publication?.state === "searchable" ? publication.updatedAt : undefined;
   cache.set(accountId, asOf);
+
   return asOf;
 }
 
@@ -312,6 +317,7 @@ async function computeSavedCapturesAwaitingIndexing(
   // it (a retried job can re-produce the same captureId; the newest receipt
   // is the one whose timing actually matters against a searchable cutoff).
   const capturesByAccount = new Map<Id<"accounts"> | null, Map<string, number>>();
+
   // One receipts query per bulk job is unavoidable (receipts are indexed by
   // jobId, and a job's receipts are exactly what this function needs the
   // contents of, not merely a count of), but issuing all of them
@@ -343,6 +349,7 @@ async function computeSavedCapturesAwaitingIndexing(
 
     for (const receipt of receipts) {
       const seenAt = bucket.get(receipt.captureId);
+
       if (seenAt === undefined || receipt._creationTime > seenAt)
         bucket.set(receipt.captureId, receipt._creationTime);
     }
@@ -353,6 +360,7 @@ async function computeSavedCapturesAwaitingIndexing(
   // concurrently is a batch of at most "accounts with unconfirmed
   // captures", not one per job.
   const accountEntries = [...capturesByAccount.entries()];
+
   const perAccount = await Promise.all(
     accountEntries.map(async ([accountId, captures]) => ({
       captures,
@@ -364,11 +372,13 @@ async function computeSavedCapturesAwaitingIndexing(
         : undefined,
     })),
   );
+
   let count = 0;
 
   for (const { captures, confirmed, searchableCutoff } of perAccount) {
     for (const [captureId, receivedAt] of captures) {
       if (confirmed.has(captureId)) continue;
+
       if (searchableCutoff !== undefined && receivedAt <= searchableCutoff) continue;
       count += 1;
     }

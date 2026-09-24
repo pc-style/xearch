@@ -116,6 +116,7 @@ describe("library.rows", () => {
   it('carries the latest job\'s postsReceived/oldest/floorReached through to the row (for copy like "3,155 posts back to 2026-07-11")', async () => {
     const { t, alice, a } = await setup();
     await insertAccount(t, { handle: "adam", userId: "1001", name: "Adam" });
+
     const latest = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -125,6 +126,7 @@ describe("library.rows", () => {
       oldest: "2026-07-11",
       floorReached: true,
     });
+
     const rows = (await a.query(api.library.rows, {})).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0].latestJob?.jobId).toBe(latest);
@@ -392,6 +394,7 @@ describe("library.history", () => {
   it("carries postsReceived/oldest/floorReached on each run", async () => {
     const { t, alice, a } = await setup();
     const accountId = await insertAccount(t, { handle: "adam", userId: "1001" });
+
     const job = await insertJob(t, alice, {
       input: "adam",
       expectedUserId: "1001",
@@ -400,6 +403,7 @@ describe("library.history", () => {
       oldest: "2026-07-11",
       floorReached: true,
     });
+
     const runs = await a.query(api.library.history, { accountId });
     expect(runs).toEqual([
       expect.objectContaining({
