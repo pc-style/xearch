@@ -200,13 +200,17 @@ export const accounts = query({
       const historyJob = historyJobs[i];
       const publication = publications[i];
 
-      // A backfill's `cursorUntil` is the boundary its next window starts
-      // from, so everything after it has been walked. It counts only once a
-      // window has actually run.
+      // How far back the backfill has actually walked. `cursorUntil` moves
+      // to a window's `since` when that window is LAUNCHED, not when it
+      // finishes, so it is only the reach once the whole backfill is done.
+      // Before that, the latest window job says: a finished window reached
+      // its own `since`; an unfinished one has reached only its `until`.
       const backfillReach =
-        backfill && (backfill.postsFound > 0 || backfill.status === "complete")
+        backfill?.status === "complete"
           ? backfill.cursorUntil
-          : undefined;
+          : historyJob?.status === "complete"
+            ? historyJob.since
+            : historyJob?.until;
 
       const oldestCollected = runs.reduce<string | undefined>(
         (best, job) => earlier(best, job.oldest),

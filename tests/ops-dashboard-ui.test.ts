@@ -81,6 +81,10 @@ describe("ops shell", () => {
       return ops.reads.filter((r) => r.name === "summary:summary").map((r) => Number(r.args.now));
     };
 
+    // Without a first read, Math.max() of nothing is -Infinity and any
+    // later read would pass the comparison below.
+    expect(clocks().length).toBeGreaterThan(0);
+    expect(clocks().every(Number.isFinite)).toBe(true);
     const before = Math.max(...clocks());
 
     ops.click("button[aria-label='Reload data']");
@@ -306,6 +310,21 @@ describe("accounts", () => {
     }),
   ];
 
+  it("says unknown, not 0, for a count the indexer has not reported in any state", async () => {
+    const indexing = account(5, {
+      handle: "indexing",
+      publication: { state: "indexing", updatedAt: Date.now() },
+    });
+
+    const none = account(6, { handle: "none", publication: null });
+    const ops = await open("accounts", { accounts: [indexing, none] });
+
+    for (const handle of ["indexing", "none"])
+      expect(ops.find(`tr[data-account='${handle}']`).querySelector("td.num")?.textContent).toBe(
+        "unknown",
+      );
+  });
+
   it("says unknown, not 0, for a searchable account the indexer has not counted", async () => {
     const uncounted = account(4, {
       handle: "uncounted",
@@ -480,5 +499,23 @@ describe("provider", () => {
     expect(ops.find(".pc", "Last 24 h").textContent).toContain("Account history5");
     expect(ops.find(".pc", "Errors").textContent).toContain("2 failed runs");
     expect(ops.find(".pc", "Errors").textContent).toContain("11");
+  });
+
+  it("shows 0 calls left when x.md is exhausted", async () => {
+    const now = Date.now();
+
+    const ops = await open("provider", {
+      limit: {
+        kind: "throttled",
+        provider: "xmd",
+        operation: "history",
+        reason: "x.md rate limit reached: 429 from /v2/history.",
+        remaining: { kind: "known", value: 0 },
+        nextRetryAt: now + 30_000,
+        observedAt: now,
+      },
+    });
+
+    expect(ops.find(".pc", "Rate limit").textContent).toContain("0 calls left");
   });
 });

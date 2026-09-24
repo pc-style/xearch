@@ -76,24 +76,25 @@ export function ConnectionsPanel() {
 
   return (
     <>
-      <For each={connections()}>
+      {/* Keyed by name: `connections()` builds new objects on every clock tick. */}
+      <For each={connections()} keyed={(c) => c.name}>
         {(c) => (
           <div class="connection-row">
             <div>
-              <strong>{c.name}</strong>
-              <p>{c.purpose}</p>
+              <strong>{c().name}</strong>
+              <p>{c().purpose}</p>
               <small>
                 <Show when={isAuthenticated()} fallback={"Sign in to view"}>
                   <Show when={config()} fallback={"Checking…"}>
-                    <Show when={c.ready} fallback={<span class="status-dot" />}>
+                    <Show when={c().ready} fallback={<span class="status-dot" />}>
                       <Icon name="check" size={12} />
                     </Show>{" "}
-                    {status(c)}
+                    {status(c())}
                   </Show>
                 </Show>
               </small>
-              <Show when={c.note}>
-                <small>{c.note}</small>
+              <Show when={c().note}>
+                <small>{c().note}</small>
               </Show>
             </div>
           </div>
