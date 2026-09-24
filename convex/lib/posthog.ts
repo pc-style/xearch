@@ -4,11 +4,23 @@ import { env } from "../_generated/server";
 
 const posthog = new PostHog(components.posthog);
 
+/**
+ * The literal token "disabled" turns capture off for a deployment. The
+ * component (@posthog/convex convex.config) declares the token as a required
+ * string, so a deployment cannot simply leave it unset; this is the one
+ * documented way to run without PostHog (docs/production.md).
+ */
+export function posthogDisabled(): boolean {
+  const token = env.POSTHOG_PROJECT_TOKEN?.trim() ?? "";
+
+  return token === "" || token === "disabled";
+}
+
 export async function capturePostHog(
   ctx: Parameters<PostHog["capture"]>[0],
   event: Parameters<PostHog["capture"]>[1],
 ): Promise<void> {
-  if (env.POSTHOG_PROJECT_TOKEN === "disabled") return;
+  if (posthogDisabled()) return;
 
   try {
     await posthog.capture(ctx, event);
