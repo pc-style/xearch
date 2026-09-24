@@ -45,7 +45,7 @@ VITE_CONVEX_URL="$CONVEX_URL" \
 VITE_CONVEX_SITE_URL="$CONVEX_SITE_URL" \
   bun run build:operator
 
-grep -rqF "Dependency health" dist-operator/assets || {
+grep -rqF "Account library" dist-operator/assets || {
   echo "deploy-operator-site: built tree has no dashboard in it — refusing to publish." >&2
   exit 1
 }
