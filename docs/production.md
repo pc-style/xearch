@@ -146,7 +146,7 @@ and nothing in this change deploys itself.
 interact with most. It reads the raw captures already on this machine (no
 provider is contacted), counts replies, quotes, @mentions and reposts from
 indexed accounts per target handle, and queues an account-history import for
-every target at or above `DISCOVERY_MIN_INTERACTIONS` (default 25) that is
+every target at or above `DISCOVERY_MIN_INTERACTIONS` (default 100; on 2026-09-24 the captures gave 535 accounts at 25, 218 at 50, 86 at 100, 25 at 200) that is
 neither indexed nor already the subject of a bulk import in any state. The
 threshold is the relevance criterion; there is deliberately no per-run cap
 (see "Rate limiting" in AGENTS.md). Discovered runs are tagged

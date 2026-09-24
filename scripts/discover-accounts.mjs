@@ -5,7 +5,7 @@
  * Reads the raw captures already on this machine (no provider is contacted),
  * counts replies, quotes, @mentions and reposts from indexed accounts per
  * target handle, and queues an account-history import for every target at or
- * above DISCOVERY_MIN_INTERACTIONS that is neither indexed nor already the
+ * above DISCOVERY_MIN_INTERACTIONS (default 100) that is neither indexed nor already the
  * subject of a bulk import. The threshold is the relevance criterion; there
  * is deliberately no per-run cap (AGENTS.md "Rate limiting").
  *
@@ -28,7 +28,7 @@ const DIR =
 
 const APPLY = process.argv.includes("--apply");
 
-const MIN = Number(process.env.DISCOVERY_MIN_INTERACTIONS ?? "25");
+const MIN = Number(process.env.DISCOVERY_MIN_INTERACTIONS ?? "100");
 
 if (!Number.isFinite(MIN) || MIN < 1) throw new Error("DISCOVERY_MIN_INTERACTIONS must be >= 1.");
 
