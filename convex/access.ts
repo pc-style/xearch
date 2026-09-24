@@ -30,15 +30,29 @@ export async function user(ctx: QueryCtx | MutationCtx | ActionCtx) {
  * x.md/OpenAI), and cancel/dismiss/restore on jobs must come from a signed-
  * in OPERATOR, not merely a signed-in (possibly anonymous) session.
  *
- * The mechanism is entirely stock: the existing Email OTP provider
- * (convex/auth.ts, src/auth/EmailSignIn.tsx) already gives every caller a
- * verified email once they sign in with a code. `requireOperator` accepts
- * exactly the identities whose verified email is listed in the
- * `OPERATOR_EMAILS` env var (comma-separated, case-insensitive; an entry
- * like "@pcstyle.dev" admits every verified address on that domain). An
- * anonymous session has no email at all and is refused; a verified email
- * not on the list is refused with the same message so the list itself is
- * never confirmed or denied to the caller.
+ * Two independent paths grant operator status:
+ *
+ *   1. The operator build's own build-time token (`src/operatorToken.ts`,
+ *      `VITE_OPERATOR_TOKEN`). The operator site is already restricted to
+ *      exe.dev accounts with VM access (docs/production.md) — being on that
+ *      site IS the operator proof, so this is the primary path and asks for
+ *      no sign-in of any kind. Checked against `OPERATOR_TOKEN` on this
+ *      deployment with a constant-time comparison so a wrong guess cannot be
+ *      narrowed down by timing.
+ *   2. A fallback allowlist: the existing Email OTP provider (convex/auth.ts,
+ *      src/auth/EmailSignIn.tsx) already gives every caller a verified email
+ *      once they sign in with a code. This path accepts exactly the
+ *      identities whose verified email is listed in the `OPERATOR_EMAILS`
+ *      env var (comma-separated, case-insensitive; an entry like
+ *      "@pcstyle.dev" admits every verified address on that domain). This is
+ *      what the public site and the test suite use, since neither carries
+ *      the build-time token.
+ *
+ * Either way a real session is still required — even the token path needs a
+ * signed-in (possibly anonymous) caller to have a user id to record as
+ * `owner` — and a caller with neither a matching token nor an allowlisted
+ * email is refused with the same message, so neither the token nor the list
+ * is ever confirmed or denied to the caller.
  *
  * This is authorization, not a quota: nothing here counts or throttles
  * requests (AGENTS.md "Rate limiting" forbids adding one), it only decides
@@ -94,15 +108,54 @@ async function loadAccount(
   return ctx.runQuery(internal.access.operatorAccount, { id });
 }
 
-export async function requireOperator(ctx: QueryCtx | MutationCtx | ActionCtx) {
+/**
+ * Constant-time string comparison. Convex queries/mutations run in a V8
+ * isolate with no `node:crypto` (only actions can opt into the Node
+ * runtime), so this is a plain manual equivalent of
+ * `crypto.timingSafeEqual`: every character is compared regardless of where
+ * an earlier mismatch occurred, so a wrong token takes the same time to
+ * reject whether the first character is wrong or the last one is. The
+ * length check short-circuits — leaking a token's length is not the secret
+ * being protected here.
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+
+  let mismatch = 0;
+
+  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+
+  return mismatch === 0;
+}
+
+export async function requireOperator(
+  ctx: QueryCtx | MutationCtx | ActionCtx,
+  operatorToken?: string,
+) {
   const id = await getAuthUserId(ctx);
-  const account = id === null ? null : await loadAccount(ctx, id);
-  // `emailVerificationTime` is only ever set once convex/auth.ts's Email OTP
-  // provider confirms a code — this is the one fact this app trusts, never a
-  // claim carried on the identity/JWT itself.
+
+  // Both paths below need a real session (even the token path records
+  // `owner` from it), so refuse up front rather than repeating this check
+  // twice.
+  if (!id) throw new ConvexError("Sign in as an operator to import.");
+
+  // Path 1: the operator build's own token. Fails closed when
+  // `OPERATOR_TOKEN` is unset on this deployment — an unset env var must
+  // never make this branch trivially satisfiable by an empty/undefined
+  // token on either side.
+  const configuredToken = process.env.OPERATOR_TOKEN;
+
+  if (configuredToken && operatorToken && timingSafeEqual(operatorToken, configuredToken))
+    return id;
+
+  // Path 2: the verified-email allowlist, unchanged from before the token
+  // existed. `emailVerificationTime` is only ever set once convex/auth.ts's
+  // Email OTP provider confirms a code — this is the one fact this app
+  // trusts, never a claim carried on the identity/JWT itself.
+  const account = await loadAccount(ctx, id);
   const email = account?.emailVerificationTime ? account.email?.trim().toLowerCase() : undefined;
 
-  if (!id || !email || !isOperatorEmail(email, operatorEmails()))
+  if (!email || !isOperatorEmail(email, operatorEmails()))
     throw new ConvexError("Sign in as an operator to import.");
 
   return id;
@@ -115,11 +168,11 @@ export async function requireOperator(ctx: QueryCtx | MutationCtx | ActionCtx) {
  * itself (a mismatch reads identically to "not signed in").
  */
 export const isOperator = query({
-  args: {},
+  args: { operatorToken: v.optional(v.string()) },
   returns: v.boolean(),
-  handler: async (ctx) => {
+  handler: async (ctx, { operatorToken }) => {
     try {
-      await requireOperator(ctx);
+      await requireOperator(ctx, operatorToken);
 
       return true;
     } catch {

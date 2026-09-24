@@ -15,6 +15,7 @@ import {
 } from "./format";
 import { Badge } from "./format.tsx";
 import { useDashboardClock } from "./clock";
+import { operatorArgs } from "../operatorToken";
 
 /**
  * One account library row: identity, the four states the "dashboard"
@@ -128,10 +129,13 @@ export default function AccountRow({ row }: { row: AccountLibraryRow }) {
         <NextActionControl
           action={row.nextAction}
           busy={busy}
-          onRetry={(jobId) => act(() => retry({ jobId }))}
+          onRetry={(jobId) => act(() => retry({ jobId, ...operatorArgs() }))}
         />
         {job && (job.status === "running" || job.status === "queued") && (
-          <button disabled={busy} onClick={() => act(() => cancel({ jobId: job.jobId }))}>
+          <button
+            disabled={busy}
+            onClick={() => act(() => cancel({ jobId: job.jobId, ...operatorArgs() }))}
+          >
             Stop
           </button>
         )}

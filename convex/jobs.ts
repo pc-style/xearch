@@ -141,16 +141,18 @@ export const start = mutation({
     since: v.optional(v.string()),
     refresh: v.optional(v.boolean()),
     previous: v.optional(v.id("jobs")),
+    operatorToken: v.optional(v.string()),
   },
   returns: v.id("jobs"),
   handler: async (ctx, args) => {
     // Starting any kind of import spends provider allowance (x.md, and via
     // the raw-capture handoff). Per the authorization-boundary decision,
-    // this requires a signed-in OPERATOR (a verified email on
-    // OPERATOR_EMAILS), not merely a signed-in session — an anonymous guest
-    // is refused here. `owner` below is still written purely as an audit
-    // trail of who started the run, not a visibility boundary.
-    const owner = await requireOperator(ctx);
+    // this requires a signed-in OPERATOR (the operator build's own token, or
+    // a verified email on OPERATOR_EMAILS as a fallback — convex/access.ts),
+    // not merely a signed-in session — an anonymous guest with neither is
+    // refused here. `owner` below is still written purely as an audit trail
+    // of who started the run, not a visibility boundary.
+    const owner = await requireOperator(ctx, args.operatorToken);
     const outbound = process.env.COLLECTOR_MODE === "outbound";
 
     const worker = outbound
@@ -347,10 +349,10 @@ async function sharedJob(
 }
 
 export const cancel = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId, requireOperator);
+  handler: async (ctx, { jobId, operatorToken }) => {
+    const job = await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
 
     if (!["queued", "running"].includes(job.status)) return null;
     await ctx.db.patch(jobId, {
@@ -364,10 +366,10 @@ export const cancel = mutation({
 });
 
 export const retry = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId, requireOperator);
+  handler: async (ctx, { jobId, operatorToken }) => {
+    const job = await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
 
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
@@ -413,10 +415,10 @@ export const retry = mutation({
 // row back — so it does not violate to-do.md's "do not delete records just
 // to hide duplicates".
 export const dismiss = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId, requireOperator);
+  handler: async (ctx, { jobId, operatorToken }) => {
+    const job = await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
 
     // Deliberately refuses queued/running work: hiding a run that is still
     // spending provider allowance would make it unstoppable from the UI.
@@ -444,10 +446,10 @@ export const dismiss = mutation({
 const DISMISS_INPUT_SCAN = 2_000;
 
 export const dismissInput = mutation({
-  args: { kind: kindValidator, input: v.string() },
+  args: { kind: kindValidator, input: v.string(), operatorToken: v.optional(v.string()) },
   returns: v.number(),
-  handler: async (ctx, { kind, input }) => {
-    await requireOperator(ctx);
+  handler: async (ctx, { kind, input, operatorToken }) => {
+    await requireOperator(ctx, operatorToken);
 
     let dismissed = 0;
     let scanned = 0;
@@ -476,11 +478,11 @@ export const dismissInput = mutation({
 });
 
 export const restore = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
+  handler: async (ctx, { jobId, operatorToken }) => {
     // Authorization is the whole check here; the row itself is not needed.
-    await sharedJob(ctx, jobId, requireOperator);
+    await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
     await ctx.db.patch(jobId, { dismissedAt: undefined });
 
     return null;

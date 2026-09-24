@@ -8,6 +8,13 @@ export interface LocationSnapshot {
   readonly sort: Sort;
   readonly includeStats: boolean;
   readonly dashboard: boolean;
+  /**
+   * Operator build only (src/App.tsx inverts its `dashboard` default around
+   * this): whether `?search=1` was given to ask for the search view instead
+   * of the dashboard the operator build otherwise opens at `/`. Always
+   * false in the public build's URLs, where it does nothing.
+   */
+  readonly search: boolean;
   readonly view: ViewMode;
   /** Read-only: the app has no path-based routes (dashboard, search, etc.
    * are all query params on "/"), so this exists only so a caller can tell
@@ -23,6 +30,7 @@ export interface LocationPatch {
   readonly sort?: Sort;
   readonly includeStats?: boolean;
   readonly dashboard?: boolean;
+  readonly search?: boolean;
   readonly view?: ViewMode;
 }
 
@@ -44,6 +52,7 @@ const SERVER_SNAPSHOT: LocationSnapshot = Object.freeze({
   sort: DEFAULT_SORT,
   includeStats: false,
   dashboard: false,
+  search: false,
   view: ViewMode.Search,
   path: "/",
 });
@@ -82,6 +91,7 @@ function parseUrl(input: string | URL): Omit<LocationSnapshot, "version"> {
     sort: isSort(sortValue) ? sortValue : DEFAULT_SORT,
     includeStats: url.searchParams.get("stats") === "1",
     dashboard: url.searchParams.has("dashboard"),
+    search: url.searchParams.has("search"),
     view: isView(viewValue) ? viewValue : ViewMode.Search,
     path: url.pathname,
   };
@@ -200,6 +210,11 @@ function applyPatch(url: URL, patch: LocationPatch): void {
   if (patch.dashboard !== undefined) {
     if (patch.dashboard) url.searchParams.set("dashboard", "1");
     else url.searchParams.delete("dashboard");
+  }
+
+  if (patch.search !== undefined) {
+    if (patch.search) url.searchParams.set("search", "1");
+    else url.searchParams.delete("search");
   }
 
   if (patch.view !== undefined) {

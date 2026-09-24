@@ -245,6 +245,99 @@ describe("the operator authorization boundary", () => {
 });
 
 /**
+ * The operator build's own token (src/operatorToken.ts, `OPERATOR_TOKEN` on
+ * the deployment) is a second, independent path into `requireOperator` —
+ * the primary one, since the operator site needs no email sign-in at all
+ * (adam's decision, 2026-09-24: being on the operator site, already
+ * restricted by exe.dev's own login, IS the operator proof). It must never
+ * weaken the allowlist path above: a caller with neither a matching token
+ * nor an allowlisted email is still refused, and an unset `OPERATOR_TOKEN`
+ * disables the token path entirely rather than falling back to some
+ * always-true default.
+ */
+describe("the operator token path", () => {
+  beforeEach(() => {
+    vi.stubEnv("X_MD_API_KEY", "test");
+    vi.stubEnv("RAW_CAPTURE_URL", "http://127.0.0.1:4319/captures");
+    vi.stubEnv("COLLECTOR_MODE", "receiver");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("allows an anonymous session that presents the matching token", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+
+    const { guest } = await setup();
+
+    const jobId = await guest.mutation(api.jobs.start, {
+      kind: "live",
+      input: "from:theo",
+      operatorToken: "correct-horse-battery-staple",
+    });
+
+    expect(jobId).toBeTruthy();
+  });
+
+  it("refuses a wrong token from an otherwise-unlisted caller", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "wrong-guess",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("refuses a missing token from an otherwise-unlisted caller", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, { kind: "live", input: "from:theo" }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("disables the token path entirely when OPERATOR_TOKEN is unset, even for a caller presenting one", async () => {
+    // No vi.stubEnv("OPERATOR_TOKEN", ...) here — it stays unset.
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "anything",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("still requires a real session even with a matching token", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const t = convexTest(schema, modules);
+    // No `t.withIdentity(...)`: an unauthenticated caller, not merely an
+    // anonymous one — `getAuthUserId` returns null either way, but this
+    // pins down that the token alone is not a substitute for any session.
+    await expect(
+      t.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "correct-horse-battery-staple",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("access.isOperator reports true for a matching token from an anonymous session", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const { guest } = await setup();
+    expect(
+      await guest.query(api.access.isOperator, { operatorToken: "correct-horse-battery-staple" }),
+    ).toBe(true);
+    expect(await guest.query(api.access.isOperator, { operatorToken: "wrong" })).toBe(false);
+  });
+});
+
+/**
  * convex/integrations.ts's readLink/webContext/interpret/account all spend
  * Firecrawl, OpenAI, or x.md allowance and funnel through the same
  * `reserve` internal mutation right before they do (readLink also checks

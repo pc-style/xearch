@@ -164,17 +164,36 @@ describe("describe configuration without claiming a connection check", () => {
   });
 });
 
-describe("uses singular 'post' for exactly one result on the page (2nd CodeRabbit pass)", () => {
+describe("uses singular 'post' for exactly one result loaded (2nd CodeRabbit pass)", () => {
   it("says '1 post' rather than '1 posts'", () => {
     const html = render({ result: session({ rows: [post()] }), visible: [post()] });
-    expect(html).toContain("1 post on this page");
-    expect(html).not.toContain("1 posts on this page");
+    expect(html).toContain("1 post loaded");
+    expect(html).not.toContain("1 posts loaded");
   });
 
   it("still says 'N posts' for more than one", () => {
     const rows = [post(), post({ tweetId: "456" })];
     const html = render({ result: session({ rows }), visible: rows });
-    expect(html).toContain("2 posts on this page");
+    expect(html).toContain("2 posts loaded");
+  });
+
+  it("counts the merged rows after 'Load more', not just the latest page (N1)", () => {
+    // `result` is only the most recently landed backend page (App.tsx keeps
+    // it keyed by session/query/sort, not by how many pages have been
+    // appended); `visible` is what App.tsx actually renders after folding
+    // each new page into the accumulated list (`mergeSearchPages`). A
+    // header reading `result.rows.length` would freeze at one page's worth
+    // even once two pages are on screen.
+    const firstPage = [post(), post({ tweetId: "456" })];
+    const secondPage = [post({ tweetId: "789" })];
+
+    const html = render({
+      result: session({ rows: secondPage }),
+      visible: [...firstPage, ...secondPage],
+    });
+
+    expect(html).toContain("3 posts loaded");
+    expect(html).not.toContain("1 post loaded");
   });
 });
 

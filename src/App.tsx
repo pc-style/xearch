@@ -38,6 +38,7 @@ import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { useLiveNow } from "./library/clock";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
+import { operatorArgs } from "./operatorToken";
 import { describeError } from "./errors";
 import { dedupeJobsByInput, inlineImportStatus } from "./jobText";
 import { JobRow } from "./JobRow";
@@ -321,6 +322,20 @@ export default function App() {
     sessionGate.update({ isLoading: authLoading, isAuthenticated });
   }
 
+  // Both the hotkey and the footnote button (ResultsSection's
+  // `onToggleStats`) go through this, so `stats=1` on the URL never drifts
+  // from what's actually showing: a reload or a shared link must reproduce
+  // the same on/off state, not just the query. `replaceLocation`, not
+  // `pushLocation` — this is a display preference, not a navigation
+  // destination, so toggling it repeatedly must not spam Back with entries
+  // that only differ by `stats=`.
+  const toggleStats = () => {
+    const next = !statsForNerds;
+
+    setStatsForNerds(next);
+    replaceLocation({ includeStats: next });
+  };
+
   // Effect-free global shortcut: React 19 ref callbacks may return a cleanup
   // function, which is exactly the attach/detach pair a document-level
   // listener needs — no useEffect required. Moved "Stats for nerds" off the
@@ -343,7 +358,7 @@ export default function App() {
 
       if (!isToggle) return;
       e.preventDefault();
-      setStatsForNerds((v) => !v);
+      toggleStats();
     }
 
     document.addEventListener("keydown", onKeyDown);
@@ -399,7 +414,17 @@ export default function App() {
     }
   }
 
-  const dashboard = route.dashboard;
+  // The operator build opens at the dashboard by default (the operator URL
+  // IS the dashboard — docs/production.md): `?search=1` is what asks for
+  // the search view instead, so `route.dashboard` (the public build's own
+  // `?dashboard=1`, which still does nothing there) is inverted around
+  // `route.search` here rather than read directly. A URL that already
+  // carries a query (`?q=...`) also lands on search without needing
+  // `search=1` too, so a shared/bookmarked search link keeps working on the
+  // operator site instead of being swallowed by the new default. The public
+  // build never has `OPERATOR_BUILD` true, so this always falls through to
+  // the original, unswapped behavior there.
+  const dashboard = OPERATOR_BUILD ? !route.search && !route.raw : route.dashboard;
   const accountResults = useQuery(api.search.accounts);
   const accounts = accountResults ?? [];
   // `configured.indexing` decays with real time (worker liveness), not only
@@ -427,7 +452,8 @@ export default function App() {
   // of what this reads.
   // `undefined` while loading: gated actions stay disabled, but the sign-in
   // notice waits for a confirmed `false` so an operator never sees it flash.
-  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip");
+  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? operatorArgs() : "skip");
+
   let queryError = "";
 
   try {
@@ -634,7 +660,12 @@ export default function App() {
   // perform are plain functions instead of inline-updater closures.
   const submitImport = async () => {
     await ensureSession();
-    await start({ kind: "bulk", input: accountInput, since: since || undefined });
+    await start({
+      kind: "bulk",
+      input: accountInput,
+      since: since || undefined,
+      ...operatorArgs(),
+    });
     setAccountInput("");
   };
 
@@ -645,6 +676,7 @@ export default function App() {
     const jobId = await start({
       kind: "live",
       input: query.replace(/(^|\s)@([\w]+)/g, "$1from:$2"),
+      ...operatorArgs(),
     });
 
     setLiveImportJob({ query, jobId });
@@ -652,23 +684,23 @@ export default function App() {
 
   const runRead = async (url: string) => {
     await ensureSession();
-    setPage(await readLink({ url }));
+    setPage(await readLink({ url, ...operatorArgs() }));
   };
 
   const proposeSearch = async () => {
     await ensureSession();
-    setProposal(await interpret({ raw: draft }));
+    setProposal(await interpret({ raw: draft, ...operatorArgs() }));
   };
 
   const runWebContext = async () => {
     await ensureSession();
-    setContextPages(await webContext({ query: raw }));
+    setContextPages(await webContext({ query: raw, ...operatorArgs() }));
     setExpandedContextPages(new Set());
   };
 
   const runThread = async (post: ResultPost) => {
     await ensureSession();
-    const jobId = await start({ kind: "post", input: post.url });
+    const jobId = await start({ kind: "post", input: post.url, ...operatorArgs() });
     setThreadJobs((prev) => ({ ...prev, [post.tweetId]: jobId }));
   };
 
@@ -758,8 +790,10 @@ export default function App() {
     // Drop `q`/the search query from the URL the dashboard entry carries:
     // it's a leftover from whatever page the user was on, not a dashboard
     // param, and showing up there is confusing on reload/share (see close()
-    // below for the matching Back-button fix).
-    pushLocation({ dashboard: true, raw: "" });
+    // below for the matching Back-button fix). Clearing `search` is what
+    // gets back to the dashboard now that it's the operator build's
+    // default at `/` — see the `dashboard` inversion above.
+    pushLocation({ search: false, raw: "" });
   };
 
   const search = (query: string, nextSort?: Sort) => {
@@ -830,7 +864,10 @@ export default function App() {
         <span ref={authProbe} hidden />
         <h1>Page not found</h1>
         <p>There's nothing at this address.</p>
-        <a href="/">Back to search</a>
+        {/* The operator build's own `/` opens the dashboard, not search
+            (see the `dashboard` inversion below), so this needs
+            `?search=1` to land where its label says. */}
+        <a href={OPERATOR_BUILD ? "/?search=1" : "/"}>Back to search</a>
       </div>
     );
   }
@@ -846,14 +883,15 @@ export default function App() {
             // so undo it with a real Back instead of rewriting this entry
             // in place — that's what actually lands back on the page the
             // user came from rather than skipping it on a later Back press.
-            // A direct link/reload into `?dashboard=1` never pushed that
-            // entry, so there is nothing to go back to; fall back to
-            // clearing the flag on the current entry.
+            // A direct link/reload into the dashboard (the operator build's
+            // own default at `/`) never pushed that entry, so there is
+            // nothing to go back to; fall back to setting `search` on the
+            // current entry instead.
             if (pushedDashboardEntry.current) {
               pushedDashboardEntry.current = false;
               window.history.back();
             } else {
-              replaceLocation({ dashboard: false });
+              replaceLocation({ search: true });
             }
           }}
         />
@@ -1184,7 +1222,7 @@ export default function App() {
                 searchPending={isSearchPending}
                 emailNeedsSignIn={!verifiedEmail}
                 statsForNerds={statsForNerds}
-                onToggleStats={() => setStatsForNerds((v) => !v)}
+                onToggleStats={toggleStats}
                 alreadySaved={alreadySaved}
                 isOperator={isOperator}
               />
@@ -1212,15 +1250,7 @@ export default function App() {
             Collect an account's public history from X. You'll see its progress below.
           </p>
           {isAuthenticated && isOperator === false && (
-            <>
-              <p className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</p>
-              <EmailSignIn
-                className="stack-form"
-                onSignedIn={() =>
-                  setNotice("Signed in. Imports unlock if this email is an operator address.")
-                }
-              />
-            </>
+            <p className="config-warning">{OPERATOR_SIGN_IN_NOTICE}</p>
           )}
           <form className="stack-form" onSubmit={importAccount}>
             <label htmlFor="account">X handle</label>
@@ -1277,7 +1307,7 @@ export default function App() {
                 isOperator={isOperator}
                 onCancel={async (j) => {
                   await ensureSession();
-                  await cancelJob({ jobId: j._id });
+                  await cancelJob({ jobId: j._id, ...operatorArgs() });
                 }}
                 // An import runs to the end of what the provider has on its
                 // own (convex/jobs.ts `finish` continues and retries by
@@ -1286,7 +1316,7 @@ export default function App() {
                 // it stopped — never a new job from its cursor.
                 onRetry={async (j) => {
                   await ensureSession();
-                  await retry({ jobId: j._id });
+                  await retry({ jobId: j._id, ...operatorArgs() });
                 }}
                 // Dismiss the WHOLE folded group, not just the one visible
                 // row: `jobs.dismissInput` walks every job for this exact
@@ -1296,7 +1326,7 @@ export default function App() {
                 // list isn't enough once a group has 21+ runs in it).
                 onDismiss={async (j) => {
                   await ensureSession();
-                  await dismissInput({ kind: j.kind, input: j.input });
+                  await dismissInput({ kind: j.kind, input: j.input, ...operatorArgs() });
                 }}
               />
             ))}

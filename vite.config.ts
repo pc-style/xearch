@@ -23,6 +23,14 @@ export default defineConfig({
             find: /^\.\/operatorSurface$/,
             replacement: fileURLToPath(new URL("./src/operatorSurface.public.ts", import.meta.url)),
           },
+          {
+            find: /^\.\/operatorBuild$/,
+            replacement: fileURLToPath(new URL("./src/operatorBuild.public.ts", import.meta.url)),
+          },
+          {
+            find: /^\.\/operatorToken$/,
+            replacement: fileURLToPath(new URL("./src/operatorToken.public.ts", import.meta.url)),
+          },
         ],
   },
   server: {

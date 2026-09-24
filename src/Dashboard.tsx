@@ -9,6 +9,7 @@ import { useTask } from "./errors";
 import { JobRow } from "./JobRow";
 import Library from "./library/Library";
 import { useDashboardClock, useLiveNow } from "./library/clock";
+import { operatorArgs } from "./operatorToken";
 
 // Exported so tests/dashboard-job-ui.test.ts can render this row in
 // isolation (the fake-Convex-client harness pattern tests/library-ui.test.ts
@@ -46,16 +47,16 @@ export function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean
       isOperator={isOperator}
       className={dismissed ? "control-job is-dismissed" : "control-job"}
       onCancel={async (j) => {
-        await cancel({ jobId: j._id });
+        await cancel({ jobId: j._id, ...operatorArgs() });
       }}
       onRetry={async (j) => {
-        await retry({ jobId: j._id });
+        await retry({ jobId: j._id, ...operatorArgs() });
       }}
       onDismiss={
         dismissed
           ? undefined
           : async (j) => {
-              await dismiss({ jobId: j._id });
+              await dismiss({ jobId: j._id, ...operatorArgs() });
             }
       }
       // Clearing a finished run only hides it: the run and the receipts
@@ -76,7 +77,9 @@ export function Job({ job, isOperator }: { job: Doc<"jobs">; isOperator: boolean
               type="button"
               disabled={!isOperator || restoreTask.busy}
               title={isOperator ? undefined : OPERATOR_SIGN_IN_NOTICE}
-              onClick={() => void restoreTask.run(() => restore({ jobId: job._id }))}
+              onClick={() =>
+                void restoreTask.run(() => restore({ jobId: job._id, ...operatorArgs() }))
+              }
             >
               Bring back
             </button>
@@ -108,7 +111,8 @@ export default function Dashboard({
   // notice treatment below; the server enforces the boundary regardless.
   // `undefined` while loading: buttons stay disabled, but the sign-in notice
   // waits for a confirmed `false` — an operator must not see it on every load.
-  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? {} : "skip");
+  const isOperator = useQuery(api.access.isOperator, isAuthenticated ? operatorArgs() : "skip");
+
   // `integrations.operator` requires a session, so asking for it before one
   // exists throws into the app's error boundary — which only offers a
   // reload. The dashboard is reachable directly by URL, so that is a normal
@@ -205,6 +209,7 @@ export default function Dashboard({
                   input,
                   since: kind === "bulk" && since ? since : undefined,
                   refresh: kind === "bulk" && refresh,
+                  ...operatorArgs(),
                 });
               }, "Import started. You can leave this page open or come back later.");
             }}

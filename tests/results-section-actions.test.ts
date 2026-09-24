@@ -172,7 +172,7 @@ describe("operator authorization boundary in the results UI", () => {
     expect(html).toMatch(webContextButton);
     expect(html).toMatch(importFromXButton);
     expect(html).toMatch(conversationButton);
-    expect(html).toContain("Sign in as an operator to use this action.");
+    expect(html).toContain("Imports run from the operator dashboard.");
   });
 
   it("leaves Web context, Import from X, and Fetch conversation enabled for an operator", () => {
@@ -182,7 +182,7 @@ describe("operator authorization boundary in the results UI", () => {
 
     expect(html).not.toMatch(webContextButton);
     expect(html).not.toMatch(importFromXButton);
-    expect(html).not.toContain("Sign in as an operator to use this action.");
+    expect(html).not.toContain("Imports run from the operator dashboard.");
   });
 
   it("disables a post's linked-page buttons for a non-operator and shows the sign-in notice (CodeRabbit #4089730732)", () => {
@@ -192,7 +192,7 @@ describe("operator authorization boundary in the results UI", () => {
     const linkButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*example\.com/;
 
     expect(html).toMatch(linkButton);
-    expect(html).toContain("Sign in as an operator to use this action.");
+    expect(html).toContain("Imports run from the operator dashboard.");
   });
 
   it("leaves a post's linked-page buttons enabled for an operator", () => {
@@ -213,7 +213,7 @@ describe("operator authorization boundary in the results UI", () => {
     // specifically about the post CARD not repeating it once per control on
     // the same card (a linked-page button and "Fetch conversation from X").
     const cardHtml = html.slice(html.indexOf("<article"), html.indexOf("</article>"));
-    const notice = "Sign in as an operator to use this action.";
+    const notice = "Imports run from the operator dashboard.";
     const occurrences = cardHtml.split(notice).length - 1;
 
     expect(occurrences).toBe(1);

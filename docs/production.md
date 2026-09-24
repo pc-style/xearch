@@ -60,7 +60,23 @@ A TLS probe against the production route mutated no account state: an unknown ha
 
 Firecrawl and OpenAI settings are configured, but paid calls have not been live-tested in production. Email sending requires a verified email identity; a guest session cannot send production email.
 
-Starting or retrying an import (`jobs.start`/`jobs.retry`, any kind), reading web context or a linked page and "Help me search" (the `integrations.*` actions calling Firecrawl/x.md/OpenAI), and cancel/dismiss/restore on a job all require a signed-in OPERATOR, not merely a signed-in guest session — ordinary search stays public. `convex/access.ts`'s `requireOperator` checks the caller's verified email (from the stock Email OTP provider, `convex/auth.ts` and `src/auth/EmailSignIn.tsx`) against `OPERATOR_EMAILS`, a comma-separated, case-insensitive list of addresses — or domains written as `@pcstyle.dev`, which admit every verified address on that domain — set on the production deployment. An anonymous guest and a verified-but-unlisted email are both refused with the same message ("Sign in as an operator to import."), so the allowlist is never confirmed or denied to the caller. This is authorization, not a quota — nothing about it counts or throttles requests, and it adds no rate limit on top of what x.md/Firecrawl/OpenAI themselves report.
+Starting or retrying an import (`jobs.start`/`jobs.retry`, any kind), reading web context or a linked page and "Help me search" (the `integrations.*` actions calling Firecrawl/x.md/OpenAI), and cancel/dismiss/restore on a job all require a signed-in OPERATOR, not merely a signed-in guest session — ordinary search stays public. `convex/access.ts`'s `requireOperator` accepts either of two independent paths:
+
+- **The operator build's own token** (the primary path). The operator site is already restricted to exe.dev accounts with VM access — see the table above — so being on that site IS the operator proof, and no sign-in of any kind is asked for. The frontend threads a build-time token (`VITE_OPERATOR_TOKEN`, read by `src/operatorToken.ts`) through every gated call; `requireOperator` compares it against `OPERATOR_TOKEN` on the deployment with a constant-time comparison. The public build never has this token: `src/operatorToken.ts` is resolved to a stub with no reference to `VITE_OPERATOR_TOKEN` or the token itself (the same module-swap technique as `src/operatorSurface.ts`), and `scripts/check-public-bundle.mjs` fails the build if either the variable name or the string `operatorToken` reaches the public output.
+- **The verified-email allowlist** (the fallback, kept only for the test suite and as a backstop). `requireOperator` checks the caller's verified email (from the stock Email OTP provider, `convex/auth.ts`) against `OPERATOR_EMAILS`, a comma-separated, case-insensitive list of addresses — or domains written as `@pcstyle.dev`, which admit every verified address on that domain — set on the production deployment. There is no email sign-in UI for this any more; the public site's Import modal just says "Imports run from the operator dashboard."
+
+Either way a real session is still required (even the token path needs a signed-in, possibly anonymous, caller to have a user id to record as `owner`). An anonymous guest with neither a matching token nor an allowlisted email is refused with the same message ("Sign in as an operator to import."), so neither the token nor the allowlist is ever confirmed or denied to the caller. This is authorization, not a quota — nothing about it counts or throttles requests, and it adds no rate limit on top of what x.md/Firecrawl/OpenAI themselves report.
+
+The token file is `~/xearch-data/operator.env` (mode 0600, never committed), sourced by `scripts/deploy-operator-site.sh` the same way `xearch-search-indexer.service` sources `publication.env` — a plain `VITE_OPERATOR_TOKEN=<hex>` line, read into the build and never echoed or logged. To rotate it:
+
+```sh
+openssl rand -hex 32   # new token
+$EDITOR ~/xearch-data/operator.env   # replace VITE_OPERATOR_TOKEN=... with the new value
+CONVEX_DEPLOYMENT=prod:utmost-kudu-321 bunx convex env set OPERATOR_TOKEN
+bash scripts/deploy-operator-site.sh   # rebuilds and republishes the operator site with the new token baked in
+```
+
+Set `OPERATOR_TOKEN` on the deployment to the exact value now in `operator.env` — the two must match for the token path to work at all. Until both are updated together the old token still works (whichever the deployment has) and the allowlist keeps working regardless, so this is not an outage-prone rotation.
 
 Verified public HTML/assets, production guest authentication plus saved-search create/read/remove, and one real production profile download through the outbound worker with a durable local receipt. Browser visual checks were unavailable during deployment.
 

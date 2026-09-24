@@ -27,6 +27,11 @@ const FORBIDDEN = [
   "Dependency health",
   "Provider limits",
   "Account library",
+  // The operator build's own token (src/operatorToken.ts) — neither the env
+  // var name nor the arg name it's threaded through as should ever reach
+  // the public bundle, which never had one.
+  "VITE_OPERATOR_TOKEN",
+  "operatorToken",
 ];
 
 const files = [];

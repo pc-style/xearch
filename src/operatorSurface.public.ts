@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { DashboardProps } from "./operatorSurface";
+import { OPERATOR_BUILD } from "./operatorBuild";
 
 /**
  * The public build's stand-in for `operatorSurface.ts`, substituted by the
@@ -10,7 +11,7 @@ import type { DashboardProps } from "./operatorSurface";
  * Read `operatorSurface.ts` for why the exclusion is a module swap rather
  * than a build-time flag.
  */
-export const OPERATOR_BUILD: boolean = false;
+export { OPERATOR_BUILD };
 
 export type { DashboardProps };
 
