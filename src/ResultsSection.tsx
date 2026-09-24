@@ -1,4 +1,4 @@
-import { useDeferredValue, useState } from "react";
+import { useDeferredValue, useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
   Bookmark,
@@ -100,9 +100,7 @@ export function PostCard({
   onRead: (url: string) => void;
   onAuthor: () => void;
   threadStatus?: string | null;
-  // Conversation starts a paid x.md import (see App.tsx `runThread`), so it
-  // is gated the same as every other provider-spending action — see
-  // OPERATOR_SIGN_IN_NOTICE (src/integrationStatus.ts).
+  /** Gates "Fetch conversation from X" (a paid x.md import) — see OPERATOR_SIGN_IN_NOTICE. */
   isOperator: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -255,6 +253,35 @@ const safeHostname = (url: string) => {
   }
 };
 
+/** One "More actions" menu entry that also spends provider allowance,
+ * gated the same way as every other paid action — see OPERATOR_SIGN_IN_NOTICE
+ * (src/integrationStatus.ts). Pulled out of ResultsSection so the two
+ * (Web context, Import from X) menu entries don't each carry their own
+ * copy of this wrapper/reason markup inline in an already-large component. */
+function OperatorGatedMenuItem({
+  icon,
+  label,
+  disabled,
+  isOperator,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  disabled: boolean;
+  isOperator: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div className="result-menu-item">
+      <button type="button" disabled={disabled || !isOperator} onClick={onClick}>
+        {icon}
+        {label}
+      </button>
+      {!isOperator && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
+    </div>
+  );
+}
+
 export function ResultsSection({
   view,
   raw,
@@ -312,9 +339,7 @@ export function ResultsSection({
   alreadySaved?: boolean;
   statsForNerds?: boolean;
   onToggleStats?: () => void;
-  // Gates Web context (Firecrawl), Find on X (x.md live import), the
-  // overflow "More actions" menu's paid entries, and each post's "Fetch
-  // conversation from X" button — see OPERATOR_SIGN_IN_NOTICE.
+  /** Gates every paid action shown here — see OPERATOR_SIGN_IN_NOTICE. */
   isOperator: boolean;
 }) {
   // Effect-free focus/scroll: callback ref runs at commit time, no useEffect.
@@ -380,17 +405,13 @@ export function ResultsSection({
                   <MoreHorizontal size={15} />
                 </summary>
                 <div className="result-menu-items">
-                  <div className="result-menu-item">
-                    <button
-                      type="button"
-                      disabled={busy || !configured?.firecrawl || !isOperator}
-                      onClick={onWebContext}
-                    >
-                      <Link2 size={15} />
-                      Web context (fetches page)
-                    </button>
-                    {!isOperator && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
-                  </div>
+                  <OperatorGatedMenuItem
+                    icon={<Link2 size={15} />}
+                    label="Web context (fetches page)"
+                    disabled={busy || !configured?.firecrawl}
+                    isOperator={isOperator}
+                    onClick={onWebContext}
+                  />
                   <div className="result-menu-item">
                     <button
                       type="button"
@@ -408,17 +429,13 @@ export function ResultsSection({
                       the label says so, and the status line below tracks the
                       job instead of only surfacing it in the Recent imports
                       modal. */}
-                  <div className="result-menu-item">
-                    <button
-                      type="button"
-                      disabled={busy || !configured?.indexing || !isOperator}
-                      onClick={onLiveSearch}
-                    >
-                      <Search size={15} />
-                      Import from X
-                    </button>
-                    {!isOperator && <p className="result-menu-reason">{OPERATOR_SIGN_IN_NOTICE}</p>}
-                  </div>
+                  <OperatorGatedMenuItem
+                    icon={<Search size={15} />}
+                    label="Import from X"
+                    disabled={busy || !configured?.indexing}
+                    isOperator={isOperator}
+                    onClick={onLiveSearch}
+                  />
                 </div>
               </details>
             )}

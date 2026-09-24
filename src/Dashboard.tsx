@@ -179,7 +179,7 @@ export default function Dashboard({
     isAuthenticated && !showDismissed ? { includeDismissed: true, scope: "other" } : "skip",
   );
 
-  const everRan = showDismissed ? (jobs?.length ?? 0) > 0 : (everJobs?.length ?? 0) > 0;
+  const everRan = showDismissed ? (jobs?.length ?? 0) > 0 : (everJobs?.jobs.length ?? 0) > 0;
 
   const start = useMutation(api.jobs.start);
 

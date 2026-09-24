@@ -113,6 +113,7 @@ function render(props: Partial<Parameters<typeof ResultsSection>[0]> = {}) {
       onRead: noop,
       onBookmark: noop,
       onThread: noop,
+      isOperator: true,
       ...props,
     }),
   );
@@ -156,5 +157,31 @@ describe("B6: results footnote drops the internal service copy", () => {
   it("does not mention 'search service' for the search view", () => {
     const html = render({});
     expect(html).not.toMatch(/search service/i);
+  });
+});
+
+describe("operator authorization boundary in the results UI", () => {
+  it("disables Web context, Import from X, and each post's Fetch conversation button for a non-operator, and shows the sign-in notice", () => {
+    const html = render({ isOperator: false });
+    const webContextButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Web context/;
+    const importFromXButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Import from X/;
+
+    const conversationButton =
+      /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Fetch conversation from X/;
+
+    expect(html).toMatch(webContextButton);
+    expect(html).toMatch(importFromXButton);
+    expect(html).toMatch(conversationButton);
+    expect(html).toContain("Sign in as an operator to import.");
+  });
+
+  it("leaves Web context, Import from X, and Fetch conversation enabled for an operator", () => {
+    const html = render({ isOperator: true });
+    const webContextButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Web context/;
+    const importFromXButton = /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Import from X/;
+
+    expect(html).not.toMatch(webContextButton);
+    expect(html).not.toMatch(importFromXButton);
+    expect(html).not.toContain("Sign in as an operator to import.");
   });
 });
