@@ -297,7 +297,10 @@ export const start = mutation({
       count: 0,
       attempt: 0,
       warnings: [],
-      origin: "manual",
+      // A continuation is the same import as `previous`, so it keeps that
+      // job's provenance; only a fresh run (no `previous`) is "manual".
+      origin: previous?.origin ?? "manual",
+      discoveredFrom: previous?.discoveredFrom,
       updatedAt: Date.now(),
     });
 

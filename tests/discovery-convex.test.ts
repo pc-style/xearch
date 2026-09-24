@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
-import { internal } from "../convex/_generated/api";
+import { api, internal } from "../convex/_generated/api";
 import * as jobs from "../convex/jobs";
 
 const modules = import.meta.glob("../convex/**/*.ts");
@@ -59,5 +59,52 @@ describe("automatic discovery", () => {
     expect(jobs.discoveryState.isInternal).toBe(true);
     // Control: a public mutation reports the opposite property.
     expect(jobs.start.isPublic).toBe(true);
+  });
+
+  it("keeps a discovered job's provenance across an operator continuation", async () => {
+    vi.stubEnv("X_MD_API_KEY", "test");
+    vi.stubEnv("RAW_CAPTURE_URL", "http://127.0.0.1:4319/captures");
+    vi.stubEnv("COLLECTOR_MODE", "receiver");
+
+    const t = convexTest(schema, modules);
+
+    const alice = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        isAnonymous: false,
+        email: "alice@test.xearch",
+        emailVerificationTime: Date.now(),
+      }),
+    );
+
+    const a = t.withIdentity({ subject: `${alice}|s` });
+
+    const discovered = await t.mutation(internal.jobs.startDiscovered, {
+      input: "ballingt",
+      discoveredFrom: [{ handle: "theo", interactions: 31 }],
+    });
+
+    expect(discovered).not.toBeNull();
+    // A continuation only makes sense once the run it continues has stopped
+    // (autoContinue picks up a still-active one on its own), and needs a
+    // `nextUntil` for `start` to page from.
+    await t.run((ctx) =>
+      ctx.db.patch(discovered!, { status: "complete", nextUntil: "2025-01-01T00:00:00.000Z" }),
+    );
+
+    // An operator (not the discovery job) continues it, e.g. via "Retry
+    // import" in the dashboard — this must not silently relabel the run as
+    // "manual" or drop the accounts that led to it.
+    const continued = await a.mutation(api.jobs.start, {
+      kind: "bulk",
+      input: "ballingt",
+      previous: discovered!,
+    });
+
+    expect(continued).not.toBe(discovered);
+    const job = await t.run((ctx) => ctx.db.get(continued));
+    expect(job).toMatchObject({
+      origin: "discovered",
+      discoveredFrom: [{ handle: "theo", interactions: 31 }],
+    });
   });
 });
