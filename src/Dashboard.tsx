@@ -203,8 +203,16 @@ export default function Dashboard({
       <header className="control-header">
         <div>
           <button onClick={close}>Back to search</button>
-          <h1>Import an account</h1>
-          <p>Choose an account. We'll download its available history.</p>
+          {/* CodeRabbit (PR #48): the heading used to always say "Import an
+              account" even once the Advanced disclosure had a non-bulk kind
+              selected, so the submit button started a different job than
+              the heading described. */}
+          <h1>{kind === "bulk" ? "Import an account" : "Start an import"}</h1>
+          <p>
+            {kind === "bulk"
+              ? "Choose an account. We'll download its available history."
+              : "Choose the input for the selected job. We'll run that job."}
+          </p>
         </div>
         <span className={connected ? "control-online" : "control-error"}>
           {connected ? "Live connection" : "Reconnecting…"}

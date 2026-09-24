@@ -48,10 +48,16 @@ export default function StatusBlock({
   // The download worker's row (`proves: "live"`) is a liveness fact — a
   // heartbeat observed or not — never a configuration fact, so it must
   // never share the word "Configured"/"Not configured" with the rows that
-  // really are env-var presence checks. When it isn't currently online,
-  // say since when, using the same `lastSeenAt` the worker itself reported
-  // (never a guess) — "Not connected" alone hid that this is about a
-  // process going quiet, not a missing setting.
+  // really are env-var presence checks.
+  //
+  // CodeRabbit (PR #48): `workerLastSeenAt` is the last heartbeat this app
+  // ever received, not the moment the worker went offline — those are
+  // different claims, and "Offline since {x}" reads as the latter. Split
+  // the row into a stable status word (`word`, in a polite live region) and
+  // a separately-rendered "last seen" detail: correct wording, and the
+  // still-ticking relative-time text no longer sits inside the announced
+  // region, so `useDashboardClock`'s periodic refresh does not re-announce
+  // the same unchanged status every tick.
   const workerLastSeenAt =
     config?.handoffState?.kind === "live" ? config.handoffState.lastSeenAt : undefined;
 
@@ -59,26 +65,21 @@ export default function StatusBlock({
     <div className="library-status">
       <h3 className="library-subhead">Status</h3>
       <div className="library-status-connections">
-        {connections.map((c) => (
-          <div className="library-status-row" key={c.name}>
-            <span>{c.name}</span>
-            <span className="library-muted">
-              {!isAuthenticated
-                ? "Sign in to view"
-                : !config
-                  ? "Checking…"
-                  : c.proves === "live"
-                    ? c.ready
-                      ? "Online"
-                      : typeof workerLastSeenAt === "number"
-                        ? `Offline since ${formatRelative(workerLastSeenAt, now)}`
-                        : "Offline"
-                    : c.ready
-                      ? "Configured"
-                      : "Not configured"}
-            </span>
-          </div>
-        ))}
+        {connections.map((c) => {
+          const { word, detail } = connectionStatus(c, config, isAuthenticated, workerLastSeenAt);
+          return (
+            <div className="library-status-row" key={c.name}>
+              <span>{c.name}</span>
+              <span className="library-muted">
+                {/* Only `word` is inside the live region: it changes when
+                    the connection's actual state changes, never on its own
+                    just because the clock ticked. */}
+                <span aria-live="polite">{word}</span>
+                {detail && ` · last seen ${formatRelative(detail, now)}`}
+              </span>
+            </div>
+          );
+        })}
       </div>
       <div className="library-health-row" role="status">
         {!health
@@ -109,4 +110,37 @@ export default function StatusBlock({
       <ProviderLimits limits={limits} isAuthenticated={isAuthenticated} />
     </div>
   );
+}
+
+/**
+ * The stable status word for one connection row, plus an optional raw
+ * timestamp `detail` (never pre-formatted here — the caller decides whether
+ * and how to render it against the live clock, and whether it belongs
+ * inside or outside an announced region). Kept a pure function, separate
+ * from render, so a screen reader's live region only ever receives `word`
+ * — the fact that actually changed — never the ticking relative-time text.
+ */
+function connectionStatus(
+  c: Connection,
+  config: OperatorConfig | undefined,
+  isAuthenticated: boolean,
+  workerLastSeenAt: number | null | undefined,
+): { word: string; detail?: number } {
+  if (!isAuthenticated) return { word: "Sign in to view" };
+  if (!config) return { word: "Checking…" };
+  if (c.proves === "live") {
+    if (c.ready) return { word: "Online" };
+    // CodeRabbit (PR #48): a real fix for "never observed" vs. "observed
+    // offline" needs `convex/integrations.ts` to stop collapsing "no
+    // worker record has ever existed" into the same `lastSeenAt: null` it
+    // uses for "observed, and not currently online" — out of scope here
+    // (convex/ is owned by other work landing separately; see PR #44). This
+    // still reports the honest, weaker claim available from what the
+    // backend sends today: a real last-heartbeat time when there is one,
+    // "Offline" with no invented time when there isn't.
+    return typeof workerLastSeenAt === "number"
+      ? { word: "Offline", detail: workerLastSeenAt }
+      : { word: "Offline" };
+  }
+  return { word: c.ready ? "Configured" : "Not configured" };
 }

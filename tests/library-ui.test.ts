@@ -443,11 +443,28 @@ describe("Library (src/library/Library.tsx) rendered output", () => {
       handoffState: { kind: "live" as const, lastSeenAt },
     });
     const offline = renderLibrary();
-    expect(offline).toContain("Offline since");
+    // CodeRabbit (PR #48): `workerLastSeenAt` is the last heartbeat
+    // observed, not the moment the worker went offline — "last seen", not
+    // "since".
+    expect(offline).toContain("Offline");
+    expect(offline).toContain("last seen");
+    expect(offline).not.toContain("Offline since");
     // A real configuration fact (x.md's key being set) must still say
     // "Configured" — only the worker's own liveness row switches vocabulary.
     expect(offline).toContain("Configured");
     expect(offline).not.toContain("Not connected");
+
+    // CodeRabbit (PR #48): only the stable status word sits inside the
+    // polite live region — the still-ticking "last seen Xm ago" detail
+    // must be outside it, or a 30s clock refresh alone would re-announce an
+    // unchanged connection status to a screen reader.
+    const workerRowMatch = offline.match(
+      /Download worker<\/span><span class="library-muted">(.*?)<\/span><\/div>/,
+    );
+    expect(workerRowMatch).not.toBeNull();
+    const workerRowHtml = workerRowMatch![1];
+    expect(workerRowHtml).toContain('<span aria-live="polite">Offline</span>');
+    expect(workerRowHtml).not.toMatch(/aria-live="polite">[^<]*last seen/);
   });
 
   it("hides a queued-work tile until the indexer actually reports that unit, and shows it once it does (A4)", () => {
