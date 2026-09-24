@@ -52,6 +52,12 @@ import {
 } from "./searchFlow";
 import { createSessionGate } from "./sessionGate";
 import {
+  keyWebContextSegments,
+  parseWebContextMarkdown,
+  shortenUrlForDisplay as shortenWebContextUrl,
+  truncateWebContextParagraphs,
+} from "./webContextText";
+import {
   createSearchTelemetryStore,
   SearchStatus,
   SearchTrigger,
@@ -154,6 +160,63 @@ function Modal({
   );
 }
 
+// How much of a Web context page's plain text to show before "Show more":
+// enough for a real preview, far short of the ~34k raw characters Firecrawl
+// can return for a single profile page.
+const WEB_CONTEXT_PREVIEW_CHARS = 2_000;
+
+/** One source's readable preview inside the Web context modal. */
+function WebContextPage({
+  page,
+  expanded,
+  onExpand,
+}: {
+  page: { title: string; text: string; url: string; collectedAt: number };
+  expanded: boolean;
+  onExpand: () => void;
+}) {
+  const paragraphs = parseWebContextMarkdown(page.text);
+  const { shown, truncated } = expanded
+    ? { shown: paragraphs, truncated: false }
+    : truncateWebContextParagraphs(paragraphs, WEB_CONTEXT_PREVIEW_CHARS);
+  return (
+    <div className="page-text">
+      <strong>{page.title}</strong>
+      <p className="muted-copy">
+        Source:{" "}
+        <a href={page.url} target="_blank" rel="noopener noreferrer">
+          {shortenWebContextUrl(page.url, 80)}
+        </a>{" "}
+        · collected {new Date(page.collectedAt).toLocaleString()}
+      </p>
+      {shown.map((paragraph) => (
+        <p key={paragraph.key}>
+          {keyWebContextSegments(paragraph).map(({ key, segment }) =>
+            segment.type === "link" ? (
+              <a
+                key={key}
+                href={segment.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={segment.href}
+              >
+                {segment.label}
+              </a>
+            ) : (
+              <span key={key}>{segment.value}</span>
+            ),
+          )}
+        </p>
+      ))}
+      {truncated && (
+        <button type="button" className="text-button" onClick={onExpand}>
+          Show more
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn } = useAuthActions();
@@ -222,7 +285,9 @@ export default function App() {
   const [contextPages, setContextPages] = useState<
     { title: string; text: string; url: string; collectedAt: number }[] | null
   >(null);
-
+  // Which Web context pages (by url) the reader has expanded past the
+  // initial preview cap — see `WEB_CONTEXT_PREVIEW_CHARS` below.
+  const [expandedContextPages, setExpandedContextPages] = useState<Set<string>>(new Set());
   const [reading, setReading] = useState(false),
     [proposal, setProposal] = useState<{
       query: string;
@@ -508,6 +573,7 @@ export default function App() {
   const runWebContext = async () => {
     await ensureSession();
     setContextPages(await webContext({ query: raw }));
+    setExpandedContextPages(new Set());
   };
   const runThread = async (post: ResultPost) => {
     await ensureSession();
@@ -1141,10 +1207,12 @@ export default function App() {
         (contextPages.length ? (
           <Modal title="Web context" close={() => setContextPages(null)}>
             {contextPages.map((p) => (
-              <div className="page-text" key={p.url}>
-                <strong>{p.title}</strong>
-                <p>{p.text}</p>
-              </div>
+              <WebContextPage
+                key={p.url}
+                page={p}
+                expanded={expandedContextPages.has(p.url)}
+                onExpand={() => setExpandedContextPages((prev) => new Set(prev).add(p.url))}
+              />
             ))}
           </Modal>
         ) : (
