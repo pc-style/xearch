@@ -26,8 +26,19 @@ export const IMPORTS_UNAVAILABLE = "Imports are not available on this site.";
  * session. Every surface that offers one of those actions to a non-operator
  * shows this exact copy, so the boundary reads the same everywhere instead
  * of one place explaining it and another silently failing.
+ *
+ * There is no email sign-in path to operator status any more (that flow
+ * lived only in the Import modal, and was removed): the operator build
+ * carries its own build-time token (src/operatorToken.ts) and is only ever
+ * reached on the operator site, which exe.dev's own login already
+ * restricts to VM-access accounts — see docs/production.md. This copy just
+ * points at where the action actually lives. Deliberately action-neutral
+ * ("this action", not "imports") — CodeRabbit #4090910239 caught that the
+ * previous "Imports run from the operator dashboard." was wrong on every
+ * non-import surface reusing it (web context, linked pages, "Help me
+ * search", cancel/dismiss), which don't import anything.
  */
-export const OPERATOR_SIGN_IN_NOTICE = "Sign in as an operator to use this action.";
+export const OPERATOR_SIGN_IN_NOTICE = "This action runs from the operator dashboard.";
 
 /** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {

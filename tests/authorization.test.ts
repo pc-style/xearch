@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
+import { isOperatorEmail } from "../convex/access";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -120,6 +121,49 @@ describe("the operator authorization boundary", () => {
     ).rejects.toThrow("Sign in as an operator to import.");
   });
 
+  it('admits every verified address on a domain listed as "@domain", and nothing else', async () => {
+    vi.stubEnv("OPERATOR_EMAILS", "@pcstyle.dev, someone@else.example");
+    const t = convexTest(schema, modules);
+
+    const onDomain = await insertUser(t, {
+      isAnonymous: false,
+      email: "Adam@PCstyle.dev",
+      verified: true,
+    });
+
+    const lookalike = await insertUser(t, {
+      isAnonymous: false,
+      email: "adam@notpcstyle.dev",
+      verified: true,
+    });
+
+    const subdomain = await insertUser(t, {
+      isAnonymous: false,
+      email: "adam@mail.pcstyle.dev",
+      verified: true,
+    });
+
+    const unverifiedOnDomain = await insertUser(t, {
+      isAnonymous: false,
+      email: "guest@pcstyle.dev",
+      verified: false,
+    });
+
+    const as = (id: string) => t.withIdentity({ subject: `${id}|s` });
+    expect(await as(onDomain).query(api.access.isOperator, {})).toBe(true);
+    expect(await as(lookalike).query(api.access.isOperator, {})).toBe(false);
+    expect(await as(subdomain).query(api.access.isOperator, {})).toBe(false);
+    expect(await as(unverifiedOnDomain).query(api.access.isOperator, {})).toBe(false);
+  });
+
+  it("does not let a bare domain entry match a malformed address", () => {
+    const entries = new Set(["@pcstyle.dev"]);
+    expect(isOperatorEmail("me@pcstyle.dev", entries)).toBe(true);
+    expect(isOperatorEmail("@pcstyle.dev", entries)).toBe(false);
+    expect(isOperatorEmail("pcstyle.dev", entries)).toBe(false);
+    expect(isOperatorEmail("me@", entries)).toBe(false);
+  });
+
   it("fails closed when OPERATOR_EMAILS is unset or empty, even for a verified allowlisted-looking email", async () => {
     vi.stubEnv("OPERATOR_EMAILS", "");
     const { operator } = await setup();
@@ -197,6 +241,138 @@ describe("the operator authorization boundary", () => {
     const feed = await guest.query(api.jobs.list, {});
     expect(feed.jobs.map((j) => j._id)).toContain(jobId);
     await expect(guest.query(api.jobs.receipts, { jobId })).resolves.toEqual([]);
+  });
+});
+
+/**
+ * The operator build's own token (src/operatorToken.ts, `OPERATOR_TOKEN` on
+ * the deployment) is a second, independent path into `requireOperator` —
+ * the primary one, since the operator site needs no email sign-in at all
+ * (adam's decision, 2026-09-24: being on the operator site, already
+ * restricted by exe.dev's own login, IS the operator proof). It must never
+ * weaken the allowlist path above: a caller with neither a matching token
+ * nor an allowlisted email is still refused, and an unset `OPERATOR_TOKEN`
+ * disables the token path entirely rather than falling back to some
+ * always-true default.
+ */
+describe("the operator token path", () => {
+  beforeEach(() => {
+    vi.stubEnv("X_MD_API_KEY", "test");
+    vi.stubEnv("RAW_CAPTURE_URL", "http://127.0.0.1:4319/captures");
+    vi.stubEnv("COLLECTOR_MODE", "receiver");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("allows an anonymous session that presents the matching token", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+
+    const { guest } = await setup();
+
+    const jobId = await guest.mutation(api.jobs.start, {
+      kind: "live",
+      input: "from:theo",
+      operatorToken: "correct-horse-battery-staple",
+    });
+
+    expect(jobId).toBeTruthy();
+  });
+
+  it("refuses a wrong token from an otherwise-unlisted caller", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "wrong-guess",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("refuses a missing token from an otherwise-unlisted caller", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, { kind: "live", input: "from:theo" }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("disables the token path entirely when OPERATOR_TOKEN is unset, even for a caller presenting one", async () => {
+    // No vi.stubEnv("OPERATOR_TOKEN", ...) here — it stays unset.
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "anything",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("still requires a real session even with a matching token", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const t = convexTest(schema, modules);
+    // No `t.withIdentity(...)`: an unauthenticated caller, not merely an
+    // anonymous one — `getAuthUserId` returns null either way, but this
+    // pins down that the token alone is not a substitute for any session.
+    await expect(
+      t.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "correct-horse-battery-staple",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
+
+  it("access.isOperator reports true for a matching token from an anonymous session", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "correct-horse-battery-staple");
+    const { guest } = await setup();
+    expect(
+      await guest.query(api.access.isOperator, { operatorToken: "correct-horse-battery-staple" }),
+    ).toBe(true);
+    expect(await guest.query(api.access.isOperator, { operatorToken: "wrong" })).toBe(false);
+  });
+
+  // CodeRabbit #4090910221: OPERATOR_TOKEN_PREVIOUS exists so a rotation
+  // (new token baked into a not-yet-republished bundle, or an
+  // already-republished bundle against a not-yet-updated deployment) has no
+  // gap where the operator site's token path stops working.
+  it("also accepts OPERATOR_TOKEN_PREVIOUS, so a not-yet-republished bundle's old token still works during a rotation", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "new-token");
+    vi.stubEnv("OPERATOR_TOKEN_PREVIOUS", "old-token");
+
+    const { guest } = await setup();
+
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "new-token",
+      }),
+    ).resolves.toBeTruthy();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:otherperson",
+        operatorToken: "old-token",
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("does not accept OPERATOR_TOKEN_PREVIOUS's value when it is unset, even if a caller guesses it", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "new-token");
+    // No OPERATOR_TOKEN_PREVIOUS stubbed here — it stays unset.
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "old-token",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
   });
 });
 

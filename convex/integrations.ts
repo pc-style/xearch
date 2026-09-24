@@ -130,10 +130,11 @@ export const operator = query({
 export const reserve = internalMutation({
   args: {
     service: v.union(v.literal("firecrawl"), v.literal("openai"), v.literal("xmd")),
+    operatorToken: v.optional(v.string()),
   },
   returns: v.null(),
-  handler: async (ctx) => {
-    await requireOperator(ctx);
+  handler: async (ctx, { operatorToken }) => {
+    await requireOperator(ctx, operatorToken);
 
     return null;
   },
@@ -178,7 +179,7 @@ export const storePage = internalMutation({
 });
 
 export const readLink = action({
-  args: { url: v.string() },
+  args: { url: v.string(), operatorToken: v.optional(v.string()) },
   returns: readResultValidator,
   handler: async (
     ctx,
@@ -192,7 +193,7 @@ export const readLink = action({
     // Gated even on a cache hit (below): reading a linked page is one of the
     // provider-spending actions in the authorization-boundary decision, not
     // only the Firecrawl call it can lead to.
-    await requireOperator(ctx);
+    await requireOperator(ctx, args.operatorToken);
     const url = publicUrl(args.url);
     const cached = await ctx.runQuery(internal.integrations.page, { url });
 
@@ -208,6 +209,7 @@ export const readLink = action({
       throw new ConvexError("Add FIRECRAWL_API_KEY to enable linked-page reading.");
     await ctx.runMutation(internal.integrations.reserve, {
       service: "firecrawl",
+      operatorToken: args.operatorToken,
     });
 
     const response = await firecrawl.scrape(ctx, url, {
@@ -257,13 +259,13 @@ export const readLink = action({
 });
 
 export const webContext = action({
-  args: { query: v.string() },
+  args: { query: v.string(), operatorToken: v.optional(v.string()) },
   returns: v.array(readResultValidator),
-  handler: async (ctx, { query }) => {
+  handler: async (ctx, { query, operatorToken }) => {
     // Authorization before configuration: a non-operator must not be able
     // to learn whether Firecrawl is even configured on this deployment by
     // probing which error comes back.
-    await requireOperator(ctx);
+    await requireOperator(ctx, operatorToken);
 
     if (!query.trim() || query.length > 300)
       throw new ConvexError("Enter a search under 300 characters.");
@@ -272,6 +274,7 @@ export const webContext = action({
       throw new ConvexError("Connect Firecrawl to search the web around this topic.");
     await ctx.runMutation(internal.integrations.reserve, {
       service: "firecrawl",
+      operatorToken,
     });
 
     const response = await firecrawl.search(ctx, query, {
@@ -328,7 +331,7 @@ export const webContext = action({
 });
 
 export const account = action({
-  args: { handle: v.string() },
+  args: { handle: v.string(), operatorToken: v.optional(v.string()) },
   // Unprocessed passthrough of x.md's own profile JSON — this action does no
   // field-picking (contrast `readLink`/`webContext` above, which normalize
   // into a fixed shape), and nothing in this app currently reads its result,
@@ -338,7 +341,10 @@ export const account = action({
   // for the TypeScript `any` this codebase otherwise avoids.
   returns: v.union(v.null(), v.any()),
   handler: async (ctx, args) => {
-    await ctx.runMutation(internal.integrations.reserve, { service: "xmd" });
+    await ctx.runMutation(internal.integrations.reserve, {
+      service: "xmd",
+      operatorToken: args.operatorToken,
+    });
 
     const response = await new XmdClient(
       process.env.X_MD_API_KEY,
@@ -357,13 +363,13 @@ const interpreted = z.object({
 });
 
 export const interpret = action({
-  args: { raw: v.string() },
+  args: { raw: v.string(), operatorToken: v.optional(v.string()) },
   returns: v.object({ query: v.string(), explanation: v.string() }),
-  handler: async (ctx, { raw }) => {
+  handler: async (ctx, { raw, operatorToken }) => {
     // Authorization before configuration: a non-operator must not be able
     // to learn whether OpenAI is even configured on this deployment by
     // probing which error comes back.
-    await requireOperator(ctx);
+    await requireOperator(ctx, operatorToken);
 
     if (!raw.trim() || raw.length > 300)
       throw new ConvexError("Enter a search under 300 characters.");
@@ -372,7 +378,7 @@ export const interpret = action({
 
     if (!process.env.OPENAI_API_KEY)
       throw new ConvexError("Add OPENAI_API_KEY to enable query assistance.");
-    await ctx.runMutation(internal.integrations.reserve, { service: "openai" });
+    await ctx.runMutation(internal.integrations.reserve, { service: "openai", operatorToken });
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",

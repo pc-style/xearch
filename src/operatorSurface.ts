@@ -1,4 +1,5 @@
 import { lazy, type ComponentType } from "react";
+import { OPERATOR_BUILD } from "./operatorBuild";
 
 /**
  * The operator UI, and whether this bundle has it.
@@ -24,7 +25,7 @@ import { lazy, type ComponentType } from "react";
  * after every public build, because this property lives in the bundler's
  * output rather than in anything TypeScript checks.
  */
-export const OPERATOR_BUILD: boolean = true;
+export { OPERATOR_BUILD };
 
 export type DashboardProps = {
   ensureSession: () => Promise<void>;

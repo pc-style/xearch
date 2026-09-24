@@ -7,6 +7,7 @@ import { internal } from "./_generated/api";
 import { kindValidator, throttleProviderValidator } from "./schema";
 import schema from "./schema";
 import { user, requireOperator } from "./access";
+import { activeThrottleUntil, loadProviderLimit } from "./limits";
 import { handle, statusUrl } from "./lib/xmd";
 import { canonicalQuery } from "./lib/search";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
@@ -134,6 +135,20 @@ function canonicalLiveQuery(raw: string): string {
  */
 const REPEAT_WINDOW_MS = 60_000;
 
+/**
+ * `HH:MM` in UTC, for `retry`'s "Retry queued for …" phase text. Explicit
+ * UTC rather than the server's default locale/timezone (which this backend
+ * has no control over and should not depend on) — the dashboard's primary
+ * "Retrying automatically at …" display (src/library/AccountRow.tsx)
+ * already formats `readyAt` in the viewer's own local time; this is only
+ * the supplementary "Last phase" text in a run's expanded history.
+ */
+function utcHHMM(at: number): string {
+  const date = new Date(at);
+
+  return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")} UTC`;
+}
+
 export const start = mutation({
   args: {
     kind: kindValidator,
@@ -141,16 +156,18 @@ export const start = mutation({
     since: v.optional(v.string()),
     refresh: v.optional(v.boolean()),
     previous: v.optional(v.id("jobs")),
+    operatorToken: v.optional(v.string()),
   },
   returns: v.id("jobs"),
   handler: async (ctx, args) => {
     // Starting any kind of import spends provider allowance (x.md, and via
     // the raw-capture handoff). Per the authorization-boundary decision,
-    // this requires a signed-in OPERATOR (a verified email on
-    // OPERATOR_EMAILS), not merely a signed-in session — an anonymous guest
-    // is refused here. `owner` below is still written purely as an audit
-    // trail of who started the run, not a visibility boundary.
-    const owner = await requireOperator(ctx);
+    // this requires a signed-in OPERATOR (the operator build's own token, or
+    // a verified email on OPERATOR_EMAILS as a fallback — convex/access.ts),
+    // not merely a signed-in session — an anonymous guest with neither is
+    // refused here. `owner` below is still written purely as an audit trail
+    // of who started the run, not a visibility boundary.
+    const owner = await requireOperator(ctx, args.operatorToken);
     const outbound = process.env.COLLECTOR_MODE === "outbound";
 
     const worker = outbound
@@ -347,10 +364,10 @@ async function sharedJob(
 }
 
 export const cancel = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId, requireOperator);
+  handler: async (ctx, { jobId, operatorToken }) => {
+    const job = await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
 
     if (!["queued", "running"].includes(job.status)) return null;
     await ctx.db.patch(jobId, {
@@ -364,10 +381,10 @@ export const cancel = mutation({
 });
 
 export const retry = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId, requireOperator);
+  handler: async (ctx, { jobId, operatorToken }) => {
+    const job = await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
 
     if (!["failed", "partial", "cancelled"].includes(job.status))
       throw new ConvexError("Only stopped or failed jobs can be retried.");
@@ -390,15 +407,35 @@ export const retry = mutation({
       if (active) throw new ConvexError("This indexing job is already active.");
     }
 
+    // Every job kind fetches through x.md (convex/lib/xmd.ts), so that is
+    // the one provider whose throttle state a manual retry needs to check —
+    // "receiver"/"search" are about this app's own services, not the
+    // provider a job's own calls go through. Reusing convex/limits.ts's
+    // `loadProviderLimit` reads the exact same fact the dashboard's
+    // "Provider limits" panel already shows, instead of a second read that
+    // could disagree with it. This respects a provider-reported limit, the
+    // one kind AGENTS.md's "Rate limiting" section allows — it adds no
+    // self-imposed cap.
+    const now = Date.now();
+    const throttledUntil = activeThrottleUntil(await loadProviderLimit(ctx, "xmd"), now);
+    const readyAt = throttledUntil ?? 0;
+
     await ctx.db.patch(jobId, {
       status: "queued",
-      readyAt: 0,
+      readyAt,
       error: undefined,
       retryable: undefined,
-      phase: "Retry queued",
-      updatedAt: Date.now(),
+      phase:
+        throttledUntil === undefined
+          ? "Retry queued"
+          : `Retry queued for ${utcHHMM(throttledUntil)}`,
+      updatedAt: now,
     });
-    await ctx.scheduler.runAfter(0, internal.importer.run, { jobId });
+    // Scheduled for the same instant `readyAt` allows a claim (convex/jobs.ts
+    // `claim` already refuses one before then): re-hitting x.md before the
+    // provider's own reset/retry-after time would just fail the same way
+    // again, so there is nothing to gain from firing this any sooner.
+    await ctx.scheduler.runAfter(Math.max(0, readyAt - now), internal.importer.run, { jobId });
 
     return null;
   },
@@ -413,10 +450,10 @@ export const retry = mutation({
 // row back — so it does not violate to-do.md's "do not delete records just
 // to hide duplicates".
 export const dismiss = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
-    const job = await sharedJob(ctx, jobId, requireOperator);
+  handler: async (ctx, { jobId, operatorToken }) => {
+    const job = await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
 
     // Deliberately refuses queued/running work: hiding a run that is still
     // spending provider allowance would make it unstoppable from the UI.
@@ -444,10 +481,10 @@ export const dismiss = mutation({
 const DISMISS_INPUT_SCAN = 2_000;
 
 export const dismissInput = mutation({
-  args: { kind: kindValidator, input: v.string() },
+  args: { kind: kindValidator, input: v.string(), operatorToken: v.optional(v.string()) },
   returns: v.number(),
-  handler: async (ctx, { kind, input }) => {
-    await requireOperator(ctx);
+  handler: async (ctx, { kind, input, operatorToken }) => {
+    await requireOperator(ctx, operatorToken);
 
     let dismissed = 0;
     let scanned = 0;
@@ -476,11 +513,11 @@ export const dismissInput = mutation({
 });
 
 export const restore = mutation({
-  args: { jobId: v.id("jobs") },
+  args: { jobId: v.id("jobs"), operatorToken: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { jobId }) => {
+  handler: async (ctx, { jobId, operatorToken }) => {
     // Authorization is the whole check here; the row itself is not needed.
-    await sharedJob(ctx, jobId, requireOperator);
+    await sharedJob(ctx, jobId, (c) => requireOperator(c, operatorToken));
     await ctx.db.patch(jobId, { dismissedAt: undefined });
 
     return null;
@@ -495,9 +532,11 @@ export const restore = mutation({
 //
 // This is NOT an application quota and must never become one (AGENTS.md:
 // no self-imposed rate limits, quotas or budgets — an agent-added cap
-// previously caused a production outage). Nothing reads these rows to decide
-// whether to make a request; they are a record of what the provider said,
-// shown to a person. `remaining`/`resetAt`/`retryAfterMs` are written ONLY
+// previously caused a production outage). They are a record of what the
+// provider said, shown to a person — and, since `retry` above reads them
+// through `limits.activeThrottleUntil`, also read to decide WHEN to make a
+// request again, never whether to make one at all or to refuse one on our
+// own reasoning. `remaining`/`resetAt`/`retryAfterMs` are written ONLY
 // when the provider actually supplied them — never estimated or defaulted.
 export const recordThrottle = internalMutation({
   args: {

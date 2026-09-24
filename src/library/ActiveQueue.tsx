@@ -7,6 +7,7 @@ import { acquisitionStatusLabel } from "../jobText";
 import { describeError } from "../errors";
 import { acquisitionStatusTone, formatRelative, isStalledRun } from "./format";
 import { Badge } from "./format.tsx";
+import { operatorArgs } from "../operatorToken";
 
 /**
  * The compact "what's downloading right now" strip. Built only from
@@ -72,7 +73,7 @@ function QueueRow({ row }: { row: AccountLibraryRow }) {
     setError("");
 
     try {
-      await cancel({ jobId });
+      await cancel({ jobId, ...operatorArgs() });
     } catch (e) {
       setError(describeError(e));
     }

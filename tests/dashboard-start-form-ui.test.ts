@@ -185,7 +185,7 @@ describe("Dashboard's 'Start an import' form (src/Dashboard.tsx)", () => {
 
     expect(submit).not.toBeNull();
     expect(submit!.disabled).toBe(true);
-    expect(html).toContain("Sign in as an operator");
+    expect(html).toContain("This action runs from the operator dashboard.");
     unmount();
   });
 
@@ -196,7 +196,7 @@ describe("Dashboard's 'Start an import' form (src/Dashboard.tsx)", () => {
 
     expect(submit).not.toBeNull();
     expect(submit!.disabled).toBe(false);
-    expect(html).not.toContain("Sign in as an operator");
+    expect(html).not.toContain("This action runs from the operator dashboard.");
     unmount();
   });
 });

@@ -16,8 +16,26 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="${XEARCH_HOSTING_ROOT:-$HOME/xearch-data/hosting}"
 CONVEX_URL="${XEARCH_PROD_CONVEX_URL:-https://utmost-kudu-321.convex.cloud}"
 CONVEX_SITE_URL="${XEARCH_PROD_CONVEX_SITE_URL:-https://utmost-kudu-321.convex.site}"
+OPERATOR_ENV_FILE="${XEARCH_OPERATOR_ENV_FILE:-$HOME/xearch-data/operator.env}"
 
 cd "$REPO"
+
+# The build-time token that lets the operator build skip email sign-in
+# entirely (src/operatorToken.ts, convex/access.ts `requireOperator`): the
+# operator site is already restricted to exe.dev accounts with VM access, so
+# being on it is the operator proof. Sourced the same way the indexer unit
+# reads publication.env (deploy/systemd/xearch-search-indexer.service) — a
+# plain KEY=VALUE file, never committed, never echoed. Its absence is not
+# fatal: the build falls back to the verified-email allowlist, same as
+# before this token existed.
+if [ -f "$OPERATOR_ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$OPERATOR_ENV_FILE"
+  set +a
+else
+  echo "deploy-operator-site: no $OPERATOR_ENV_FILE — building without an operator token; the email allowlist will be the only way in." >&2
+fi
 
 # A wrong or unreachable endpoint publishes an operator site that loads and
 # then cannot talk to anything, which looks like a backend outage rather than
@@ -43,6 +61,7 @@ flock 9
 VITE_XEARCH_OPERATOR=1 \
 VITE_CONVEX_URL="$CONVEX_URL" \
 VITE_CONVEX_SITE_URL="$CONVEX_SITE_URL" \
+VITE_OPERATOR_TOKEN="${VITE_OPERATOR_TOKEN:-}" \
   bun run build:operator
 
 grep -rqF "Account library" dist-operator/assets || {

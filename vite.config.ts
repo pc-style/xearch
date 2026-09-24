@@ -9,6 +9,21 @@ import react from "@vitejs/plugin-react";
 // See src/operatorSurface.ts.
 const operator = process.env.VITE_XEARCH_OPERATOR === "1";
 
+// Matches a relative specifier for `name` regardless of how many `../`
+// segments got it there — `./operatorToken` from a file in `src/`, but also
+// `../operatorToken` from `src/library/AccountRow.tsx` (CodeRabbit
+// #4090910250: the original `/^\.\/name$/` only ever matched the first, so a
+// deeper importer would have pulled in the real, un-swapped module). Each
+// `(\.\.?\/)` group matches one `./` or `../` path segment; `+` allows any
+// depth. Still anchored start-to-end, so it can't partially match something
+// like `./operatorTokenFoo`.
+// Exported so tests/vite-config.test.ts can assert its matching behavior
+// directly — vite.config.ts itself isn't imported by the app, so this is
+// the only way to unit-test the regex without a full build.
+export function relativeModule(name: string): RegExp {
+  return new RegExp(`^(\\.\\.?/)+${name}$`);
+}
+
 export default defineConfig({
   plugins: [
     react({
@@ -20,8 +35,16 @@ export default defineConfig({
       ? []
       : [
           {
-            find: /^\.\/operatorSurface$/,
+            find: relativeModule("operatorSurface"),
             replacement: fileURLToPath(new URL("./src/operatorSurface.public.ts", import.meta.url)),
+          },
+          {
+            find: relativeModule("operatorBuild"),
+            replacement: fileURLToPath(new URL("./src/operatorBuild.public.ts", import.meta.url)),
+          },
+          {
+            find: relativeModule("operatorToken"),
+            replacement: fileURLToPath(new URL("./src/operatorToken.public.ts", import.meta.url)),
           },
         ],
   },

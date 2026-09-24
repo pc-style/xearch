@@ -399,7 +399,12 @@ export function ResultsSection({
                   : !configured.search
                     ? "Search isn't configured on this site"
                     : result?.status === "complete"
-                      ? `${result.rows.length} ${result.rows.length === 1 ? "post" : "posts"} on this page`
+                      ? // `visible.length`, not `result.rows.length`: `result` is only the
+                        // latest backend page, so after "Load more" appends onto `rows`
+                        // (App.tsx `mergeSearchPages`), `result.rows.length` freezes at
+                        // one page's worth while more are on screen. `visible` is what's
+                        // actually rendered below (bookmarks or the merged search rows).
+                        `${visible.length} ${visible.length === 1 ? "post" : "posts"} loaded`
                       : result?.status === "failed"
                         ? "See what went wrong below"
                         : "Finding matching posts…"}

@@ -27,6 +27,19 @@ const FORBIDDEN = [
   "Dependency health",
   "Provider limits",
   "Account library",
+  // The operator build's own token (src/operatorToken.ts) — neither the env
+  // var name nor the arg name it's threaded through as should ever reach
+  // the public bundle, which never had one.
+  "VITE_OPERATOR_TOKEN",
+  "operatorToken",
+  // CodeRabbit #4090910250: confirms src/library/AccountRow.tsx and
+  // ActiveQueue.tsx themselves — not just the token they both import via
+  // `../operatorToken` — never reach the public bundle either. They're only
+  // ever pulled in through Dashboard/Library (excluded by the
+  // operatorSurface swap), so this is a second, independent guard on that,
+  // not the primary mechanism.
+  "Download failed. Expand history below for details.",
+  "Active queue",
 ];
 
 const files = [];

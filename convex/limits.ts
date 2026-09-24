@@ -1,6 +1,6 @@
 import { v, type Infer } from "convex/values";
 import { query } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { user } from "./access";
 import { throttleProviderValidator } from "./schema";
 
@@ -99,8 +99,14 @@ export const providerLimitValidator = v.union(
 
 export type ProviderLimit = Infer<typeof providerLimitValidator>;
 
-async function loadProviderLimit(
-  ctx: QueryCtx,
+// Exported so convex/jobs.ts `retry` can read the exact same fact the
+// dashboard's "Provider limits" panel shows, rather than a second
+// independent read of `providerThrottleEvents` that could drift from it.
+// Widened to `QueryCtx | MutationCtx` for that caller — this function only
+// ever reads (`ctx.db.query`), so a mutation's superset `db` satisfies it
+// the same way convex/access.ts's `requireOperator` accepts both.
+export async function loadProviderLimit(
+  ctx: QueryCtx | MutationCtx,
   provider: (typeof PROVIDERS)[number],
 ): Promise<ProviderLimit> {
   const recent = await ctx.db
@@ -158,3 +164,39 @@ export const all = query({
     return out;
   },
 });
+
+/**
+ * When a currently-active throttle says a retry should wait, or `undefined`
+ * when there is nothing to wait for. Used by convex/jobs.ts `retry` to
+ * queue a job for when the provider itself said to come back, instead of
+ * re-hitting it immediately and failing the exact same way — this reads a
+ * fact the provider reported, it does not invent a limit of our own
+ * (AGENTS.md "Rate limiting").
+ *
+ * `resetAt` (the allowance window's own reset) and `nextRetryAt` (derived
+ * from the provider's `retryAfterMs`) mean different things and are not
+ * always both live at once (CodeRabbit #4091232187, caught against the
+ * exact case that motivated this: x.md can report `remaining: 20` — plenty
+ * of allowance left — alongside a `resetAt` far in the future for the
+ * counting window, plus a much SHORTER `retryAfterMs` cooldown from
+ * whatever specifically got refused). Treating `resetAt` as a blocking
+ * deadline while allowance remains would wait out an entire window for no
+ * reason, so it only counts once `remaining` is reported as exhausted
+ * (`kind: "known", value <= 0`) — never merely "unknown", which is not the
+ * same claim as "zero" anywhere else in this app. `nextRetryAt` always
+ * counts when present, regardless of `remaining`: it is the provider's own
+ * explicit "come back at" instant for the refused call, independent of how
+ * much allowance is left. When both qualify, wait for the later of the two
+ * — either alone does not mean the other has also passed.
+ */
+export function activeThrottleUntil(limit: ProviderLimit, now: number): number | undefined {
+  if (limit.kind !== "throttled") return undefined;
+
+  const allowanceExhausted = limit.remaining.kind === "known" && limit.remaining.value <= 0;
+
+  const candidates = [allowanceExhausted ? limit.resetAt : undefined, limit.nextRetryAt].filter(
+    (at): at is number => at !== undefined && at > now,
+  );
+
+  return candidates.length > 0 ? Math.max(...candidates) : undefined;
+}
