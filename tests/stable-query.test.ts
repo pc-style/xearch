@@ -6,7 +6,6 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import type { ConvexReactClientOptions } from "convex/react";
 import type { Value } from "convex/values";
 import { api } from "../convex/_generated/api";
-import type { FunctionReturnType } from "convex/server";
 import { useStableQuery } from "../src/library/stableQuery";
 
 /**
@@ -62,20 +61,25 @@ const client = new ConvexReactClient("https://stable-query-test.convex.cloud", {
   baseClient,
 } as ConvexReactClientOptions);
 
-type Seen = FunctionReturnType<typeof api.integrations.configured> | undefined;
-
-let seen: Seen;
-
 function Probe({ now }: { now: number }) {
-  seen = useStableQuery(api.integrations.configured, { now });
+  const result = useStableQuery(api.integrations.configured, { now });
 
-  return null;
+  // Rendered as text so the assertions read the DOM, never a module binding
+  // written during render.
+  return createElement("output", null, result === undefined ? "undefined" : JSON.stringify(result));
 }
 
 let root: Root | undefined;
+let host: HTMLElement | undefined;
+
+function seen(): unknown {
+  const text = host?.textContent ?? "undefined";
+
+  return text === "undefined" ? undefined : JSON.parse(text);
+}
 
 function render(now: number) {
-  const host = document.createElement("div");
+  host = document.createElement("div");
   root = createRoot(host);
   act(() => root?.render(createElement(ConvexProvider, { client }, createElement(Probe, { now }))));
 }
@@ -87,7 +91,6 @@ function update(now: number) {
 afterEach(() => {
   act(() => root?.unmount());
   responses.clear();
-  seen = undefined;
 });
 
 describe("useStableQuery", () => {
@@ -95,21 +98,21 @@ describe("useStableQuery", () => {
     const first: Value = { search: true };
     responses.set(JSON.stringify({ now: 1 }), first);
     render(1);
-    expect(seen).toEqual(first);
+    expect(seen()).toEqual(first);
 
     // The tick: no result for the new args yet. Stock useQuery says undefined.
     update(2);
-    expect(seen).toEqual(first);
+    expect(seen()).toEqual(first);
 
     // The next tick has a result waiting: the hook moves on to it.
     const second: Value = { search: false };
     responses.set(JSON.stringify({ now: 3 }), second);
     update(3);
-    expect(seen).toEqual(second);
+    expect(seen()).toEqual(second);
   });
 
   it("still reports undefined before anything has ever loaded", () => {
     render(1);
-    expect(seen).toBeUndefined();
+    expect(seen()).toBeUndefined();
   });
 });
