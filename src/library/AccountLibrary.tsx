@@ -2,7 +2,15 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { PublicationState } from "../../convex/lib/contracts";
+import { DOWNLOAD_COMPLETE_CAVEAT } from "../jobText";
 import AccountRow from "./AccountRow";
+
+// QA finding 5 (/tmp/issues-t3-dashboard-current.md #5): 49 account cards at
+// real data volume is a very long unpaginated wall. Slices the already-
+// fetched `rows` array client-side — `convex/library.ts rows` returns a
+// single bounded (non-cursor-paginated) page already, so there is no server
+// pagination to defer to here; see that file's own `truncated` comment.
+const PAGE_SIZE = 20;
 
 const STATUS_OPTIONS: { value: PublicationState | ""; label: string }[] = [
   { value: "", label: "All statuses" },
@@ -30,6 +38,7 @@ export default function AccountLibrary({
 }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<PublicationState | "">("");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const library = useQuery(
     api.library.rows,
@@ -38,6 +47,8 @@ export default function AccountLibrary({
 
   const rows = library?.rows;
   const filtersActive = search.trim().length > 0 || status !== "";
+  const visibleRows = rows?.slice(0, visibleCount);
+  const hasCompletedRun = rows?.some((row) => row.latestJob?.status === "complete") ?? false;
 
   return (
     <section id="account-library" className="library-section" aria-label="Account library">
@@ -55,20 +66,28 @@ export default function AccountLibrary({
           aria-label="Search accounts"
           placeholder="Search by handle or name"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            // A new search narrows which rows exist at all, so the previous
+            // "show more" progress no longer means anything — reset to the
+            // first page instead of a filtered list opening already-expanded
+            // past its own row count.
+            setVisibleCount(PAGE_SIZE);
+          }}
           disabled={!isAuthenticated}
         />
         <select
           aria-label="Filter by publication status"
           value={status}
-          onChange={(e) =>
+          onChange={(e) => {
             setStatus(
               // SAFETY: every <option> below comes from `STATUS_OPTIONS`, whose
               // `value`s are typed `PublicationState | ""`, so the <select>'s
               // string value is always one of them.
               e.target.value as PublicationState | "",
-            )
-          }
+            );
+            setVisibleCount(PAGE_SIZE);
+          }}
           disabled={!isAuthenticated}
         >
           {STATUS_OPTIONS.map((o) => (
@@ -104,9 +123,25 @@ export default function AccountLibrary({
               once, so the figures above report "not yet known" rather than a partial total.
             </p>
           )}
-          {rows.map((row) => (
+          {/* QA finding 5: every completed account used to repeat this exact
+              caveat in its own row — once per row, 49 times at real data
+              volume. It says the same thing regardless of which account it's
+              next to, so one section-level note above the list (shown only
+              when it's actually relevant to something in the list) replaces
+              all of those without losing the information. */}
+          {hasCompletedRun && <p className="library-muted">{DOWNLOAD_COMPLETE_CAVEAT}</p>}
+          {(visibleRows ?? rows).map((row) => (
             <AccountRow key={row.accountId} row={row} />
           ))}
+          {rows.length > visibleCount && (
+            <button
+              type="button"
+              className="text-button library-show-more"
+              onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+            >
+              Show more ({rows.length - visibleCount} more)
+            </button>
+          )}
         </div>
       )}
     </section>
