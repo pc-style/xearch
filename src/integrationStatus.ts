@@ -32,9 +32,13 @@ export const IMPORTS_UNAVAILABLE = "Imports are not available on this site.";
  * carries its own build-time token (src/operatorToken.ts) and is only ever
  * reached on the operator site, which exe.dev's own login already
  * restricts to VM-access accounts — see docs/production.md. This copy just
- * points at where the action actually lives.
+ * points at where the action actually lives. Deliberately action-neutral
+ * ("this action", not "imports") — CodeRabbit #4090910239 caught that the
+ * previous "Imports run from the operator dashboard." was wrong on every
+ * non-import surface reusing it (web context, linked pages, "Help me
+ * search", cancel/dismiss), which don't import anything.
  */
-export const OPERATOR_SIGN_IN_NOTICE = "Imports run from the operator dashboard.";
+export const OPERATOR_SIGN_IN_NOTICE = "This action runs from the operator dashboard.";
 
 /** Operator-only. The public build uses `IMPORTS_UNAVAILABLE` above. */
 export function indexingUnavailableMessage(config: IndexingStatus): string | undefined {

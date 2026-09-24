@@ -335,6 +335,45 @@ describe("the operator token path", () => {
     ).toBe(true);
     expect(await guest.query(api.access.isOperator, { operatorToken: "wrong" })).toBe(false);
   });
+
+  // CodeRabbit #4090910221: OPERATOR_TOKEN_PREVIOUS exists so a rotation
+  // (new token baked into a not-yet-republished bundle, or an
+  // already-republished bundle against a not-yet-updated deployment) has no
+  // gap where the operator site's token path stops working.
+  it("also accepts OPERATOR_TOKEN_PREVIOUS, so a not-yet-republished bundle's old token still works during a rotation", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "new-token");
+    vi.stubEnv("OPERATOR_TOKEN_PREVIOUS", "old-token");
+
+    const { guest } = await setup();
+
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "new-token",
+      }),
+    ).resolves.toBeTruthy();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:otherperson",
+        operatorToken: "old-token",
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("does not accept OPERATOR_TOKEN_PREVIOUS's value when it is unset, even if a caller guesses it", async () => {
+    vi.stubEnv("OPERATOR_TOKEN", "new-token");
+    // No OPERATOR_TOKEN_PREVIOUS stubbed here — it stays unset.
+    const { guest } = await setup();
+    await expect(
+      guest.mutation(api.jobs.start, {
+        kind: "live",
+        input: "from:theo",
+        operatorToken: "old-token",
+      }),
+    ).rejects.toThrow("Sign in as an operator to import.");
+  });
 });
 
 /**

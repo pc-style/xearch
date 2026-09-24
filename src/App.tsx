@@ -823,12 +823,31 @@ export default function App() {
     setSearchRequest(request);
     setView(ViewMode.Search);
     setProposal(null);
-    pushLocation({
-      raw: trimmed,
-      sort: effectiveSort,
-      includeStats: statsForNerds,
-      view: ViewMode.Search,
-    });
+
+    // CodeRabbit #4090910231: the operator build's own pushLocation also
+    // pins `search: true`. Without it, clearing the query mid-session (e.g.
+    // the wordmark's `search("")`) could drop both `q=` and `search=1` from
+    // the URL at once, which the `dashboard` inversion above reads as "back
+    // to the default" and bounces to the dashboard instead of staying on the
+    // now-empty search view a person just asked to see. Left off the public
+    // build's own URLs entirely, where `search` means nothing and would
+    // just be clutter — hence two full object literals rather than one
+    // conditionally-spread field.
+    if (OPERATOR_BUILD)
+      pushLocation({
+        raw: trimmed,
+        sort: effectiveSort,
+        includeStats: statsForNerds,
+        view: ViewMode.Search,
+        search: true,
+      });
+    else
+      pushLocation({
+        raw: trimmed,
+        sort: effectiveSort,
+        includeStats: statsForNerds,
+        view: ViewMode.Search,
+      });
     startSearchTransition(() => {
       if (runSearch(request)) kickedAttempt.current = request.attemptId;
     });

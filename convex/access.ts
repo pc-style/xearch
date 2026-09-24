@@ -37,8 +37,9 @@ export async function user(ctx: QueryCtx | MutationCtx | ActionCtx) {
  *      exe.dev accounts with VM access (docs/production.md) — being on that
  *      site IS the operator proof, so this is the primary path and asks for
  *      no sign-in of any kind. Checked against `OPERATOR_TOKEN` on this
- *      deployment with a constant-time comparison so a wrong guess cannot be
- *      narrowed down by timing.
+ *      deployment (or `OPERATOR_TOKEN_PREVIOUS`, set only transiently during
+ *      a rotation — docs/production.md "To rotate it") with a constant-time
+ *      comparison so a wrong guess cannot be narrowed down by timing.
  *   2. A fallback allowlist: the existing Email OTP provider (convex/auth.ts,
  *      src/auth/EmailSignIn.tsx) already gives every caller a verified email
  *      once they sign in with a code. This path accepts exactly the
@@ -143,10 +144,24 @@ export async function requireOperator(
   // `OPERATOR_TOKEN` is unset on this deployment — an unset env var must
   // never make this branch trivially satisfiable by an empty/undefined
   // token on either side.
+  //
+  // `OPERATOR_TOKEN_PREVIOUS` (optional) exists only to make rotation
+  // gapless (CodeRabbit #4090910221): the deployed operator bundle has ONE
+  // token baked in at build time, and this deployment can only ever hold
+  // one `OPERATOR_TOKEN` value, so publishing a new build and updating the
+  // deployment are two separate, non-atomic steps — whichever happens
+  // second, the live bundle's still-old (or already-new) token stops
+  // matching for that gap. Setting the OLD value here during a rotation
+  // lets both the not-yet-republished and freshly-republished bundle work
+  // at once; see docs/production.md "To rotate it" for the exact sequence.
   const configuredToken = process.env.OPERATOR_TOKEN;
+  const previousToken = process.env.OPERATOR_TOKEN_PREVIOUS;
 
-  if (configuredToken && operatorToken && timingSafeEqual(operatorToken, configuredToken))
-    return id;
+  if (operatorToken) {
+    if (configuredToken && timingSafeEqual(operatorToken, configuredToken)) return id;
+
+    if (previousToken && timingSafeEqual(operatorToken, previousToken)) return id;
+  }
 
   // Path 2: the verified-email allowlist, unchanged from before the token
   // existed. `emailVerificationTime` is only ever set once convex/auth.ts's

@@ -66,4 +66,23 @@ describe("previewPatch", () => {
     const withoutStats = previewPatch(withStats, { includeStats: false });
     expect(withoutStats).toBe("/?q=theo&sort=newest");
   });
+
+  // CodeRabbit #4090910231: src/App.tsx's `search()` (the wordmark's
+  // `search("")` included) now always sets `search: true` alongside
+  // `raw`, precisely so clearing the query never lands on a bare "/" —
+  // which the operator build's `dashboard = !route.search && !route.raw`
+  // inversion (src/App.tsx) would otherwise read as "back to the
+  // dashboard" instead of "empty search view", bouncing a mid-session
+  // clear-the-query action to a different page entirely.
+  it("clearing raw without pinning search would read as the operator build's default route; search:true keeps it on search", () => {
+    const clearedAlone = previewPatch("https://xearch.invalid/?q=hello", { raw: "" });
+    expect(clearedAlone).toBe("/");
+
+    const clearedAndPinned = previewPatch("https://xearch.invalid/?q=hello", {
+      raw: "",
+      search: true,
+    });
+
+    expect(clearedAndPinned).toBe("/?search=1");
+  });
 });
