@@ -500,3 +500,100 @@ describe("library.history", () => {
     expect(runs.map((r) => r.jobId)).toEqual([job]);
   });
 });
+
+// /tmp/issues.md item 1: the account library's `latestJob` is always the
+// account's "bulk" base import (convex/lib/accounts.ts ACCOUNT_JOB_KIND) —
+// a deep-history backfill window job (`kind: "live"`, `origin: "history"`,
+// `historyFor: accountId`) is never that job, so `latestJob` alone can never
+// report a backfill as active. `historyJob` is the separate field this fix
+// adds so a caller (src/library/ActiveQueue.tsx, src/library/AccountRow.tsx)
+// can see it.
+describe("library.rows historyJob", () => {
+  it("surfaces the account's most recent deep-history backfill window job, separate from its base-import latestJob", async () => {
+    const { t, alice, a } = await setup();
+    const theo = await insertAccount(t, { handle: "theo", userId: "2002", name: "Theo" });
+
+    await insertJob(t, alice, {
+      input: "theo",
+      expectedUserId: "2002",
+      status: "complete",
+      updatedAt: 1_000,
+    });
+
+    const windowJob = await t.run((ctx) =>
+      ctx.db.insert("jobs", {
+        owner: alice,
+        kind: "live",
+        input: "from:theo since:2025-11-01 until:2025-12-01",
+        since: "2025-11-01",
+        until: "2025-12-01",
+        origin: "history",
+        historyFor: theo,
+        refresh: false,
+        status: "running",
+        count: 0,
+        attempt: 1,
+        warnings: [],
+        postsReceived: 0,
+        updatedAt: 2_000,
+      }),
+    );
+
+    const { rows } = await a.query(api.library.rows, {});
+    const row = rows.find((r) => r.accountId === theo);
+    expect(row?.latestJob?.status).toBe("complete");
+    expect(row?.historyJob).toEqual({
+      jobId: windowJob,
+      status: "running",
+      phase: undefined,
+      updatedAt: 2_000,
+      postsReceived: 0,
+      since: "2025-11-01",
+      until: "2025-12-01",
+      retryable: undefined,
+    });
+  });
+
+  it("leaves historyJob absent for an account that has never had a deep-history backfill", async () => {
+    const { t, alice, a } = await setup();
+    await insertAccount(t, { handle: "adam", userId: "1001" });
+    await insertJob(t, alice, { input: "adam", expectedUserId: "1001", status: "complete" });
+
+    const { rows } = await a.query(api.library.rows, {});
+    expect(rows[0]?.historyJob).toBeUndefined();
+  });
+
+  it("picks the most recently created window job when a backfill has already walked through several", async () => {
+    const { t, alice, a } = await setup();
+    const theo = await insertAccount(t, { handle: "theo", userId: "2002", name: "Theo" });
+    await insertJob(t, alice, { input: "theo", expectedUserId: "2002", status: "complete" });
+
+    const insertWindow = (since: string, until: string, status: "complete" | "running") =>
+      t.run((ctx) =>
+        ctx.db.insert("jobs", {
+          owner: alice,
+          kind: "live",
+          input: `from:theo since:${since} until:${until}`,
+          since,
+          until,
+          origin: "history",
+          historyFor: theo,
+          refresh: false,
+          status,
+          count: 0,
+          attempt: 1,
+          warnings: [],
+          postsReceived: 0,
+          updatedAt: Date.now(),
+        }),
+      );
+
+    await insertWindow("2025-10-01", "2025-11-01", "complete");
+    const current = await insertWindow("2025-09-01", "2025-10-01", "running");
+
+    const { rows } = await a.query(api.library.rows, {});
+    const row = rows.find((r) => r.accountId === theo);
+    expect(row?.historyJob?.jobId).toBe(current);
+    expect(row?.historyJob?.status).toBe("running");
+  });
+});

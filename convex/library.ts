@@ -14,6 +14,7 @@ import {
   allAccountJobs,
   currentPublication,
   jobsForAccount,
+  latestHistoryWindowJob,
   resolveJobAccount,
 } from "./lib/accounts";
 
@@ -161,12 +162,22 @@ export const rows = query({
       ),
     );
 
+    // Same concurrency shape as the publications/backfills lookups above:
+    // one indexed `by_history_for` read per candidate account, issued
+    // together. Most accounts have never needed a backfill window, so
+    // `null` is the common case — see `latestHistoryWindowJob`'s own
+    // comment for why the newest by creation time is also the current one.
+    const historyJobs = await Promise.all(
+      candidates.map(([accountId]) => latestHistoryWindowJob(ctx.db, accountId)),
+    );
+
     const out: AccountLibraryRow[] = [];
 
     for (let i = 0; i < candidates.length; i++) {
       const [accountId, { account, jobs }] = candidates[i];
       const publication = publications[i];
       const backfill = backfills[i];
+      const historyJob = historyJobs[i];
 
       // No publication row yet means no publication update has ever arrived
       // for this account; docs/publication-contract.md collapses "downloaded"
@@ -219,6 +230,18 @@ export const rows = query({
           discoveredFrom: latestJob.discoveredFrom,
         },
         nextAction: latestJob ? nextActionFor(latestJob) : { kind: "none" },
+        historyJob: historyJob
+          ? {
+              jobId: historyJob._id,
+              status: historyJob.status,
+              phase: historyJob.phase,
+              updatedAt: historyJob.updatedAt,
+              postsReceived: historyJob.postsReceived,
+              since: historyJob.since,
+              until: historyJob.until,
+              retryable: historyJob.retryable,
+            }
+          : undefined,
         backfill: backfill
           ? {
               status: backfill.status,

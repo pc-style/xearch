@@ -1,11 +1,18 @@
-import { useConvexAuth, useConvexConnectionState } from "convex/react";
+import { useConvexAuth, useConvexConnectionState, useMutation } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import type { Timeline, TimelineEntry, WaitReason } from "../../convex/queue";
 import { queueTimelineQuery } from "./queueApi";
 import { useDashboardClock } from "./clock";
 import { useStableQuery } from "./stableQuery";
 import { useLocation } from "../locationStore";
 import { operatorArgs } from "../operatorToken";
-import { acquisitionStatusLabel } from "../jobText";
+import { useTask } from "../errors";
+import {
+  acquisitionStatusLabel,
+  conversationLabel,
+  exactClockTime,
+  historyWindowRange,
+} from "../jobText";
 import { acquisitionStatusTone } from "./format";
 import { Badge } from "./format.tsx";
 import "../dashboard.css";
@@ -19,17 +26,26 @@ import "../dashboard.css";
  * scripts/check-public-bundle.mjs's "Queue timeline" marker below) never
  * reaches the public bundle.
  */
-function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
+const formatClock = exactClockTime;
 
-/** What a non-account job (no resolvable `accounts` row) is labelled as. */
+/** What a non-account job (no resolvable `accounts` row) is labelled as.
+ * `entry.account` resolving is the common case for every kind that names a
+ * real account (including a deep-history backfill window — convex/lib/
+ * accounts.ts `resolveJobAccount` resolves those through their own
+ * `historyFor` field), so this is only reached for a job with no tracked
+ * account: a free-text live search, or a single post/conversation. */
 function fallbackLabel(entry: TimelineEntry): string {
   switch (entry.kind) {
     case "bulk":
       return `@${entry.input} history`;
     case "post":
-      return "Post / conversation";
+      // /tmp/issues.md item 4: several failed conversation jobs otherwise
+      // collapse to the exact same bare "Post / conversation" label here,
+      // even after src/JobRow.tsx's "Other imports" feed already learned to
+      // say "Conversation on @handle's post" — this reuses the SAME helper
+      // (src/jobText.ts `conversationLabel`, handle + a short post-id
+      // fragment) so the two surfaces never drift.
+      return conversationLabel(entry.input);
     case "live":
       return `Live search: ${entry.input}`;
     case "profile":
@@ -67,11 +83,19 @@ function waitReasonText(entry: TimelineEntry): string {
 
 /** "starts ≈ HH:MM · download done ≈ HH:MM", or the same estimate framed as
  * "if retried now" for a stopped job nothing is actually scheduled to act
- * on — the ETA is only true if a person clicks Retry this instant. */
+ * on — the ETA is only true if a person clicks Retry this instant. A
+ * deep-history backfill window job (`origin: "history"`) can never actually
+ * be retried this way (convex/jobs.ts `retry` rejects it outright: "not
+ * retried on its own", since retrying it in place would double-count into
+ * its backfill's `postsFound`) — framing its estimate as "if retried now"
+ * would advertise a control this page doesn't offer for it (see `retryable`
+ * below, CodeRabbit). */
 function etaText(entry: TimelineEntry): string {
   const range = `starts ≈ ${formatClock(entry.estimate.start)} · download done ≈ ${formatClock(entry.estimate.finish)}`;
 
-  return entry.waitReason.kind === "needsRetry" ? `if retried now: ${range}` : range;
+  if (entry.waitReason.kind !== "needsRetry") return range;
+
+  return entry.origin === "history" ? "not retried on its own" : `if retried now: ${range}`;
 }
 
 type ThrottledEntry = TimelineEntry & { waitReason: Extract<WaitReason, { kind: "throttled" }> };
@@ -120,6 +144,19 @@ function QueueIdentity({ entry }: { entry: TimelineEntry }) {
 
   const initial = (handle ?? fallbackLabel(entry)).slice(0, 1).toUpperCase();
 
+  // /tmp/issues.md item 2: a deep-history backfill window job now resolves
+  // to its real account (convex/lib/accounts.ts `resolveJobAccount` reads
+  // `historyFor`), so it renders under that account's own name/handle same
+  // as its base import — but "@theo" alone doesn't say WHICH run this is.
+  // This is the same "older history YYYY-MM → YYYY-MM" wording the account
+  // library and the "Other imports" feed already use for the same job kind
+  // (src/jobText.ts `historyWindowRange`), so it reads as one consistent
+  // fact across every surface instead of a page-specific rewording.
+  const windowRange =
+    entry.origin === "history" && entry.since !== undefined && entry.until !== undefined
+      ? historyWindowRange(entry.since, entry.until)
+      : undefined;
+
   return (
     <div className="library-identity">
       {entry.account?.avatar ? (
@@ -132,18 +169,48 @@ function QueueIdentity({ entry }: { entry: TimelineEntry }) {
       <div className="library-identity-text">
         <h3>{entry.account?.name ?? fallbackLabel(entry)}</h3>
         {handle !== undefined && <span>@{handle}</span>}
+        {windowRange && <span className="library-muted">{windowRange}</span>}
       </div>
     </div>
   );
 }
 
+// /tmp/issues.md item 3: the timeline told a retryable job "if retried now:
+// starts ≈ …" with nothing on the page that could actually retry it or take
+// a person to the matching row elsewhere — the only links on the whole page
+// were "Xearch home" and "Back to dashboard". `onRetry` calls the exact same
+// `api.jobs.retry` mutation src/library/AccountRow.tsx and src/JobRow.tsx
+// already use (same args shape, same `useTask` busy/error pattern); a
+// history-window job's retry is rejected server-side with its own honest
+// reason (convex/jobs.ts `retry`: "not retried on its own"), which is why
+// `retryable` below never offers the button for one in the first place.
+// `onShowInDashboard` sets a plain `#account-<id>` hash; the scroll itself
+// is done by src/library/AccountRow.tsx's own mount-time ref (CodeRabbit:
+// the browser's native hash-scroll fires before that row exists — App.tsx
+// mounts QueueTimeline and Dashboard from separate branches — and never
+// retries once it mounts, so this can't rely on that native behavior).
 function QueueTimelineRow({
   entry,
   showIdentity,
+  onRetry,
+  onShowInDashboard,
 }: {
   entry: TimelineEntry;
   showIdentity: boolean;
+  onRetry: (jobId: TimelineEntry["jobId"]) => Promise<void>;
+  onShowInDashboard: (accountId: string) => void;
 }) {
+  const { busy, message, run } = useTask();
+  // Never true for a history-window job — see `etaText`'s own comment: the
+  // server rejects retrying one outright, so no Retry button is offered for
+  // it here either.
+  const retryable = entry.waitReason.kind === "needsRetry" && entry.origin !== "history";
+  // A local const, not `entry.account` inline: TypeScript narrows a
+  // property access away by the time a closure below (the button's
+  // `onClick`) reads it, so this is what lets that closure see it as
+  // defined without a non-null assertion.
+  const account = entry.account;
+
   return (
     <div className={`queue-timeline-row${isThrottled(entry) ? " is-throttled" : ""}`}>
       {showIdentity && <QueueIdentity entry={entry} />}
@@ -158,6 +225,13 @@ function QueueTimelineRow({
         </span>
         <span>{waitReasonText(entry)}</span>
         <span className="library-muted">{etaText(entry)}</span>
+        {/* Only for "post" kind, matching src/JobRow.tsx's own choice: every
+            other kind's identity (a handle, a search string) is already
+            distinct without it, and several failed conversations otherwise
+            share the same rounded age with nothing else to tell them apart. */}
+        {entry.kind === "post" && (
+          <span className="library-muted">started {formatClock(entry.createdAt)}</span>
+        )}
         {isThrottled(entry) && (
           // The shaded "throttle window" band: a full-width strip on every
           // row this observed x.md throttle is currently holding back, with
@@ -171,12 +245,41 @@ function QueueTimelineRow({
             {entry.error}
           </span>
         )}
+        {retryable && (
+          <div className="queue-timeline-row-actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run(() => onRetry(entry.jobId))}
+            >
+              {busy ? "Retrying…" : "Retry"}
+            </button>
+            {account && (
+              <button type="button" onClick={() => onShowInDashboard(account.accountId)}>
+                Show in dashboard
+              </button>
+            )}
+          </div>
+        )}
+        {message && (
+          <span role="alert" className="library-row-failure">
+            {message}
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
-function QueueTimelineGroup({ group }: { group: Group }) {
+function QueueTimelineGroup({
+  group,
+  onRetry,
+  onShowInDashboard,
+}: {
+  group: Group;
+  onRetry: (jobId: TimelineEntry["jobId"]) => Promise<void>;
+  onShowInDashboard: (accountId: string) => void;
+}) {
   const grouped = group.entries.length > 1;
   const first = group.entries[0];
   const accountFinish = first.estimate.accountFinish;
@@ -195,7 +298,13 @@ function QueueTimelineGroup({ group }: { group: Group }) {
         </div>
       )}
       {group.entries.map((entry) => (
-        <QueueTimelineRow key={entry.jobId} entry={entry} showIdentity={!grouped} />
+        <QueueTimelineRow
+          key={entry.jobId}
+          entry={entry}
+          showIdentity={!grouped}
+          onRetry={onRetry}
+          onShowInDashboard={onShowInDashboard}
+        />
       ))}
     </section>
   );
@@ -213,7 +322,15 @@ function estimateInputsText(estimateInputs: Timeline["estimateInputs"]): string 
   return `Estimates based on ${estimateInputs.sampleSize} recent import${estimateInputs.sampleSize === 1 ? "" : "s"} (≈${perPage}s/page, ≈${perAccount} pages/account).`;
 }
 
-function QueueTimelineBody({ timeline }: { timeline: Timeline }) {
+function QueueTimelineBody({
+  timeline,
+  onRetry,
+  onShowInDashboard,
+}: {
+  timeline: Timeline;
+  onRetry: (jobId: TimelineEntry["jobId"]) => Promise<void>;
+  onShowInDashboard: (accountId: string) => void;
+}) {
   const { entries, estimateInputs, workerBusy, truncated } = timeline;
   const throttled = entries.find(isThrottled);
   const groups = groupEntries(entries);
@@ -238,7 +355,12 @@ function QueueTimelineBody({ timeline }: { timeline: Timeline }) {
       ) : (
         <div className="queue-timeline-list">
           {groups.map((group) => (
-            <QueueTimelineGroup key={group.accountId ?? group.entries[0].jobId} group={group} />
+            <QueueTimelineGroup
+              key={group.accountId ?? group.entries[0].jobId}
+              group={group}
+              onRetry={onRetry}
+              onShowInDashboard={onShowInDashboard}
+            />
           ))}
         </div>
       )}
@@ -250,6 +372,23 @@ export default function QueueTimeline({ close }: { close: () => void }) {
   const { isAuthenticated } = useConvexAuth();
   const connected = useConvexConnectionState().isWebSocketConnected;
   const now = useDashboardClock();
+  const retry = useMutation(api.jobs.retry);
+
+  const onRetry = (jobId: TimelineEntry["jobId"]) =>
+    retry({ jobId, ...operatorArgs() }).then(() => undefined);
+
+  // A plain in-page anchor, not a route/state change: leaving the Queue page
+  // (`close()`) puts the dashboard back on screen. Setting the hash here
+  // still matters even though the target row doesn't exist yet at this
+  // exact instant — src/library/AccountRow.tsx's own mount-time ref reads
+  // this same `location.hash` once it mounts and scrolls itself into view
+  // then, rather than relying on the browser's native (one-shot, too-early)
+  // hash-scroll attempt.
+  const onShowInDashboard = (accountId: string) => {
+    close();
+
+    if (typeof window !== "undefined") window.location.hash = `account-${accountId}`;
+  };
 
   // `useStableQuery`, not `useQuery`: `now` ticks on `useDashboardClock`'s own
   // interval, and a bare `useQuery` reports `undefined` on every argument
@@ -296,7 +435,11 @@ export default function QueueTimeline({ close }: { close: () => void }) {
         ) : !timeline ? (
           <p className="library-loading">Loading queue timeline…</p>
         ) : (
-          <QueueTimelineBody timeline={timeline} />
+          <QueueTimelineBody
+            timeline={timeline}
+            onRetry={onRetry}
+            onShowInDashboard={onShowInDashboard}
+          />
         )}
       </div>
     </main>

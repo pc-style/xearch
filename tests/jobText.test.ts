@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
+  conversationLabel,
   dedupeJobsByInput,
+  exactClockTime,
+  historyWindowLabel,
+  historyWindowRange,
   inlineImportStatus,
   isPermanentFailure,
   jobKindLabel,
+  jobPostIdentity,
   relativeTime,
 } from "../src/jobText";
 
@@ -87,9 +92,9 @@ describe("jobKindLabel", () => {
     expect(jobKindLabel(job({ kind: "bulk", input: "theo" }))).toBe("@theo history");
   });
 
-  it("recovers the handle from a post job's status URL", () => {
+  it("recovers the handle and a short post-id fragment from a post job's status URL", () => {
     expect(jobKindLabel(job({ kind: "post", input: "https://x.com/theo/status/123" }))).toBe(
-      "Conversation on @theo's post",
+      "Conversation on @theo's post #123",
     );
   });
 
@@ -101,6 +106,63 @@ describe("jobKindLabel", () => {
     expect(jobKindLabel(job({ kind: "live", input: "@theo convex" }))).toBe(
       "Live search: @theo convex",
     );
+  });
+
+  it("labels a deep-history backfill window job with its handle and dated window, not the raw search string", () => {
+    expect(
+      jobKindLabel(
+        job({
+          kind: "live",
+          input: "from:theo since:2025-11-01 until:2025-12-01",
+          origin: "history",
+          since: "2025-11-01",
+          until: "2025-12-01",
+        }),
+      ),
+    ).toBe("@theo · older history 2025-11 → 2025-12");
+  });
+});
+
+// /tmp/issues.md item 3: several failed "Conversation on @handle's post"
+// rows can otherwise share the exact same label, age, and retained-record
+// summary. `conversationLabel` is the shared helper both src/JobRow.tsx
+// (via `jobKindLabel`) and src/library/QueueTimeline.tsx's own fallback
+// label call, so a post job's identity reads the same distinguishable way
+// in both places.
+describe("conversationLabel / jobPostIdentity", () => {
+  it("shortens a long snowflake post id to its last 6 digits", () => {
+    expect(jobPostIdentity("https://x.com/theo/status/1839274653482910720")).toEqual({
+      handle: "theo",
+      postId: "1839274653482910720",
+    });
+    expect(conversationLabel("https://x.com/theo/status/1839274653482910720")).toBe(
+      "Conversation on @theo's post #…910720",
+    );
+  });
+
+  it("degrades gracefully with no handle, no post id, or neither — never a raw URL", () => {
+    expect(conversationLabel("https://x.com/i/web/status/123")).toBe(
+      "Conversation on @i's post #123",
+    );
+    expect(conversationLabel("not-a-url")).toBe("Conversation on a post");
+  });
+});
+
+describe("historyWindowRange / historyWindowLabel", () => {
+  it("shortens the dated window to year-month on both ends", () => {
+    expect(historyWindowRange("2025-11-01", "2025-12-01")).toBe("older history 2025-11 → 2025-12");
+    expect(historyWindowLabel("theo", "2025-11-01", "2025-12-01")).toBe(
+      "@theo · older history 2025-11 → 2025-12",
+    );
+  });
+});
+
+describe("exactClockTime", () => {
+  it("renders an HH:MM clock time", () => {
+    // Only asserts the shape (a real formatted time, not empty/NaN) — the
+    // exact digits depend on the runner's locale/timezone, which this test
+    // must not assume.
+    expect(exactClockTime(Date.UTC(2026, 0, 1, 12, 30))).toMatch(/\d{1,2}:\d{2}/);
   });
 });
 

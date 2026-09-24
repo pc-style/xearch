@@ -6,6 +6,7 @@ import { useTask } from "./errors";
 import { OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import {
   discoveredVia,
+  exactClockTime,
   isPermanentFailure,
   jobKindLabel,
   jobLabel,
@@ -86,7 +87,17 @@ export function JobRow({
       <div className="job-row-heading">
         <div>
           <strong>{jobKindLabel(job)}</strong>
-          <p className="job-row-time muted-copy">{relativeTime(job.updatedAt, now)}</p>
+          <p className="job-row-time muted-copy">
+            {relativeTime(job.updatedAt, now)}
+            {/* Several failed "Conversation on @handle's post" rows can share
+                the same label, the same rounded age ("5m ago"), and the same
+                retained-record summary — the post id in jobKindLabel already
+                tells them apart, but the exact start time is the other half
+                of the stable identity /tmp/issues.md item 3 asks for. Only
+                shown for "post" kind: every other kind's identity is already
+                distinct (a handle, a search string) without it. */}
+            {job.kind === "post" && ` · started ${exactClockTime(job._creationTime)}`}
+          </p>
         </div>
         <span className={`job-status ${job.status}`}>{jobLabel(job)}</span>
       </div>
@@ -146,6 +157,15 @@ export function JobRow({
       >
         <summary>Technical details</summary>
         <p>{jobPhaseDetail(job, now)}</p>
+        {/* The label above never shows the raw status URL (jobKindLabel /
+            conversationLabel keep it to a handle + short post id) — this is
+            the one place it is available, for whoever needs to open the
+            actual conversation. */}
+        {job.kind === "post" && (
+          <p className="muted-copy">
+            <code>{job.input}</code>
+          </p>
+        )}
         {job.error && <p className="config-warning">{job.error}</p>}
         {earlierCount ? (
           <p className="muted-copy">

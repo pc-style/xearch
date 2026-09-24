@@ -66,7 +66,10 @@ export function jobSummary(job: Doc<"jobs">) {
 // `statusUrl`, e.g. "https://x.com/theo/status/123") for a human label on a
 // "post" job. Never throws: an unparseable/legacy input just falls back to
 // the generic label in `jobKindLabel` below instead of showing raw internals.
-function handleFromStatusUrl(url: string): string | null {
+// Exported for src/library/QueueTimeline.tsx, which needs the same identity
+// for a "post" entry that never resolves to a tracked account (a single
+// conversation isn't an account library row) — see `jobPostIdentity` below.
+export function handleFromStatusUrl(url: string): string | null {
   try {
     const segment = new URL(url).pathname.split("/").find((part) => part.length > 0);
 
@@ -74,6 +77,80 @@ function handleFromStatusUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+// The numeric post id out of the same normalized status URL
+// ("https://x.com/theo/status/123" -> "123"). Several failed "Conversation
+// on @handle's post" rows can otherwise share the exact same label, age, and
+// retained-record summary with nothing to tell them apart (/tmp/issues.md
+// "Failed conversation identity is still insufficient") — the post id is the
+// one thing a status URL always carries that is unique per conversation.
+function postIdFromStatusUrl(url: string): string | null {
+  try {
+    const parts = new URL(url).pathname.split("/").filter((part) => part.length > 0);
+    const statusIndex = parts.indexOf("status");
+
+    return statusIndex >= 0 ? (parts[statusIndex + 1] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+// X's post ids are 18-19 digit snowflakes — showing one in full would fight
+// "keep labels short" (/tmp/issues.md item 4). The last 6 digits are still
+// enough to tell two conversations apart at a glance without becoming a wall
+// of digits; the full url stays available behind a raw-details disclosure
+// wherever one exists (src/JobRow.tsx "Technical details").
+function shortPostId(postId: string): string {
+  return postId.length > 6 ? `…${postId.slice(-6)}` : postId;
+}
+
+// Named rather than an inline object literal type on `jobPostIdentity` below
+// (anti-slop no-known-value-widening): a named contract keeps both fields'
+// exact `string | null` types attached to one declared shape both this
+// module and its callers can reference, instead of re-widened structural
+// types at every call site.
+export type JobPostIdentity = { handle: string | null; postId: string | null };
+
+/**
+ * A "post"/"conversation" job's identity: the author's handle when the
+ * status URL parses to one, and a short, still-unique fragment of the post
+ * id. Shared by `jobKindLabel` below and src/library/QueueTimeline.tsx's own
+ * fallback label, so a failed conversation reads the same distinguishable
+ * way in both the "Other imports" feed and the Queue timeline, instead of
+ * the timeline collapsing every one of them to a bare "Post / conversation"
+ * (/tmp/issues.md item 3).
+ */
+export function jobPostIdentity(input: string): JobPostIdentity {
+  return { handle: handleFromStatusUrl(input), postId: postIdFromStatusUrl(input) };
+}
+
+/** "Conversation on @handle's post #…910720", degrading gracefully as the
+ * URL parses less (no id, no handle, neither) down to the original generic
+ * label — never a raw URL. */
+export function conversationLabel(input: string): string {
+  const { handle, postId } = jobPostIdentity(input);
+  const subject = handle ? `@${handle}'s post` : "a post";
+  const suffix = postId ? ` #${shortPostId(postId)}` : "";
+
+  return `Conversation on ${subject}${suffix}`;
+}
+
+/** "older history YYYY-MM → YYYY-MM" — the dated slice of one deep-history
+ * backfill window job (convex/jobs.ts `insertHistoryWindowJob`), shared by
+ * `jobKindLabel` below, src/library/ActiveQueue.tsx, and
+ * src/library/QueueTimeline.tsx so the three surfaces never drift on how
+ * this window is worded. */
+export function historyWindowRange(since: string, until: string): string {
+  return `older history ${since.slice(0, 7)} → ${until.slice(0, 7)}`;
+}
+
+/** "@handle · older history YYYY-MM → YYYY-MM" — `historyWindowRange` with
+ * the account identity prefixed on, for a surface (like the active-queue
+ * strip or the "Other imports" feed) that has not already shown that
+ * identity next to it. */
+export function historyWindowLabel(handle: string, since: string, until: string): string {
+  return `@${handle} · ${historyWindowRange(since, until)}`;
 }
 
 /**
@@ -86,11 +163,8 @@ export function jobKindLabel(job: Doc<"jobs">): string {
   switch (job.kind) {
     case "bulk":
       return `@${job.input} history`;
-    case "post": {
-      const handle = handleFromStatusUrl(job.input);
-
-      return handle ? `Conversation on @${handle}'s post` : "Conversation on a post";
-    }
+    case "post":
+      return conversationLabel(job.input);
 
     case "live": {
       // A deep-history backfill window (convex/jobs.ts `insertHistoryWindowJob`)
@@ -101,7 +175,7 @@ export function jobKindLabel(job: Doc<"jobs">): string {
       if (job.origin === "history" && job.since && job.until) {
         const handleText = job.input.match(/^from:([A-Za-z0-9_]+)/)?.[1] ?? job.input;
 
-        return `@${handleText} · older history ${job.since.slice(0, 7)} → ${job.until.slice(0, 7)}`;
+        return historyWindowLabel(handleText, job.since, job.until);
       }
 
       return `Live search: ${job.input}`;
@@ -130,6 +204,16 @@ export function jobKindLabel(job: Doc<"jobs">): string {
  */
 export function isPermanentFailure(job: Doc<"jobs">): boolean {
   return (job.status === "failed" || job.status === "partial") && job.retryable === false;
+}
+
+/** "HH:MM" in the viewer's own locale/timezone — shared by src/JobRow.tsx
+ * (a post/conversation job's exact start time, which `relativeTime` below
+ * rounds away and so cannot tell two runs a minute apart) and
+ * src/library/QueueTimeline.tsx (every "starts ≈"/"retry at" clock time on
+ * that page), so the two surfaces never format a clock time two different
+ * ways. */
+export function exactClockTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 /** A short "N minutes/hours/days ago" rendering of a past timestamp against a

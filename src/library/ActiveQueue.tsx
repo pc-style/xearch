@@ -1,17 +1,52 @@
 import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import type { AccountLibraryRow } from "../../convex/lib/contracts";
+import type { AccountLibraryRow, JobStatus } from "../../convex/lib/contracts";
 import type { Id } from "../../convex/_generated/dataModel";
-import { acquisitionStatusLabel } from "../jobText";
+import { acquisitionStatusLabel, historyWindowRange } from "../jobText";
 import { describeError } from "../errors";
 import { acquisitionStatusTone, formatRelative, isStalledRun } from "./format";
 import { Badge } from "./format.tsx";
 import { operatorArgs } from "../operatorToken";
 
+// Which of an account's two job fields is currently active — its base
+// import (`latestJob`, always "bulk") or its deep-history backfill window
+// (`historyJob`, always "live"/"history"). Usually only one is ever
+// queued/running at once (a backfill only starts once the base import has
+// reached a terminal state — convex/jobs.ts `maybeStartHistoryBackfill`
+// runs from `finish`), but a person can start a fresh bulk refresh while an
+// earlier backfill window is still running, so both CAN be active at the
+// same time. `historyJob` is checked first — matching
+// src/library/AccountRow.tsx's own `activeHistoryJob` priority for the same
+// row — so this strip's Stop button always targets the same job that row
+// itself displays and stops, never the other one (CodeRabbit). See
+// /tmp/issues.md item 2: this is what makes an account's own older-history
+// download show up here at all — before this, the strip only ever looked at
+// `latestJob`, which the backfill window job is never assigned to.
+type ActiveJob = { jobId: Id<"jobs">; status: JobStatus; updatedAt: number; isHistory: boolean };
+
+function activeJobOf(row: AccountLibraryRow): ActiveJob | undefined {
+  const history = row.historyJob;
+
+  if (history && (history.status === "queued" || history.status === "running"))
+    return {
+      jobId: history.jobId,
+      status: history.status,
+      updatedAt: history.updatedAt,
+      isHistory: true,
+    };
+
+  const base = row.latestJob;
+
+  if (base && (base.status === "queued" || base.status === "running"))
+    return { jobId: base.jobId, status: base.status, updatedAt: base.updatedAt, isHistory: false };
+
+  return undefined;
+}
+
 /**
- * The compact "what's downloading right now" strip. Built only from
- * `AccountLibraryRow.latestJob` (one field already returned by
+ * The compact "what's downloading right now" strip. Built from
+ * `AccountLibraryRow.latestJob` AND `.historyJob` (both already returned by
  * `convex/library.ts rows`) — no separate job-list query — so it can only
  * ever show account-identified acquisition, never the non-account
  * live/post/etc. jobs that to-do.md P0 says must stay out of this list.
@@ -44,9 +79,7 @@ export default function ActiveQueue({
       </section>
     );
 
-  const active = rows.filter(
-    (r) => r.latestJob && (r.latestJob.status === "queued" || r.latestJob.status === "running"),
-  );
+  const active = rows.filter((r) => activeJobOf(r) !== undefined);
 
   return (
     <section className="library-section" aria-label="Active queue">
@@ -77,13 +110,13 @@ export default function ActiveQueue({
 }
 
 function QueueRow({ row }: { row: AccountLibraryRow }) {
-  const job = row.latestJob;
+  const job = activeJobOf(row);
   const cancel = useMutation(api.jobs.cancel);
   const [error, setError] = useState("");
 
-  // ActiveQueue only ever passes rows whose latestJob is set (see the
-  // filter above); this guard just satisfies the type checker without a
-  // non-null assertion — it should never actually render null in practice.
+  // ActiveQueue only ever passes rows `activeJobOf` resolves (see the filter
+  // above); this guard just satisfies the type checker without a non-null
+  // assertion — it should never actually render null in practice.
   if (!job) return null;
   const stalled = isStalledRun(job.status, job.updatedAt);
 
@@ -101,6 +134,14 @@ function QueueRow({ row }: { row: AccountLibraryRow }) {
     <div className="library-queue-row">
       <span className="library-queue-identity">
         {row.name} <span className="library-muted">@{row.handle}</span>
+        {/* row.historyJob is guaranteed set here: `job.isHistory` only comes
+            from `activeJobOf` reading a live `row.historyJob`. */}
+        {job.isHistory && row.historyJob && (
+          <span className="library-muted">
+            {" "}
+            — {historyWindowRange(row.historyJob.since ?? "", row.historyJob.until ?? "")}
+          </span>
+        )}
       </span>
       <span className={stalled ? "stalled" : undefined}>
         {stalled

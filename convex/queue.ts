@@ -3,7 +3,12 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireOperator } from "./access";
-import { jobStatusValidator, kindValidator, throttleProviderValidator } from "./schema";
+import {
+  jobOriginValidator,
+  jobStatusValidator,
+  kindValidator,
+  throttleProviderValidator,
+} from "./schema";
 import { ACCOUNT_JOB_KIND, resolveJobAccount } from "./lib/accounts";
 import { activeThrottleUntil, loadProviderLimit } from "./limits";
 
@@ -114,6 +119,24 @@ const timelineEntryValidator = v.object({
   readyAt: v.optional(v.number()),
   phase: v.optional(v.string()),
   error: v.optional(v.string()),
+  // `since`/`until` are set on a deep-history backfill window job (`kind:
+  // "live"`, `origin: "history"` — convex/jobs.ts `insertHistoryWindowJob`)
+  // and absent on every other kind — carried through so
+  // src/library/QueueTimeline.tsx can label it "@handle · older history
+  // YYYY-MM → YYYY-MM" (src/jobText.ts `historyWindowLabel`) the same way
+  // the account library and the "Other imports" feed already do, instead of
+  // a generic "Live search: <raw query>".
+  origin: v.optional(jobOriginValidator),
+  since: v.optional(v.string()),
+  until: v.optional(v.string()),
+  // When this exact job run was created — distinct from `estimate`'s
+  // scheduling math, and from a stopped job's `status`/age alone, which can
+  // be identical across several failed runs of unrelated post/conversation
+  // jobs (a repeated "Post / conversation" row with no other identity —
+  // see src/jobText.ts's post-job identity helpers). Rendered as an exact
+  // clock time, never re-derived from `estimate` which is a projection, not
+  // a fact about when the job started.
+  createdAt: v.number(),
   waitReason: waitReasonValidator,
   estimate: timelineEstimateValidator,
 });
@@ -390,6 +413,10 @@ export const timeline = query({
         readyAt: job.readyAt,
         phase: job.phase,
         error: job.error,
+        origin: job.origin,
+        since: job.since,
+        until: job.until,
+        createdAt: job._creationTime,
         waitReason,
         estimate: { start, finish, accountFinish: undefined },
       });
