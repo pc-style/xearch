@@ -10,7 +10,8 @@
     "xearch-old/**",
     "bun.lock",
     "pnpm-lock.yaml",
-    "*.tsbuildinfo"
+    "*.tsbuildinfo",
+    "tools/oxlint/anti-slop/**"
   ],
   "sortPackageJson": {}
 }
