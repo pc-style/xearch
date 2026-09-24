@@ -336,6 +336,12 @@ export async function collectXmd(
 
       await add(response);
       metadata = response;
+      // Count this page's posts the same way the history path does: the
+      // older-history backfill (convex/jobs.ts `onHistoryWindowFinished`)
+      // reads it to know whether a dated window came back empty, and the
+      // job row reports it. Without this every search-backed window read as
+      // empty no matter what it fetched.
+      postsReceived = Array.isArray(response.posts) ? response.posts.length : 0;
 
       if (response.degraded)
         warnings.push(
