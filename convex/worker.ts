@@ -80,9 +80,21 @@ export const claimNext = internalMutation({
     const jobs = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "queued"))
-      .take(20);
+      .take(2_000);
 
-    const job = jobs.find((j) => (j.readyAt ?? 0) <= Date.now());
+    const due = jobs.filter((j) => (j.readyAt ?? 0) <= Date.now());
+
+    const priority = (job: Doc<"jobs">) => {
+      if (job.origin === "history") return 1;
+
+      if (job.origin === "discovered") return 2;
+
+      return 0;
+    };
+
+    const job = due.sort(
+      (a, b) => priority(a) - priority(b) || a._creationTime - b._creationTime,
+    )[0];
 
     if (!job) return null;
     const attempt = job.attempt + 1;
