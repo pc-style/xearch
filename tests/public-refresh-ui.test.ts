@@ -56,6 +56,26 @@ afterEach(() => {
 });
 
 describe("the search app's own refresh", () => {
+  it("leaves the loading state and says why when the bootstrap read fails", async () => {
+    // The search page (a bare "/" is the dashboard in the operator build
+    // these tests render).
+    window.history.replaceState(null, "", "/?search=1");
+
+    const convex = fakeConvex({
+      query: (name) => (name === "search:accounts" ? [] : undefined),
+      fetch: (name) =>
+        name === "integrations:configured"
+          ? Promise.reject(new Error("Too many bytes read"))
+          : Promise.resolve(undefined),
+    });
+
+    mounted = mount(App, {}, convex);
+    await settled();
+
+    expect(mounted.html()).toContain("Too many bytes read");
+    expect(mounted.html()).not.toContain("Loading the search library");
+  });
+
   it("reads the bootstrap once, with the instant of the read, and never on a timer", async () => {
     const convex = open();
     await settled();

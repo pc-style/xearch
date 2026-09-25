@@ -345,7 +345,12 @@ export default function App() {
   onSettled(() => publicRefresh.began(Date.now()));
   // A local clock for ages on screen (job rows); it never reaches a query.
   const now = useLiveNow();
-  const libraryLoading = () => accountResults() === undefined || configured() === undefined;
+
+  // A failed bootstrap read ends the loading state too; the notice below
+  // says what went wrong.
+  const libraryLoading = () =>
+    accountResults() === undefined ||
+    (configured() === undefined && bootstrap.error() === undefined);
 
   // A failed bootstrap read used to reach the error boundary through the
   // live query; a finite read reports it here instead of sitting on

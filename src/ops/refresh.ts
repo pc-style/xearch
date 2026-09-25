@@ -97,6 +97,8 @@ export function createDashboardStore<R extends Record<QueryKey, unknown>>(
 
   const inflight = new Map<QueryKey, Promise<unknown>>();
   const opened = new Set<OpsTab>();
+  // Bumped by `reset`: a read begun under an earlier session lands nowhere.
+  let generation = 0;
 
   // SAFETY: built from every member of `OPS_TABS`, so each tab has an entry.
   const cooldowns = Object.fromEntries(
@@ -121,6 +123,7 @@ export function createDashboardStore<R extends Record<QueryKey, unknown>>(
     now: number,
   ) => {
     const started = Date.now();
+    const mine = generation;
     const fresh = wanted.filter((key) => !inflight.has(key));
 
     setBusyKeys((next) => {
@@ -128,20 +131,23 @@ export function createDashboardStore<R extends Record<QueryKey, unknown>>(
     });
 
     for (const key of fresh) {
-      const promise = options
+      const promise: Promise<void> = options
         .read(key, now)
         .then((answer) => {
-          slot(key)[1](() => ({ value: answer, fetchedAt: Date.now() }));
+          if (mine === generation) slot(key)[1](() => ({ value: answer, fetchedAt: Date.now() }));
         })
         .finally(() => {
-          inflight.delete(key);
-          setBusyKeys((next) => next.delete(key));
+          if (inflight.get(key) === promise) inflight.delete(key);
+
+          if (mine === generation) setBusyKeys((next) => next.delete(key));
         });
 
       inflight.set(key, promise);
     }
 
     const results = await Promise.allSettled(wanted.map((key) => inflight.get(key)));
+
+    if (mine !== generation) return;
     const failure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
 
     const next = { ...errors() };
@@ -245,6 +251,10 @@ export function createDashboardStore<R extends Record<QueryKey, unknown>>(
     /** Forget everything: the session changed, so nothing read under the
      * old one may show under the new one. */
     reset: () => {
+      generation++;
+      inflight.clear();
+      setBusy(new Set<QueryKey>());
+
       for (const key of keys) slot(key)[1](undefined);
       setErrors({});
       opened.clear();

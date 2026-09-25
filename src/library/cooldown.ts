@@ -28,11 +28,25 @@ export function createCooldown(
 ): Cooldown {
   const storageKey = COOLDOWN_STORAGE_PREFIX + key;
 
+  // Storage can be disabled, blocked or full; a cooldown then lives in
+  // memory only, and a refresh must still go ahead.
   const stored = () => {
-    const raw = storage?.getItem(storageKey);
-    const value = raw === null || raw === undefined ? 0 : Number(raw);
+    try {
+      const raw = storage?.getItem(storageKey);
+      const value = raw === null || raw === undefined ? 0 : Number(raw);
 
-    return Number.isFinite(value) ? value : 0;
+      return Number.isFinite(value) ? value : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const remember = (value: number) => {
+    try {
+      storage?.setItem(storageKey, String(value));
+    } catch {
+      // Kept in memory for this page's life instead.
+    }
   };
 
   const [until, setUntil] = createSignal(stored());
@@ -43,7 +57,7 @@ export function createCooldown(
     start: (now) => {
       const next = now + durationMs;
       setUntil(next);
-      storage?.setItem(storageKey, String(next));
+      remember(next);
     },
   };
 }

@@ -91,8 +91,10 @@ export function ConnectionsPanel() {
               <p>{c().purpose}</p>
               <small>
                 <Show when={isAuthenticated()} fallback={"Sign in to view"}>
+                  {/* A failed refresh says so, rather than presenting the
+                      previous answer as current. */}
                   <Show
-                    when={config()}
+                    when={snapshot.error() === undefined && config()}
                     fallback={
                       snapshot.error() === undefined
                         ? "Checking…"
