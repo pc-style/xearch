@@ -351,6 +351,11 @@ async function computeSavedCapturesAwaitingIndexing(
 
   for (const { job, receipts } of jobsWithReceipts) {
     if (receipts.length === 0) continue;
+
+    // Empty account-history windows still save raw profile/page records.
+    // A completed job that found zero posts has nothing to index.
+    if (job.status === "complete" && job.postsReceived === 0) continue;
+
     const accountId = (await resolveJobAccount(ctx.db, job, accountCache))?._id ?? null;
     let bucket = capturesByAccount.get(accountId);
 
@@ -360,6 +365,10 @@ async function computeSavedCapturesAwaitingIndexing(
     }
 
     for (const receipt of receipts) {
+      // An empty capture has no posts to index. Its durable receipt already
+      // confirms all the work it contained, even without a publication update.
+      if (receipt.records === 0) continue;
+
       const seenAt = bucket.get(receipt.captureId);
 
       if (seenAt === undefined || receipt._creationTime > seenAt)

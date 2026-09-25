@@ -363,6 +363,37 @@ describe("summary.summary", () => {
     });
   });
 
+  it("confirms empty captures at receipt time without a publication update", async () => {
+    const { t, alice, a } = await setup();
+    await insertAccount(t, { handle: "adam", userId: "1" });
+    const job = await insertJob(t, alice, { input: "adam", expectedUserId: "1" });
+    await insertReceipt(t, { jobId: job, captureId: "empty-window", records: 0 });
+    await insertReceipt(t, { jobId: job, captureId: "has-posts", records: 1 });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 1,
+    });
+  });
+
+  it("does not count a completed zero-post history window saved with raw records", async () => {
+    const { t, alice, a } = await setup();
+    await insertAccount(t, { handle: "adam", userId: "1" });
+    const job = await insertJob(t, alice, { input: "adam", expectedUserId: "1" });
+    await t.run((ctx) => ctx.db.patch(job, { status: "complete", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "profile", records: 1 });
+    await insertReceipt(t, { jobId: job, captureId: "old-empty-window", records: 1 });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
+    });
+  });
+
   it("excludes non-account job kinds (live/post/etc) from saved-captures-awaiting-indexing", async () => {
     const { t, alice, a } = await setup();
     const liveJob = await insertJob(t, alice, { kind: "live", input: "from:theo" });
