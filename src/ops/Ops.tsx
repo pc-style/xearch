@@ -74,6 +74,7 @@ function useOps(props: DashboardProps) {
   const [confirming, setConfirming] = createSignal<Confirm | null>(null);
   const [toast, setToast] = createSignal("");
   const [importKind, setImportKind] = createSignal<ImportKind>("post");
+  const [retryAllBusy, setRetryAllBusy] = createSignal(false);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   const say = (message: string) => {
@@ -121,11 +122,11 @@ function useOps(props: DashboardProps) {
     dismiss = useMutation(api.jobs.dismiss);
 
   /** Run one operator action and say how it went. */
-  const perform = async (work: () => Promise<void>, success: string): Promise<boolean> => {
+  const perform = async (work: () => Promise<void>, success: () => string): Promise<boolean> => {
     try {
       await props.ensureSession();
       await work();
-      say(success);
+      say(success());
 
       return true;
     } catch (error) {
@@ -193,54 +194,131 @@ function useOps(props: DashboardProps) {
     importKind,
     setImportKind,
     openSearch: props.openSearch,
+    retryAllBusy,
     retry: (job: Job, label: string) =>
-      perform(async () => {
-        await retry({ jobId: job._id, ...token() });
-        patchJob(job._id, (j) => ({
-          ...j,
-          status: "queued",
-          error: undefined,
-          retryable: undefined,
-          phase: "Retry queued",
-          updatedAt: Date.now(),
-        }));
-      }, label),
+      perform(
+        async () => {
+          await retry({ jobId: job._id, ...token() });
+          patchJob(job._id, (j) => ({
+            ...j,
+            status: "queued",
+            error: undefined,
+            retryable: undefined,
+            phase: "Retry queued",
+            updatedAt: Date.now(),
+          }));
+        },
+        () => label,
+      ),
+    retryAll: () => {
+      if (retryAllBusy()) return Promise.resolve(false);
+
+      setRetryAllBusy(true);
+      let queued = 0;
+
+      return perform(
+        async () => {
+          let failed = 0;
+          let firstError = "";
+          const ids: Id<"jobs">[] = [];
+
+          for (const status of ["failed", "partial"] as const) {
+            let cursor: string | null = null;
+            let done = false;
+
+            while (!done) {
+              const page: FunctionReturnType<typeof api.jobs.failedForRetry> = await convex.query(
+                api.jobs.failedForRetry,
+                {
+                  status,
+                  paginationOpts: { numItems: 100, cursor },
+                  ...token(),
+                },
+              );
+
+              ids.push(...page.jobIds);
+              cursor = page.cursor;
+              done = page.done;
+            }
+          }
+
+          for (const jobId of ids) {
+            try {
+              await retry({ jobId, ...token() });
+              queued++;
+            } catch (error) {
+              failed++;
+              firstError ||= describeError(error);
+              continue;
+            }
+
+            patchJob(jobId, (j) => ({
+              ...j,
+              status: "queued",
+              error: undefined,
+              retryable: undefined,
+              phase: "Retry queued",
+              updatedAt: Date.now(),
+            }));
+          }
+
+          if (failed > 0)
+            throw new Error(`${queued} retries queued; ${failed} failed: ${firstError}`);
+        },
+        () => (queued ? `Queued ${queued} failed jobs for retry` : "No failed jobs to retry"),
+      ).finally(() => setRetryAllBusy(false));
+    },
     cancel: (jobId: Id<"jobs">, label: string) =>
-      perform(async () => {
-        await cancel({ jobId, ...token() });
-        patchJob(jobId, (j) =>
-          j.status === "queued" || j.status === "running"
-            ? {
-                ...j,
-                status: "cancelled",
-                phase:
-                  "Stopped; an in-flight request may still finish. Retained captures are not deleted.",
-                updatedAt: Date.now(),
-              }
-            : j,
-        );
-      }, label),
-    dismiss: (jobId: Id<"jobs">, label: string) => perform(() => dismissOne(jobId), label),
+      perform(
+        async () => {
+          await cancel({ jobId, ...token() });
+          patchJob(jobId, (j) =>
+            j.status === "queued" || j.status === "running"
+              ? {
+                  ...j,
+                  status: "cancelled",
+                  phase:
+                    "Stopped; an in-flight request may still finish. Retained captures are not deleted.",
+                  updatedAt: Date.now(),
+                }
+              : j,
+          );
+        },
+        () => label,
+      ),
+    dismiss: (jobId: Id<"jobs">, label: string) =>
+      perform(
+        () => dismissOne(jobId),
+        () => label,
+      ),
     // One at a time, each row leaving as its own dismissal is confirmed: a
     // failure part-way leaves the rows already dismissed gone and the rest
     // in place, which is exactly the server's state.
     dismissAll: (jobIds: Id<"jobs">[], label: string) =>
-      perform(async () => {
-        for (const jobId of jobIds) await dismissOne(jobId);
-      }, label),
+      perform(
+        async () => {
+          for (const jobId of jobIds) await dismissOne(jobId);
+        },
+        () => label,
+      ),
     start: (
       args: { kind: ImportKind; input: string; since?: string; refresh?: boolean },
       label: string,
-    ) => perform(async () => void (await start({ ...args, ...token() })), label + AFTER_START),
+    ) =>
+      perform(
+        async () => void (await start({ ...args, ...token() })),
+        () => label + AFTER_START,
+      ),
     refresh: (handles: string[]) =>
       perform(
         async () => {
           for (const input of handles)
             await start({ kind: "bulk", input, refresh: true, ...token() });
         },
-        (handles.length === 1
-          ? `Queued refresh of @${handles[0]}`
-          : `Queued ${handles.length} refreshes`) + AFTER_START,
+        () =>
+          (handles.length === 1
+            ? `Queued refresh of @${handles[0]}`
+            : `Queued ${handles.length} refreshes`) + AFTER_START,
       ),
     ensureSession: props.ensureSession,
   };

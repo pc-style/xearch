@@ -542,6 +542,13 @@ export class XmdClient {
 
       const message = Match.value(response.status).pipe(
         Match.when(401, () => "x.md rejected the API key. Check X_MD_API_KEY on the backend."),
+        Match.when(404, () =>
+          operation === "bulk" || operation === "history"
+            ? "x.md could not fetch this account's history (404). The account may be available again; retry the import."
+            : operation === "post"
+              ? "x.md could not find this post or thread (404). Retrying the same request will not help."
+              : `x.md could not finish this request (404, ${code}).`,
+        ),
         Match.when(
           429,
           () => "x.md rate limit reached. The job will retry after the provider's delay.",
@@ -556,7 +563,8 @@ export class XmdClient {
           code,
           message,
           retryDelay(response.headers.get("Retry-After")),
-          [408, 429, 500, 502, 503, 504].includes(response.status),
+          [408, 429, 500, 502, 503, 504].includes(response.status) ||
+            (response.status === 404 && (operation === "bulk" || operation === "history")),
           problem ? { error: problem, httpStatus: response.status } : undefined,
           readThrottle("xmd", operation, response.status, response.headers, problem),
         ),
@@ -674,14 +682,28 @@ export class XmdClient {
     const parse = (line: string) => {
       const item = record(JSON.parse(line));
 
-      if (item.error)
+      if (item.error) {
+        const issue = object.safeParse(item.error);
+
+        const reportedStatus = issue.success
+          ? z.union([z.number(), z.string()]).safeParse(issue.data.status)
+          : undefined;
+
+        const status = reportedStatus?.success ? finiteNumber(reportedStatus.data) : undefined;
+
+        const retryable =
+          status !== undefined && [404, 408, 429, 500, 502, 503, 504].includes(status);
+
         throw new ProviderError(
           "partial_import",
-          "x.md stopped before completing the import. Only acknowledged captures are retained; retry to continue.",
+          retryable
+            ? "x.md stopped before completing the account import. Only acknowledged captures are retained; retry to continue."
+            : "x.md rejected the account import. Only acknowledged captures are retained; retrying this request will not help.",
           0,
-          false,
+          retryable,
           item,
         );
+      }
 
       if (item.post) return { ...item, post: record(item.post) };
 

@@ -82,6 +82,51 @@ function throttleEvent(
 }
 
 describe("jobs.retry respects an active x.md throttle", () => {
+  it("pages failed retry candidates beyond the dashboard feed limit", async () => {
+    const { t, operator } = await setup();
+    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
+    for (let index = 0; index < 105; index++) await stoppedJob(t, owner);
+
+    const first = await operator.query(api.jobs.failedForRetry, {
+      status: "failed",
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+
+    const second = await operator.query(api.jobs.failedForRetry, {
+      status: "failed",
+      paginationOpts: { numItems: 100, cursor: first.cursor },
+    });
+
+    expect(first.jobIds.length + second.jobIds.length).toBe(105);
+    expect(first.done).toBe(false);
+    expect(second.done).toBe(true);
+  });
+
+  it("allows a legacy 404 only for a known account", async () => {
+    const { t, operator } = await setup();
+    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const known = await stoppedJob(t, owner);
+    const unknown = await stoppedJob(t, owner);
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(known, {
+        retryable: false,
+        expectedUserId: "123",
+        error: "x.md could not finish this request (404, not_found).",
+      });
+      await ctx.db.patch(unknown, {
+        retryable: false,
+        error: "x.md could not finish this request (404, not_found).",
+      });
+    });
+
+    await expect(operator.mutation(api.jobs.retry, { jobId: unknown })).rejects.toThrow(
+      "Retrying will not change the result",
+    );
+    await expect(operator.mutation(api.jobs.retry, { jobId: known })).resolves.toBeNull();
+  });
+
   // The dashboard screenshot's exact shape: allowance remains, so the far-
   // off window resetAt must be ignored in favor of the much sooner
   // provider-given retryAfterMs.

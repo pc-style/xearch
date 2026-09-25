@@ -38,6 +38,98 @@ const request: CollectionRequest = {
 // what makes a replay byte-identical and therefore id-identical.
 const NOW = 1_789_900_000_000;
 
+describe("account history refusals", () => {
+  it("retries a 404 while checking the identity of an already known account", async () => {
+    const failure = await collectXmd(
+      new XmdClient(
+        "test-key",
+        vi.fn<typeof fetch>(async () => Response.json({ code: "not_found" }, { status: 404 })),
+      ),
+      { ...request, expectedUserId: "123" },
+      async () => {
+        throw new Error("no capture expected");
+      },
+      async () => {},
+    ).catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(ProviderError);
+    expect(failure).toMatchObject({ retryable: true });
+
+    // SAFETY: the assertion above confirms the caught value is a ProviderError.
+    expect((failure as ProviderError).message).toContain("known account (404)");
+  });
+
+  it("retries account-level 404s but leaves one-off post 404s permanent", async () => {
+    const client = new XmdClient(
+      "test-key",
+      vi.fn<typeof fetch>(async () => Response.json({ code: "not_found" }, { status: 404 })),
+    );
+
+    for (const [index, call] of [
+      () => client.history("theo", { maxPosts: 10 }),
+      async () => {
+        for await (const _ of client.bulk("theo", { maxPosts: 10 })) {
+          /* drain */
+        }
+      },
+      () => client.read("post", "https://x.com/theo/status/1"),
+    ].entries()) {
+      const error = await call().catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(ProviderError);
+
+      // SAFETY: the assertion above confirms the caught value is a ProviderError.
+      expect((error as ProviderError).retryable).toBe(index < 2);
+
+      // SAFETY: the assertion above confirms the caught value is a ProviderError.
+      expect((error as ProviderError).message).toContain(
+        index < 2 ? "account's history" : "post or thread",
+      );
+    }
+  });
+
+  it("allows a retry when the ndjson stream reports a partial import", async () => {
+    const client = new XmdClient(
+      "test-key",
+      vi.fn<typeof fetch>(
+        async () => new Response('{"error":{"status":404,"message":"account unavailable"}}\n'),
+      ),
+    );
+
+    const error = await (async () => {
+      for await (const _ of client.bulk("theo", { maxPosts: 10 })) {
+        /* drain */
+      }
+    })().catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ code: "partial_import", retryable: true });
+
+    // SAFETY: the assertion above confirms the caught value is a ProviderError.
+    expect((error as ProviderError).message).toContain("retry to continue");
+  });
+
+  it("keeps a streamed 400 error permanent", async () => {
+    const client = new XmdClient(
+      "test-key",
+      vi.fn<typeof fetch>(
+        async () => new Response('{"error":{"status":400,"message":"invalid request"}}\n'),
+      ),
+    );
+
+    const error = await (async () => {
+      for await (const _ of client.bulk("theo", { maxPosts: 10 })) {
+        /* drain */
+      }
+    })().catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ code: "partial_import", retryable: false });
+
+    // SAFETY: the assertion above confirms the caught value is a ProviderError.
+    expect((error as ProviderError).message).toContain("retrying this request will not help");
+  });
+});
+
 // Sized from the real measurement of a live `max_posts=5000` page: 3,418,004
 // bytes for 1,535 posts (~2,227 bytes/post). Retained captures on this machine
 // range from ~2.1 KB to ~6.2 KB per post, so this sits inside the real range.
