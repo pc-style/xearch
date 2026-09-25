@@ -2,6 +2,7 @@
 // everything through src/data/convex, so it renders under the fake Convex
 // app from tests/solid.ts, answering each finite read by function name.
 import { createSignal, flush } from "solid-js";
+import { z } from "zod";
 import type { Value } from "convex/values";
 import type { Doc } from "../convex/_generated/dataModel";
 import type { DashboardSummary } from "../convex/lib/contracts";
@@ -12,6 +13,7 @@ import type { Timeline } from "../convex/queue";
 import type { OpsTab } from "../src/locationStore";
 import type { OperatorConfig } from "../src/ops/model";
 import Ops from "../src/ops/Ops";
+import { canRetry } from "../src/ops/model";
 import { COOLDOWN_STORAGE_PREFIX } from "../src/library/cooldown";
 import { activity, emptyTimeline, healthy, liveWorker, summary } from "./opsFixtures";
 import { fakeConvex, mount, settle, type Mounted } from "./solid";
@@ -100,7 +102,36 @@ export async function mountOps(
   const convex = fakeConvex({
     // Identity is the dashboard's one live read (src/ops/Ops.tsx).
     query: answer,
-    fetch: (name, args) => options.fetch?.(name, args) ?? Promise.resolve(answer(name)),
+    fetch: (name, args) => {
+      const custom = options.fetch?.(name, args);
+
+      if (custom !== undefined) return custom;
+
+      if (name === "jobs:failedForRetry") {
+        const status = args.status;
+
+        const pagination = z
+          .object({ cursor: z.string().nullable() })
+          .safeParse(args.paginationOpts);
+
+        const start = Number(pagination.success ? (pagination.data.cursor ?? 0) : 0);
+
+        const eligible = (fixtures.jobs ?? []).filter(
+          (job) => job.status === status && job.dismissedAt === undefined && canRetry(job),
+        );
+
+        const page = eligible.slice(start, start + 100);
+        const next = start + page.length;
+
+        return Promise.resolve({
+          jobIds: page.map((job) => job._id),
+          cursor: String(next),
+          done: next >= eligible.length,
+        });
+      }
+
+      return Promise.resolve(answer(name));
+    },
     mutation: (name, args) => {
       calls.push({ name, args });
 

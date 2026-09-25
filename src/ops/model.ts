@@ -364,8 +364,11 @@ export const canRetry = (job: Job) =>
   (job.status === "cancelled" ||
     ((job.status === "failed" || job.status === "partial") &&
       (job.retryable !== false ||
-        (job.kind === "bulk" && /\b404\b/.test(job.error ?? "")) ||
         (job.kind === "bulk" &&
+          job.expectedUserId !== undefined &&
+          /\b404\b/.test(job.error ?? "")) ||
+        (job.kind === "bulk" &&
+          job.expectedUserId !== undefined &&
           /x\.md stopped before completing the import/.test(job.error ?? "")))));
 
 /** "Run again" starts the same request fresh through `jobs.start`. */

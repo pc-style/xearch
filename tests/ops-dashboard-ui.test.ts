@@ -552,13 +552,16 @@ describe("jobs", () => {
           kind: "bulk",
           status: "failed",
           retryable: false,
+          expectedUserId: "123",
           error: "x.md could not finish this request (404, not_found).",
         }),
         job(2, { kind: "post", status: "failed", retryable: false, error: "x.md 404" }),
+        job(4, { kind: "bulk", status: "failed", retryable: false, error: "x.md 404" }),
         job(3, {
           kind: "bulk",
           status: "failed",
           retryable: false,
+          expectedUserId: "456",
           error: "x.md stopped before completing the import.",
         }),
       ],
@@ -574,6 +577,33 @@ describe("jobs", () => {
     expect(ops.find(`tr[data-job=${jobId(1)}]`).textContent).toContain("Waiting");
     expect(ops.find(`tr[data-job=${jobId(3)}]`).textContent).toContain("Waiting");
     expect(ops.find(`tr[data-job=${jobId(2)}]`).textContent).toContain("x.md 404");
+    expect(ops.find(`tr[data-job=${jobId(4)}]`).textContent).toContain("x.md 404");
+  });
+
+  it("retries failed jobs beyond the 100 rows loaded into the Jobs table", async () => {
+    const jobs = Array.from({ length: 105 }, (_, index) =>
+      job(index + 1, { status: "failed", error: "provider outage" }),
+    );
+
+    const ops = await open(
+      "jobs",
+      { jobs },
+      {
+        fetch: (name) =>
+          name === "jobs:list"
+            ? Promise.resolve({ jobs: jobs.slice(0, 100), truncated: false })
+            : undefined,
+      },
+    );
+
+    expect(ops.container.querySelectorAll("tr[data-job]")).toHaveLength(100);
+    ops.click(".sh button", "Retry all failed");
+    await vi.waitFor(() => expect(ops.calls).toHaveLength(105));
+    await ops.settle();
+
+    expect(ops.calls).toHaveLength(105);
+    expect(ops.calls.at(-1)).toEqual({ name: "jobs:retry", args: { jobId: jobId(105) } });
+    expect(ops.reads.filter((read) => read.name === "jobs:failedForRetry")).toHaveLength(3);
   });
 
   it("keeps retrying later failed jobs when one retry is rejected", async () => {

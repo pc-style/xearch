@@ -1,4 +1,5 @@
 import { Match } from "effect";
+import { paginationOptsValidator } from "convex/server";
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -157,6 +158,46 @@ export const list = query({
     }
 
     return { jobs: out, truncated };
+  },
+});
+
+// Read failed runs on demand for "Retry all failed". A cursor keeps the
+// action complete even when the normal Jobs feed has reached its 100-row cap.
+export const failedForRetry = query({
+  args: {
+    status: v.union(v.literal("failed"), v.literal("partial")),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    jobIds: v.array(v.id("jobs")),
+    cursor: v.string(),
+    done: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    await user(ctx);
+
+    const page = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", args.status))
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    return {
+      jobIds: page.page
+        .filter(
+          (job) =>
+            job.dismissedAt === undefined &&
+            job.origin !== "history" &&
+            (job.retryable !== false ||
+              (job.kind === "bulk" &&
+                job.expectedUserId !== undefined &&
+                (/\b404\b/.test(job.error ?? "") ||
+                  /x\.md stopped before completing the import/.test(job.error ?? "")))),
+        )
+        .map((job) => job._id),
+      cursor: page.continueCursor,
+      done: page.isDone,
+    };
   },
 });
 
@@ -656,6 +697,7 @@ export const retry = mutation({
     // permanent failure spends another provider call to learn nothing new.
     const legacyAccountFailure =
       job.kind === "bulk" &&
+      job.expectedUserId !== undefined &&
       (/\b404\b/.test(job.error ?? "") ||
         /x\.md stopped before completing the import/.test(job.error ?? ""));
 

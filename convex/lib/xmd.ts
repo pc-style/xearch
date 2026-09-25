@@ -682,14 +682,28 @@ export class XmdClient {
     const parse = (line: string) => {
       const item = record(JSON.parse(line));
 
-      if (item.error)
+      if (item.error) {
+        const issue = object.safeParse(item.error);
+
+        const reportedStatus = issue.success
+          ? z.union([z.number(), z.string()]).safeParse(issue.data.status)
+          : undefined;
+
+        const status = reportedStatus?.success ? finiteNumber(reportedStatus.data) : undefined;
+
+        const retryable =
+          status !== undefined && [404, 408, 429, 500, 502, 503, 504].includes(status);
+
         throw new ProviderError(
           "partial_import",
-          "x.md stopped before completing the import. Only acknowledged captures are retained; retry to continue.",
+          retryable
+            ? "x.md stopped before completing the account import. Only acknowledged captures are retained; retry to continue."
+            : "x.md rejected the account import. Only acknowledged captures are retained; retrying this request will not help.",
           0,
-          true,
+          retryable,
           item,
         );
+      }
 
       if (item.post) return { ...item, post: record(item.post) };
 

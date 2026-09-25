@@ -107,6 +107,27 @@ describe("account history refusals", () => {
     // SAFETY: the assertion above confirms the caught value is a ProviderError.
     expect((error as ProviderError).message).toContain("retry to continue");
   });
+
+  it("keeps a streamed 400 error permanent", async () => {
+    const client = new XmdClient(
+      "test-key",
+      vi.fn<typeof fetch>(
+        async () => new Response('{"error":{"status":400,"message":"invalid request"}}\n'),
+      ),
+    );
+
+    const error = await (async () => {
+      for await (const _ of client.bulk("theo", { maxPosts: 10 })) {
+        /* drain */
+      }
+    })().catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ code: "partial_import", retryable: false });
+
+    // SAFETY: the assertion above confirms the caught value is a ProviderError.
+    expect((error as ProviderError).message).toContain("retrying this request will not help");
+  });
 });
 
 // Sized from the real measurement of a live `max_posts=5000` page: 3,418,004
