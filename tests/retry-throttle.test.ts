@@ -155,11 +155,14 @@ describe("jobs.retry respects an active x.md throttle", () => {
     const observedAt = Date.now();
     await throttleEvent(t, jobId, { remaining: 20, observedAt, resetAt: observedAt + 5 * 60_000 });
 
+    const retriedAt = Date.now();
+
     await operator.mutation(api.jobs.retry, { jobId });
 
     const retried = await t.run((ctx) => ctx.db.get(jobId));
 
-    expect(retried?.readyAt).toBe(0);
+    expect(retried?.readyAt).toBeGreaterThanOrEqual(retriedAt);
+    expect(retried?.readyAt).toBeLessThanOrEqual(Date.now());
     expect(retried?.phase).toBe("Retry queued");
   });
 
@@ -200,12 +203,15 @@ describe("jobs.retry respects an active x.md throttle", () => {
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
     const jobId = await stoppedJob(t, owner);
 
+    const retriedAt = Date.now();
+
     await expect(operator.mutation(api.jobs.retry, { jobId })).resolves.toBeNull();
 
     const retried = await t.run((ctx) => ctx.db.get(jobId));
 
     expect(retried?.status).toBe("queued");
-    expect(retried?.readyAt).toBe(0);
+    expect(retried?.readyAt).toBeGreaterThanOrEqual(retriedAt);
+    expect(retried?.readyAt).toBeLessThanOrEqual(Date.now());
     expect(retried?.phase).toBe("Retry queued");
   });
 
@@ -216,11 +222,14 @@ describe("jobs.retry respects an active x.md throttle", () => {
     const observedAt = Date.now() - 60 * 60_000;
     await throttleEvent(t, jobId, { remaining: 0, observedAt, resetAt: observedAt + 60_000 });
 
+    const retriedAt = Date.now();
+
     await operator.mutation(api.jobs.retry, { jobId });
 
     const retried = await t.run((ctx) => ctx.db.get(jobId));
 
-    expect(retried?.readyAt).toBe(0);
+    expect(retried?.readyAt).toBeGreaterThanOrEqual(retriedAt);
+    expect(retried?.readyAt).toBeLessThanOrEqual(Date.now());
     expect(retried?.phase).toBe("Retry queued");
   });
 

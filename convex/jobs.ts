@@ -731,7 +731,7 @@ export const retry = mutation({
     // self-imposed cap.
     const now = Date.now();
     const throttledUntil = activeThrottleUntil(await loadProviderLimit(ctx, "xmd"), now);
-    const readyAt = throttledUntil ?? 0;
+    const readyAt = throttledUntil ?? now;
 
     await ctx.db.patch(jobId, {
       status: "queued",
