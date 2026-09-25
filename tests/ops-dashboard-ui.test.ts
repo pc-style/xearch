@@ -593,6 +593,7 @@ describe("jobs", () => {
     expect(row(1).textContent).toContain("Running");
     expect(row(1).textContent).toContain("1,870 posts collected · total unknown");
     expect(row(1).textContent).toContain("estimate unavailable");
+    expect(row(2).textContent).toContain("estimate unavailable");
     expect(row(2).textContent).toContain("Remove");
     expect(row(3).textContent).toContain("boom");
     expect(ops.container.querySelector(`tr[data-job=${jobId(4)}]`)).toBeNull();

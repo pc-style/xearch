@@ -1306,7 +1306,9 @@ function JobRow(props: {
         {state() === "waiting" ? (
           <span class="faint">
             {props.info?.position ? `Position ${props.info.position}` : "Waiting"}
-            {props.info?.finish ? ` · done ≈ ${clock(props.info.finish)}` : ""}
+            {props.info?.finish
+              ? ` · done ≈ ${clock(props.info.finish)}`
+              : " · estimate unavailable"}
           </span>
         ) : state() === "running" || state() === "stalled" ? (
           <div class="prog">

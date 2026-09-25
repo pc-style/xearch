@@ -67,6 +67,8 @@ type JobOverrides = Partial<{
   retryable: boolean;
   floorReached: boolean;
   updatedAt: number;
+  attemptStartedAt: number;
+  error: string;
   dismissedAt: number;
   expectedUserId: string;
 }>;
@@ -87,6 +89,8 @@ async function seedJob(
       attempt: overrides.attempt ?? 0,
       warnings: [],
       updatedAt: overrides.updatedAt ?? Date.now(),
+      attemptStartedAt: overrides.attemptStartedAt,
+      error: overrides.error,
       pages: overrides.pages,
       pageAttempt: overrides.pageAttempt,
       postsReceived: overrides.postsReceived,
@@ -331,11 +335,11 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
 
-    // Three completed bulk jobs, each created at a well-separated instant
+    // Five completed bulk jobs, each created at a well-separated instant
     // (so convex-test's monotonic _creationTime tie-breaker never nudges one
     // of them) with an exact (updatedAt - _creationTime) duration:
-    // 100s/5 pages = 20s/page, 200s/10 = 20s/page, 60s/2 = 30s/page ->
-    // median seconds/page = 20, median pages = 5.
+    // Their final attempts take 20, 20, 30, 20, and 20 seconds.
+    // The first job spent an extra 100 seconds queued before its claim.
     // A fixed, far-future anchor rather than `Date.now()`: convex-test bumps
     // a document's `_creationTime` by +0.001ms whenever an insert's mocked
     // `Date.now()` collides with (or falls behind) the previous insert's
@@ -352,28 +356,50 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
       const doneOne = await seedJob(t, userId, { input: "done-1", status: "queued", pages: 5 });
       vi.setSystemTime(base1 + 100_000);
       await t.run((ctx) =>
-        ctx.db.patch(doneOne, { status: "complete", updatedAt: base1 + 100_000 }),
+        ctx.db.patch(doneOne, {
+          status: "complete",
+          attemptStartedAt: base1 + 80_000,
+          updatedAt: base1 + 100_000,
+        }),
       );
 
       vi.setSystemTime(base2);
       const doneTwo = await seedJob(t, userId, { input: "done-2", status: "queued", pages: 10 });
       vi.setSystemTime(base2 + 200_000);
       await t.run((ctx) =>
-        ctx.db.patch(doneTwo, { status: "complete", updatedAt: base2 + 200_000 }),
+        ctx.db.patch(doneTwo, {
+          status: "complete",
+          attemptStartedAt: base2 + 180_000,
+          updatedAt: base2 + 200_000,
+        }),
       );
 
       vi.setSystemTime(base3);
       const doneThree = await seedJob(t, userId, { input: "done-3", status: "queued", pages: 2 });
       vi.setSystemTime(base3 + 60_000);
       await t.run((ctx) =>
-        ctx.db.patch(doneThree, { status: "complete", updatedAt: base3 + 60_000 }),
+        ctx.db.patch(doneThree, {
+          status: "complete",
+          attemptStartedAt: base3 + 30_000,
+          updatedAt: base3 + 60_000,
+        }),
       );
 
-      const now = base3 + 60_000;
+      for (let i = 0; i < 2; i++) {
+        vi.setSystemTime(base3 + 100_000 + i * 100_000);
+        await seedJob(t, userId, {
+          input: `done-extra-${i}`,
+          status: "complete",
+          pages: 5,
+          attemptStartedAt: Date.now() - 20_000,
+        });
+      }
+
+      const now = base3 + 200_000;
       const queuedId = await seedJob(t, userId, { input: "next-up", status: "queued", pages: 2 });
 
       const result = await a.query(timeline, { now });
-      expect(result.estimateInputs).toEqual({ secondsPerPage: 20, medianPages: 5, sampleSize: 3 });
+      expect(result.estimateInputs).toEqual({ secondsPerPage: 20, medianPages: 5, sampleSize: 5 });
 
       const entry = result.entries.find((e) => e.jobId === queuedId);
       // remaining pages = max(0, 5 - 2) = 3; own duration = 3 * 20s = 60s.
@@ -382,6 +408,198 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("requires five clean same-kind samples and excludes timeout and throttle runs", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    for (let i = 0; i < 4; i++)
+      await seedJob(t, userId, {
+        input: `clean-${i}`,
+        status: "complete",
+        kind: "live",
+        pages: 1,
+        attemptStartedAt: now - 20_000,
+        updatedAt: now,
+      });
+
+    const timedOut = await seedJob(t, userId, {
+      input: "timed-out",
+      status: "complete",
+      kind: "live",
+      pages: 1,
+      attemptStartedAt: now - 900_000,
+      updatedAt: now,
+      error: "provider_timeout",
+    });
+
+    const throttled = await seedJob(t, userId, {
+      input: "throttled",
+      status: "complete",
+      kind: "live",
+      pages: 1,
+      attemptStartedAt: now - 900_000,
+      updatedAt: now,
+    });
+
+    await t.run((ctx) =>
+      ctx.db.insert("providerThrottleEvents", {
+        jobId: throttled,
+        provider: "xmd",
+        operation: "history",
+        reason: "rate limit",
+        observedAt: now,
+      }),
+    );
+    await seedJob(t, userId, {
+      input: "wrong-kind",
+      status: "complete",
+      kind: "bulk",
+      pages: 1,
+      attemptStartedAt: now - 20_000,
+      updatedAt: now,
+    });
+    const pending = await seedJob(t, userId, { input: "pending", kind: "live" });
+
+    let result = await a.query(timeline, { now });
+    expect(result.entries.find((e) => e.jobId === pending)?.estimate.measured).toBe(false);
+    expect(result.estimateInputs.sampleSize).toBe(1);
+    expect(timedOut).toBeDefined();
+
+    await seedJob(t, userId, {
+      input: "fifth",
+      status: "complete",
+      kind: "live",
+      pages: 1,
+      attemptStartedAt: now - 20_000,
+      updatedAt: now,
+    });
+    result = await a.query(timeline, { now });
+    const estimate = result.entries.find((e) => e.jobId === pending)?.estimate;
+    expect(estimate).toMatchObject({ measured: true, start: now, finish: now + 20_000 });
+  });
+
+  it("finds completed samples behind more than 400 newer queued jobs", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    for (let i = 0; i < 5; i++)
+      await seedJob(t, userId, {
+        input: `sample-${i}`,
+        status: "complete",
+        pages: 1,
+        attemptStartedAt: now - 20_000,
+        updatedAt: now,
+      });
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 401; i++)
+        await ctx.db.insert("jobs", {
+          owner: userId,
+          kind: "bulk",
+          input: `queued-${i}`,
+          refresh: false,
+          status: "queued",
+          count: 0,
+          attempt: 0,
+          warnings: [],
+          updatedAt: now,
+        });
+    });
+
+    const result = await a.query(timeline, { now });
+    expect(result.estimateInputs).toEqual({ secondsPerPage: 20, medianPages: 1, sampleSize: 5 });
+    expect(result.entries[0]?.estimate.measured).toBe(true);
+  });
+
+  it("finds live samples behind more than 400 newer bulk completions", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    for (let i = 0; i < 5; i++)
+      await seedJob(t, userId, {
+        input: `live-sample-${i}`,
+        kind: "live",
+        status: "complete",
+        pages: 1,
+        attemptStartedAt: now - 20_000,
+        updatedAt: now,
+      });
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 401; i++)
+        await ctx.db.insert("jobs", {
+          owner: userId,
+          kind: "bulk",
+          input: `bulk-sample-${i}`,
+          refresh: false,
+          status: "complete",
+          count: 0,
+          attempt: 1,
+          pages: 1,
+          attemptStartedAt: now - 20_000,
+          warnings: [],
+          updatedAt: now,
+        });
+    });
+
+    const pending = await seedJob(t, userId, { input: "live-pending", kind: "live" });
+    const result = await a.query(timeline, { now });
+    const estimate = result.entries.find((entry) => entry.jobId === pending)?.estimate;
+
+    expect(estimate).toMatchObject({ measured: true, start: now, finish: now + 20_000 });
+  });
+
+  it("samples recent completions even when their jobs were created before 401 older completions", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    // These jobs were queued first, then completed after the next 401 jobs.
+    const lateJobs: Id<"jobs">[] = [];
+
+    for (let i = 0; i < 5; i++)
+      lateJobs.push(
+        await seedJob(t, userId, {
+          input: `late-finish-${i}`,
+          kind: "live",
+          status: "queued",
+          pages: 1,
+          attemptStartedAt: now - 20_000,
+          updatedAt: now - 20_000,
+        }),
+      );
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 401; i++)
+        await ctx.db.insert("jobs", {
+          owner: userId,
+          kind: "live",
+          input: `early-finish-${i}`,
+          refresh: false,
+          status: "complete",
+          count: 0,
+          attempt: 1,
+          pages: 0,
+          warnings: [],
+          updatedAt: now - 60_000,
+        });
+    });
+
+    await t.run(async (ctx) => {
+      for (const jobId of lateJobs)
+        await ctx.db.patch(jobId, { status: "complete", updatedAt: now });
+    });
+
+    const pending = await seedJob(t, userId, { input: "live-pending", kind: "live" });
+    const result = await a.query(timeline, { now });
+    const estimate = result.entries.find((entry) => entry.jobId === pending)?.estimate;
+
+    expect(estimate).toMatchObject({ measured: true, start: now, finish: now + 20_000 });
   });
 
   it("chains a second queued job's start to the first job's estimated finish", async () => {
@@ -396,10 +614,26 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     try {
       vi.setSystemTime(start);
       const sample = await seedJob(t, userId, { input: "sample", status: "queued", pages: 4 });
-      vi.setSystemTime(start + 80_000); // 20s/page over 4 pages
-      await t.run((ctx) => ctx.db.patch(sample, { status: "complete", updatedAt: start + 80_000 }));
+      vi.setSystemTime(start + 80_000);
+      await t.run((ctx) =>
+        ctx.db.patch(sample, {
+          status: "complete",
+          attemptStartedAt: start + 60_000,
+          updatedAt: start + 80_000,
+        }),
+      );
 
-      const now = start + 80_000;
+      for (let i = 0; i < 4; i++) {
+        vi.setSystemTime(start + 100_000 + i * 100_000);
+        await seedJob(t, userId, {
+          input: `sample-${i}`,
+          status: "complete",
+          pages: 4,
+          attemptStartedAt: Date.now() - 20_000,
+        });
+      }
+
+      const now = start + 400_000;
       const first = await seedJob(t, userId, { input: "first", status: "queued", pages: 0 });
 
       const second = await seedJob(t, userId, {
@@ -437,10 +671,26 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     try {
       vi.setSystemTime(start);
       const sample = await seedJob(t, userId, { input: "sample", status: "queued", pages: 2 });
-      vi.setSystemTime(start + 40_000); // 20s/page over 2 pages -> median 2 pages
-      await t.run((ctx) => ctx.db.patch(sample, { status: "complete", updatedAt: start + 40_000 }));
+      vi.setSystemTime(start + 40_000);
+      await t.run((ctx) =>
+        ctx.db.patch(sample, {
+          status: "complete",
+          attemptStartedAt: start + 20_000,
+          updatedAt: start + 40_000,
+        }),
+      );
 
-      const now = start + 40_000;
+      for (let i = 0; i < 4; i++) {
+        vi.setSystemTime(start + 100_000 + i * 100_000);
+        await seedJob(t, userId, {
+          input: `sample-${i}`,
+          status: "complete",
+          pages: 2,
+          attemptStartedAt: Date.now() - 20_000,
+        });
+      }
+
+      const now = start + 400_000;
 
       // Already at the median (2 pages) but still running — not finished.
       const runningId = await seedJob(t, userId, {

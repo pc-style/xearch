@@ -89,6 +89,7 @@ export const claimNext = internalMutation({
     await ctx.db.patch(job._id, {
       status: "running",
       attempt,
+      attemptStartedAt: Date.now(),
       pageAttempt: (job.pageAttempt ?? 0) + 1,
       phase: "Starting download",
       updatedAt: Date.now(),

@@ -345,6 +345,7 @@ export default defineSchema({
     // (and filtering out) every live search, single-post, and profile job
     // any owner has ever run.
     .index("by_kind", ["kind"])
+    .index("by_status_and_kind_and_updated_at", ["status", "kind", "updatedAt"])
     // Every history-window job for one account, without a full-table scan
     // filtered after the fact — convex/lib/accounts.ts `latestHistoryWindowJob`
     // is the one place this is queried, to find the account library row's

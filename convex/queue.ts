@@ -47,21 +47,23 @@ import { activeThrottleUntil, loadProviderLimit } from "./limits";
 // admits when it might not have.
 const QUEUE_SCAN_CAP = 2_000;
 
-// How many recently-completed bulk jobs feed the seconds-per-page / pages-
-// per-account medians. "The last ~30 completed bulk jobs" per the spec.
+// How many recent clean completions of each kind feed its duration and page medians.
 const ESTIMATE_SAMPLE_SIZE = 30;
 
-// How far the completed-bulk-job scan is allowed to look for that sample —
-// generous relative to ESTIMATE_SAMPLE_SIZE since not every bulk job in
-// creation-time order is a completed one.
+const MIN_ESTIMATE_SAMPLE_SIZE = 5;
+
+// Bound each kind's completed-job scan, including excluded completions.
 const ESTIMATE_SCAN_CAP = 400;
 
-// Assumed seconds/page when no completed-import sample exists yet to derive
-// one from. Never presented as a real observation — `estimateInputs.
-// secondsPerPage` stays `undefined` whenever this fallback is the one
-// actually used, so the UI can say "no estimate history yet" honestly
-// instead of implying this number came from real imports.
-const DEFAULT_SECONDS_PER_PAGE = 45;
+const ESTIMATE_KINDS = [
+  "bulk",
+  "live",
+  "post",
+  "profile",
+  "following",
+  "followers",
+  "archive",
+] as const satisfies readonly Doc<"jobs">["kind"][];
 
 export const waitReasonValidator = v.union(
   v.object({ kind: v.literal("running") }),
@@ -100,6 +102,7 @@ const timelineAccountValidator = v.object({
 const timelineEstimateValidator = v.object({
   start: v.number(),
   finish: v.number(),
+  measured: v.boolean(),
   // The same account's overall finish time — the moment its LAST job in the
   // current timeline is expected to be done — repeated on every one of that
   // account's entries so the UI can show "starts/done" per row and one
@@ -174,25 +177,49 @@ function median(values: number[]): number | undefined {
 }
 
 /**
- * The last ~ESTIMATE_SAMPLE_SIZE *completed* bulk jobs with at least one
- * downloaded page, newest first. Bounded by ESTIMATE_SCAN_CAP over
- * `by_kind` (already the index convex/lib/accounts.ts uses for the exact
- * same "every bulk job" scan) rather than scanning the whole `jobs` table.
+ * Up to ESTIMATE_SAMPLE_SIZE clean completed jobs per kind, most recently
+ * finished first, within a bounded completed-job scan. Durations without a claim timestamp or
+ * with an observed provider wait cannot calibrate active download speed.
  */
-async function loadEstimateSample(ctx: QueryCtx): Promise<Doc<"jobs">[]> {
-  const sample: Doc<"jobs">[] = [];
-  let scanned = 0;
+async function loadEstimateSample(ctx: QueryCtx): Promise<Map<Doc<"jobs">["kind"], Doc<"jobs">[]>> {
+  const samples = await Promise.all(
+    ESTIMATE_KINDS.map(async (kind) => {
+      const sample: Doc<"jobs">[] = [];
+      let scanned = 0;
 
-  for await (const job of ctx.db
-    .query("jobs")
-    .withIndex("by_kind", (q) => q.eq("kind", ACCOUNT_JOB_KIND))
-    .order("desc")) {
-    if (++scanned > ESTIMATE_SCAN_CAP || sample.length >= ESTIMATE_SAMPLE_SIZE) break;
+      for await (const job of ctx.db
+        .query("jobs")
+        .withIndex("by_status_and_kind_and_updated_at", (q) =>
+          q.eq("status", "complete").eq("kind", kind),
+        )
+        .order("desc")) {
+        if (++scanned > ESTIMATE_SCAN_CAP || sample.length >= ESTIMATE_SAMPLE_SIZE) break;
 
-    if (job.status === "complete" && (job.pages ?? 0) > 0) sample.push(job);
-  }
+        if (
+          (job.pages ?? 0) <= 0 ||
+          job.attemptStartedAt === undefined ||
+          job.updatedAt <= job.attemptStartedAt ||
+          job.error?.includes("provider_timeout")
+        )
+          continue;
 
-  return sample;
+        // A provider wait can consume most of a run's wall time. Its
+        // observation is retained even if the job later completes.
+        const throttle = await ctx.db
+          .query("providerThrottleEvents")
+          .withIndex("by_job", (q) => q.eq("jobId", job._id))
+          .first();
+
+        if (throttle) continue;
+
+        sample.push(job);
+      }
+
+      return [kind, sample] as const;
+    }),
+  );
+
+  return new Map(samples);
 }
 
 function computeEstimateInputs(sample: Doc<"jobs">[]): EstimateInputs {
@@ -204,18 +231,17 @@ function computeEstimateInputs(sample: Doc<"jobs">[]): EstimateInputs {
 
     if (pages <= 0) continue;
     pagesSamples.push(pages);
-    // Wall time from creation to completion, across every requeue this job
-    // went through — an approximation (it includes backoff/queue waiting
-    // time, not pure download time), but the only duration this schema
-    // actually has recorded per job.
-    const durationSeconds = (job.updatedAt - job._creationTime) / 1000;
+    // The last attempt starts at claim, excluding time spent queued and
+    // between earlier attempts. It is the measured duration of the final page.
+    const durationSeconds = (job.updatedAt - job.attemptStartedAt!) / 1000;
 
-    if (durationSeconds > 0) secondsPerPageSamples.push(durationSeconds / pages);
+    if (durationSeconds > 0) secondsPerPageSamples.push(durationSeconds);
   }
 
   return {
-    secondsPerPage: median(secondsPerPageSamples),
-    medianPages: median(pagesSamples),
+    secondsPerPage:
+      sample.length >= MIN_ESTIMATE_SAMPLE_SIZE ? median(secondsPerPageSamples) : undefined,
+    medianPages: sample.length >= MIN_ESTIMATE_SAMPLE_SIZE ? median(pagesSamples) : undefined,
     sampleSize: sample.length,
   };
 }
@@ -307,7 +333,11 @@ export const timelineSnapshot = query({
 
     const xmdThrottleUntil = activeThrottleUntil(xmdLimit, now);
 
-    const estimateInputs = computeEstimateInputs(sample);
+    const estimates = new Map(
+      [...sample].map(([kind, jobs]) => [kind, computeEstimateInputs(jobs)]),
+    );
+
+    const estimateInputs = estimates.get(ACCOUNT_JOB_KIND) ?? computeEstimateInputs([]);
 
     const running = jobs.filter((j) => j.status === "running");
 
@@ -336,6 +366,7 @@ export const timelineSnapshot = query({
     let aheadCount = 0;
     let sawUnready = false; // once true, everything after is "behind" too
     let cursor = now; // the running chain of "nothing starts before this"
+    let chainMeasured = true;
     const entries: TimelineEntry[] = [];
     const accountFinish = new Map<Id<"accounts">, number>();
 
@@ -388,11 +419,13 @@ export const timelineSnapshot = query({
           : now,
       );
 
-      const remaining = remainingPages(job, estimateInputs.medianPages);
-      const secondsPerPage = estimateInputs.secondsPerPage ?? DEFAULT_SECONDS_PER_PAGE;
-      const finish = start + remaining * secondsPerPage * 1000;
+      const kindEstimate = estimates.get(job.kind);
+      const measured: boolean = chainMeasured && kindEstimate?.secondsPerPage !== undefined;
+      const remaining = remainingPages(job, kindEstimate?.medianPages);
+      const finish = start + remaining * (kindEstimate?.secondsPerPage ?? 0) * 1000;
 
       cursor = finish;
+      chainMeasured = measured;
       aheadCount += 1;
 
       if (account) accountFinish.set(account._id, finish);
@@ -421,7 +454,7 @@ export const timelineSnapshot = query({
         until: job.until,
         createdAt: job._creationTime,
         waitReason,
-        estimate: { start, finish, accountFinish: undefined },
+        estimate: { start, finish, measured, accountFinish: undefined },
       });
     }
 

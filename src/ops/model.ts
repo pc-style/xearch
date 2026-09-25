@@ -376,7 +376,6 @@ export function queueInfo(timeline: Timeline | undefined) {
   const info = new Map<Id<"jobs">, { position?: number; finish?: number }>();
 
   if (!timeline) return info;
-  const measured = timeline.estimateInputs.secondsPerPage !== undefined;
   let position = 0;
 
   for (const entry of timeline.entries) {
@@ -385,7 +384,7 @@ export function queueInfo(timeline: Timeline | undefined) {
     if (entry.status !== "queued" && entry.status !== "running") continue;
     info.set(entry.jobId, {
       position: entry.status === "queued" ? position : undefined,
-      finish: measured ? entry.estimate.finish : undefined,
+      finish: entry.estimate.measured ? entry.estimate.finish : undefined,
     });
   }
 
