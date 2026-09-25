@@ -1003,7 +1003,7 @@ function fx(t) {
   $("cam").style.transform = `translate3d(${x}px,${y}px,0) rotate(${r}deg)`;
   const fl = 0.22 * imp(t, bt(2) + 0.03, 16) + 0.1 * imp(t, bt(1) + 0.03, 18) + 0.14 * imp(t, bt(8), 16) + 0.06 * imp(t, bt(16.25), 18) + 0.3 * imp(t, bt(28), 13);
   $("flash").style.opacity = fl;
-  const fr = Math.floor(t * FPS + 1e-6);
+  const fr = Math.round(t * FPS); // motion-blur samples sit within ±¼ frame
   const gr = rng(fr + 1);
   $("grain").style.backgroundPosition = `${Math.floor(gr() * 384)}px ${Math.floor(gr() * 384)}px`;
   $("fade").style.opacity = E.iCubic(P(t, 14.62, 15));
