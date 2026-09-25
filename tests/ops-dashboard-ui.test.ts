@@ -501,6 +501,29 @@ describe("jobs", () => {
 
     expect(ops.calls.map((c) => c.name)).toEqual(["jobs:dismiss", "jobs:dismiss"]);
   });
+
+  it("dismisses every failed job at once", async () => {
+    const ops = await open("jobs", {
+      jobs: [
+        job(1, { status: "failed", error: "a" }),
+        job(2, { status: "failed", error: "b" }),
+        job(3, { status: "running", updatedAt: Date.now() - MINUTE }),
+      ],
+    });
+
+    expect(ops.find(".sh button", "Dismiss failed").hasAttribute("disabled")).toBe(false);
+    ops.click(".seg button", "History");
+    expect(ops.find(".sh button", "Dismiss failed").hasAttribute("disabled")).toBe(true);
+    ops.click(".seg button", "Active");
+    ops.click(".sh button", "Dismiss failed");
+    ops.click(".md button", "Dismiss failed");
+    await settle();
+
+    expect(ops.calls).toEqual([
+      { name: "jobs:dismiss", args: { jobId: jobId(1) } },
+      { name: "jobs:dismiss", args: { jobId: jobId(2) } },
+    ]);
+  });
 });
 
 describe("other imports", () => {

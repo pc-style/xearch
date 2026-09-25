@@ -1111,6 +1111,7 @@ export function JobsPage(props: Props) {
   const now = () => ops.now();
   const all = () => ops.jobs() ?? [];
   const active = () => all().filter((j) => isActiveJob(jobState(j, now())));
+  const failed = () => active().filter((j) => j.status === "failed");
   const history = () => all().filter((j) => !isActiveJob(jobState(j, now())));
   const shown = () => sortJobs(view() === "active" ? active() : history(), now());
   const queue = () => queueInfo(ops.timeline());
@@ -1141,6 +1142,25 @@ export function JobsPage(props: Props) {
               History<span class="n">{history().length}</span>
             </button>
           </div>
+          <button
+            type="button"
+            class="b"
+            disabled={view() !== "active" || failed().length === 0}
+            title="Dismiss every failed job. Nothing collected is deleted."
+            onClick={() => {
+              const ids = failed().map((j) => j._id);
+              const n = ids.length;
+
+              ops.confirm({
+                title: `Dismiss ${n} failed jobs?`,
+                text: "Removes them from the list. Nothing collected is deleted; posts stay searchable. Retry first if you want them to run again.",
+                yes: "Dismiss failed",
+                run: () => ops.dismissAll(ids, `Dismissed ${n} failed jobs`),
+              });
+            }}
+          >
+            Dismiss failed
+          </button>
           <button
             type="button"
             class="b"
