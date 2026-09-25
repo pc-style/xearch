@@ -30,7 +30,6 @@
     "@posthog/convex": "^2.1.5",
     "@solidjs/web": "2.0.0-rc.9",
     "convex": "^1.45.0",
-    "effect": "4.0.0-rc.112",
     "posthog-js": "^1.434.12",
     "solid-js": "2.0.0-rc.9",
     "zod": "^4.0.0"

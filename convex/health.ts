@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/mini";
 import { v } from "convex/values";
 import { anyApi } from "convex/server";
 import { httpAction, internalAction, internalMutation } from "./_generated/server";
@@ -100,25 +100,24 @@ function clamp(message: string): string {
 }
 
 const healthReportSchema = z
-  .object({
+  .strictObject({
     version: z.literal(1),
     service: z.enum(["indexer", "receiver", "search"]),
     healthy: z.boolean(),
-    observedAt: z.number().finite(),
+    observedAt: z.number(),
     // Deliberately NOT rejected for being long. The reporter sends whatever
     // the failure actually said, verbatim; refusing a verbose message with a
     // 400 would throw away the observation and leave the previous health
     // reading standing, which is the opposite of what a failure report is
     // for. `record` clamps it on the way into the document instead, so the
     // row stays bounded and the service still gets marked unhealthy.
-    error: z.strictObject({ message: z.string().min(1) }).optional(),
+    error: z.optional(z.strictObject({ message: z.string().check(z.minLength(1)) })),
   })
-  .strict()
   // An unhealthy report with nothing to say about why is not a usable
   // observation: `lastError` is supposed to carry the real failure text, so
   // a report that withholds it is rejected instead of silently storing a
   // bare `healthy: false` the dashboard cannot explain.
-  .refine((report) => report.healthy || report.error !== undefined);
+  .check(z.refine((report) => report.healthy || report.error !== undefined));
 
 // --- HTTP entry point -----------------------------------------------------
 

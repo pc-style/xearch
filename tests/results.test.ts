@@ -9,7 +9,7 @@ const post = {
   links: ["https://example.com/article"],
 };
 
-describe("Effect search response contract", () => {
+describe("search response contract", () => {
   it("decodes an empty page and defaults omitted warnings", () => {
     expect(decodeSearchResponse({ rows: [] })).toEqual({ rows: [], warnings: [] });
   });

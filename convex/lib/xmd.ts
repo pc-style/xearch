@@ -1,5 +1,4 @@
-import { Match } from "effect";
-import { z } from "zod";
+import * as z from "zod/mini";
 
 /** A JSON-serializable value — exactly what `JSON.parse`/`response.json()` produce. */
 export type JsonValue =
@@ -144,9 +143,9 @@ function compact<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
 
-const finiteNumberSchema = z.number().finite();
+const finiteNumberSchema = z.number();
 
-const nonEmptyTrimmedString = z.string().trim().min(1);
+const nonEmptyTrimmedString = z.string().check(z.trim(), z.minLength(1));
 
 // Exported for convex/importer.ts and scripts/production-worker.ts, which
 // both need the same tolerant numeric read (accepts a real number or a
@@ -428,6 +427,28 @@ export function timeoutFor(operation: string): number {
   return operation === "history" || operation === "bulk" ? HISTORY_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 }
 
+function failureMessage(status: number, code: string): string {
+  switch (status) {
+    case 401:
+      return "x.md rejected the API key. Check X_MD_API_KEY on the backend.";
+    case 429:
+      return "x.md rate limit reached. The job will retry after the provider's delay.";
+    default:
+      return `x.md could not finish this request (${status}, ${code}).`;
+  }
+}
+
+function profileSuffix(kind: "profile" | "following" | "followers" | "archive"): string {
+  switch (kind) {
+    case "profile":
+      return "";
+    case "archive":
+      return "/posts";
+    default:
+      return `/${kind}`;
+  }
+}
+
 /**
  * Answers that mean "this key, right now" rather than "this request": the key
  * was refused, its quota or plan is exhausted, or it is rate limited. Only
@@ -540,14 +561,7 @@ export class XmdClient {
         /* status is still actionable */
       }
 
-      const message = Match.value(response.status).pipe(
-        Match.when(401, () => "x.md rejected the API key. Check X_MD_API_KEY on the backend."),
-        Match.when(
-          429,
-          () => "x.md rate limit reached. The job will retry after the provider's delay.",
-        ),
-        Match.orElse(() => `x.md could not finish this request (${response.status}, ${code}).`),
-      );
+      const message = failureMessage(response.status, code);
 
       return {
         ok: false,
@@ -585,13 +599,7 @@ export class XmdClient {
       path = "/api/v1/posts";
       queryEntries.push(["url", statusUrl(input)], ["thread", "auto"]);
     } else {
-      const suffix = Match.value(kind).pipe(
-        Match.when("profile", () => ""),
-        Match.when("archive", () => "/posts"),
-        Match.orElse(() => `/${kind}`),
-      );
-
-      path = `/api/v1/profiles/${handle(input)}${suffix}`;
+      path = `/api/v1/profiles/${handle(input)}${profileSuffix(kind)}`;
 
       if (kind === "archive") queryEntries.push(["index", "true"]);
     }
