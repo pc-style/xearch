@@ -273,3 +273,47 @@ obtain, on its own. No "next page", "older posts", or "continue" clicks.
 - Queries take the 30-second bucketed clock; ages, stalls and rate-limit
   windows on the page use the exact 5-second clock, because the bucket runs
   up to 30 seconds ahead.
+
+# Dashboard reads by hand (`t3code/manual-refresh-handoff`, 2026-09-25)
+
+- Requested outcome: the operator dashboard makes finite reads on first
+  opening each tab and on an explicit Refresh only, with browser-side
+  cooldowns and no automatic subscriptions, so an unattended tab costs
+  nothing. Incident context: the shell subscribed to every query with a
+  30-second clock argument, and the two broadest reads (`ops.activity`,
+  `summary.summary`) re-ran twice a minute per open browser plus on every
+  worker write. Production is paused; nothing here deploys or resumes it.
+- Finite reads go over `ConvexHttpClient` with the session's JWT
+  (src/data/httpQuery.ts, `ConvexApp.query`). The WebSocket client keeps
+  mutations, auth, and the public page's per-user live queries (search,
+  own jobs, saved, bookmarks, email), which stay live on purpose.
+- The five heavy queries are renamed and the old names deleted:
+  `ops.accountsSnapshot`, `ops.activitySnapshot`, `summary.summarySnapshot`,
+  `summary.healthSnapshot`, `queue.timelineSnapshot`. An older dashboard
+  build still open gets "could not find public function" with zero reads.
+  Hard cut at deploy time (backend from main first, then the operator
+  site); no transition stubs. `jobs.list` keeps its name.
+- A tab's first open reads only the queries no other tab has already read
+  (src/ops/refresh.ts `TAB_QUERIES`). Refresh re-reads the current tab;
+  Refresh all re-reads every tab. Per-tab cooldown 30 s, Refresh all
+  5 min and it starts every tab's; both start when a read begins,
+  including the first open, and persist in `localStorage`
+  (`xearch:cooldown:*`) so a reload buys nothing. These frontend cooldowns
+  were authorized explicitly, overriding AGENTS.md's no-self-limits rule
+  for this feature. No backend budget or limiter.
+- Retry, Cancel, Dismiss change the row on screen from what convex/jobs.ts
+  wrote; totals wait for Refresh. Bulk dismiss goes one at a time, so a
+  failure part-way leaves already-dismissed rows gone and the rest in place.
+- Public site: only the ticking or operator-only reads convert
+  (`integrations.configured`, the Connections panel's
+  `integrations.operator`, the account badge's `auth.me`), all through
+  src/data/publicRefresh.ts: a header Refresh button with one shared 30 s
+  cooldown that the page load starts. `now` is captured at the read;
+  liveness countdowns tick locally against the snapshot.
+- PostHog: `ops_dashboard_refresh` {scope initial|tab|all|public, tab,
+  queries, durationMs, outcome} and `ops_dashboard_refresh_blocked`
+  {scope, tab, remainingMs}. Persisted aggregates
+  (`@convex-dev/aggregate`) were considered and rejected for this change.
+- Tests prove no read from waiting, hiding/showing, focus, a re-render, or
+  returning to a loaded tab (tests/ops-dashboard-ui.test.ts,
+  tests/public-refresh-ui.test.ts).
