@@ -426,6 +426,26 @@ describe("summary.summary", () => {
     ).rejects.toThrow("Receipt does not match");
   });
 
+  it("also corrects a verified profile-only receipt on a failed job", async () => {
+    const { t, alice, a } = await setup();
+    const job = await insertJob(t, alice, { input: "missing-account" });
+
+    await t.run((ctx) => ctx.db.patch(job, { status: "failed", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "failed-profile", records: 1 });
+    await t.mutation(anyApi.jobs.confirmVerifiedEmptyReceipt, {
+      jobId: job,
+      captureId: "failed-profile",
+    });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
+    });
+  });
+
   it("does not count a completed zero-post history window saved with raw records", async () => {
     const { t, alice, a } = await setup();
     await insertAccount(t, { handle: "adam", userId: "1" });

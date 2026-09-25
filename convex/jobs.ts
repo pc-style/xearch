@@ -1037,12 +1037,12 @@ export const confirmVerifiedEmptyReceipt = internalMutation({
 
     if (
       !job ||
-      job.status !== "partial" ||
+      (job.status !== "partial" && job.status !== "failed") ||
       job.postsReceived !== 0 ||
       !receipt ||
       receipt.records !== 1
     )
-      throw new Error("Receipt does not match a partial zero-post legacy job.");
+      throw new Error("Receipt does not match a stopped zero-post legacy job.");
 
     if (receipt.posts === 0) return;
 
