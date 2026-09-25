@@ -126,6 +126,35 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     expect(result.entries[1]?.waitReason).toEqual({ kind: "behind", aheadCount: 1 });
   });
 
+  it("shows future ready times before origin priority", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const laterManual = await seedJob(t, userId, {
+      origin: "manual",
+      readyAt: now + 60_000,
+    });
+
+    const soonerHistory = await seedJob(t, userId, {
+      origin: "history",
+      readyAt: now + 10_000,
+    });
+
+    const sameTimeDiscovered = await seedJob(t, userId, {
+      origin: "discovered",
+      readyAt: now + 10_000,
+    });
+
+    const result = await a.query(timeline, { now });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([
+      soonerHistory,
+      sameTimeDiscovered,
+      laterManual,
+    ]);
+  });
+
   it("requires a signed-in caller", async () => {
     const t = setup();
     await expect(t.query(timeline, { now: Date.now() })).rejects.toThrow(
@@ -147,7 +176,7 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     );
   });
 
-  it("orders running first, then due queued jobs before future jobs in FIFO order, then terminal-retryable last", async () => {
+  it("orders running first, due jobs by priority and FIFO, future jobs by ready time, then retryable jobs", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
     const now = Date.now();
@@ -203,8 +232,8 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     expect(result.entries.map((e) => e.jobId)).toEqual([
       running,
       readyNow,
-      laterQueued,
       soonerQueued,
+      laterQueued,
       retryable,
       cancelled,
     ]);

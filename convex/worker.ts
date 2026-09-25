@@ -79,14 +79,20 @@ export const claimNext = internalMutation({
 
     const now = Date.now();
 
-    // Old jobs have no origin and are manual. Read each priority lane through
-    // its index rather than scanning every queued history window on each poll.
+    // Old jobs have no origin and are manual. The readyAt index excludes
+    // delayed jobs; among the due rows, claim the oldest by creation time.
     const firstDue = async (origin: Doc<"jobs">["origin"]) => {
-      return ctx.db
+      let oldest: Doc<"jobs"> | null = null;
+
+      for await (const job of ctx.db
         .query("jobs")
-        .withIndex("by_status_and_origin", (q) => q.eq("status", "queued").eq("origin", origin))
-        .filter((q) => q.or(q.eq(q.field("readyAt"), undefined), q.lte(q.field("readyAt"), now)))
-        .first();
+        .withIndex("by_status_and_origin_and_ready_at", (q) =>
+          q.eq("status", "queued").eq("origin", origin).lte("readyAt", now),
+        )) {
+        if (oldest === null || job._creationTime < oldest._creationTime) oldest = job;
+      }
+
+      return oldest;
     };
 
     const [legacyManual, manual] = await Promise.all([firstDue(undefined), firstDue("manual")]);

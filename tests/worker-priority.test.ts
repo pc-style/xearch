@@ -37,10 +37,10 @@ describe("worker job priority", () => {
     await insert("discovered", "discovered");
     const legacyManual = await insert("legacy-manual");
     await insert("legacy-not-due", undefined, Date.now() + 60_000);
-    const firstManual = await insert("manual-one", "manual");
+    const firstManual = await insert("manual-one", "manual", Date.now() - 5_000);
 
     for (let i = 0; i < 101; i++) await insert(`not-due-${i}`, "manual", Date.now() + 60_000);
-    const secondManual = await insert("manual-two", "manual");
+    const secondManual = await insert("manual-two", "manual", Date.now() - 10_000);
 
     expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(legacyManual);
     await t.run(async (ctx) => {

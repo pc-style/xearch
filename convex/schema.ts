@@ -326,7 +326,7 @@ export default defineSchema({
     historyFor: v.optional(v.id("accounts")),
   })
     .index("by_status", ["status"])
-    .index("by_status_and_origin", ["status", "origin"])
+    .index("by_status_and_origin_and_ready_at", ["status", "origin", "readyAt"])
     // No index on `owner` alone: the imported corpus is shared
     // infrastructure, not personal data (to-do.md, convex/lib/search.ts), so
     // no query filters the jobs feed, the account library, or the dashboard

@@ -350,6 +350,12 @@ export const timelineSnapshot = query({
 
         if (aDue !== bDue) return aDue ? -1 : 1;
 
+        if (!aDue) {
+          const readyDifference = (a.readyAt ?? 0) - (b.readyAt ?? 0);
+
+          if (readyDifference !== 0) return readyDifference;
+        }
+
         return priority(a) - priority(b) || a._creationTime - b._creationTime;
       });
 
