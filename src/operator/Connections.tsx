@@ -7,6 +7,7 @@ import { AccountBadge } from "../auth/AccountBadge";
 import { handoffReady, receiverConnection, type Connection } from "../integrationStatus";
 import { useLiveNow } from "../library/clock";
 import { Icon } from "../icons";
+import { describeError } from "../errors";
 
 /**
  * The Connections panel: which services this deployment has been given, and
@@ -90,7 +91,14 @@ export function ConnectionsPanel() {
               <p>{c().purpose}</p>
               <small>
                 <Show when={isAuthenticated()} fallback={"Sign in to view"}>
-                  <Show when={config()} fallback={"Checking…"}>
+                  <Show
+                    when={config()}
+                    fallback={
+                      snapshot.error() === undefined
+                        ? "Checking…"
+                        : `Couldn't read: ${describeError(snapshot.error())}`
+                    }
+                  >
                     <Show when={c().ready} fallback={<span class="status-dot" />}>
                       <Icon name="check" size={12} />
                     </Show>{" "}

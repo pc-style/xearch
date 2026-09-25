@@ -346,6 +346,13 @@ export default function App() {
   // A local clock for ages on screen (job rows); it never reaches a query.
   const now = useLiveNow();
   const libraryLoading = () => accountResults() === undefined || configured() === undefined;
+
+  // A failed bootstrap read used to reach the error boundary through the
+  // live query; a finite read reports it here instead of sitting on
+  // "Loading" forever.
+  createEffect(bootstrap.error, (cause) => {
+    if (cause !== undefined) setNotice(describeError(cause));
+  });
   // The caller's own identity. `verifiedEmail` is the one address
   // `email.send` will ever accept, so there is nothing to type at send time.
   const me = useQuery(api.auth.me, () => ({}));
