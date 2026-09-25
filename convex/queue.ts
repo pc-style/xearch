@@ -383,7 +383,11 @@ export const timelineSnapshot = query({
 
         if (!aDue) return (a.readyAt ?? 0) - (b.readyAt ?? 0);
 
-        return priority(a) - priority(b) || a._creationTime - b._creationTime;
+        return (
+          priority(a) - priority(b) ||
+          (a.readyAt ?? a._creationTime) - (b.readyAt ?? b._creationTime) ||
+          a._creationTime - b._creationTime
+        );
       });
 
       const next = pending.shift()!;

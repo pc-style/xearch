@@ -6,7 +6,7 @@ import schema from "../convex/schema";
 const modules = import.meta.glob("../convex/**/*.ts");
 
 describe("worker job priority", () => {
-  it("keeps creation FIFO when a due delayed job precedes ready-now discovered jobs", async () => {
+  it("uses eligibility time when a delayed discovered job becomes ready", async () => {
     const t = convexTest(schema, modules);
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
 
@@ -27,14 +27,21 @@ describe("worker job priority", () => {
         }),
       );
 
-    const older = await insert("older", Date.now() - 1000);
+    const older = await insert("older", Date.now() + 60_000);
 
     for (let i = 0; i < 100; i++) await insert(`newer-${i}`);
 
+    const first = await t.mutation(anyApi.worker.claimNext, {});
+
+    expect(first?.input).toBe("newer-0");
+    await t.run(async (ctx) => {
+      await ctx.db.patch(first!._id, { status: "complete" });
+      await ctx.db.patch(older, { readyAt: Date.now() - 1000 });
+    });
     expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(older);
   });
 
-  it("claims due manual jobs before older history windows, FIFO within each group", async () => {
+  it("claims due manual jobs before history windows, by eligibility time within each group", async () => {
     const t = convexTest(schema, modules);
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
 
@@ -70,17 +77,17 @@ describe("worker job priority", () => {
     for (let i = 0; i < 101; i++) await insert(`not-due-${i}`, "manual", Date.now() + 60_000);
     const secondManual = await insert("manual-two", "manual", Date.now() - 10_000);
 
-    expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(legacyManual);
+    expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(secondManual);
     await t.run(async (ctx) => {
-      await ctx.db.patch(legacyManual, { status: "complete" });
+      await ctx.db.patch(secondManual, { status: "complete" });
     });
     expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(firstManual);
     await t.run(async (ctx) => {
       await ctx.db.patch(firstManual, { status: "complete" });
     });
-    expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(secondManual);
+    expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(legacyManual);
     await t.run(async (ctx) => {
-      await ctx.db.patch(secondManual, { status: "complete" });
+      await ctx.db.patch(legacyManual, { status: "complete" });
     });
     expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(history);
     await t.run(async (ctx) => {

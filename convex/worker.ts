@@ -79,17 +79,17 @@ export const claimNext = internalMutation({
 
     const now = Date.now();
 
-    // Old jobs have no origin and are manual. Jobs without readyAt share an
-    // index range ordered by creation time; only delayed due jobs need a scan.
+    // Old jobs have no origin and are manual. Missing readyAt means the job
+    // became eligible when it was created; both indexed ranges are FIFO.
     const firstDue = async (origin: Doc<"jobs">["origin"]) => {
-      let oldest = await ctx.db
+      const readyNow = await ctx.db
         .query("jobs")
         .withIndex("by_status_and_origin_and_ready_at", (q) =>
           q.eq("status", "queued").eq("origin", origin).eq("readyAt", undefined),
         )
         .first();
 
-      for await (const job of ctx.db
+      const afterDelay = await ctx.db
         .query("jobs")
         .withIndex("by_status_and_origin_and_ready_at", (q) =>
           q
@@ -97,11 +97,14 @@ export const claimNext = internalMutation({
             .eq("origin", origin)
             .gt("readyAt", undefined)
             .lte("readyAt", now),
-        )) {
-        if (oldest === null || job._creationTime < oldest._creationTime) oldest = job;
-      }
+        )
+        .first();
 
-      return oldest;
+      if (!readyNow) return afterDelay;
+
+      if (!afterDelay) return readyNow;
+
+      return readyNow._creationTime <= afterDelay.readyAt! ? readyNow : afterDelay;
     };
 
     const [legacyManual, manual] = await Promise.all([firstDue(undefined), firstDue("manual")]);
@@ -109,7 +112,11 @@ export const claimNext = internalMutation({
     const job =
       [legacyManual, manual]
         .filter((row) => row !== null)
-        .sort((a, b) => a._creationTime - b._creationTime)[0] ??
+        .sort(
+          (a, b) =>
+            (a.readyAt ?? a._creationTime) - (b.readyAt ?? b._creationTime) ||
+            a._creationTime - b._creationTime,
+        )[0] ??
       (await firstDue("history")) ??
       (await firstDue("discovered"));
 

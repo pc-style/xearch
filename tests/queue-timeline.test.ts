@@ -106,6 +106,23 @@ async function seedJob(
 }
 
 describe("convex/queue.ts timeline (operator Queue page)", () => {
+  it("orders due manual jobs by eligibility time", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const delayed = await seedJob(t, userId, {
+      input: "delayed",
+      origin: "manual",
+      readyAt: now + 5_000,
+    });
+
+    const immediate = await seedJob(t, userId, { input: "immediate", origin: "manual" });
+    const result = await a.query(timeline, { now: now + 10_000 });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([immediate, delayed]);
+  });
+
   it("shows manual jobs ahead of older history windows in claim order", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
@@ -284,11 +301,9 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
 
     const result = await a.query(timeline, { now });
     const byInput = new Map(result.entries.map((e) => [e.input, e]));
-    // No job is running, so the head of the ready line is what the worker
-    // claims on its very next poll.
-    expect(byInput.get("next")?.waitReason).toEqual({ kind: "ready" });
-    // "after" is due too, but "next" is ahead of it in claim order.
-    expect(byInput.get("after")?.waitReason).toEqual({ kind: "behind", aheadCount: 1 });
+    // "after" became eligible first, even though it was inserted later.
+    expect(byInput.get("after")?.waitReason).toEqual({ kind: "ready" });
+    expect(byInput.get("next")?.waitReason).toEqual({ kind: "behind", aheadCount: 1 });
   });
 
   it("classifies a queued job behind a running one, and one with a future readyAt as backoff", async () => {
