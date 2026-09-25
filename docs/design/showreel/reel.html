@@ -285,6 +285,8 @@ const clamp = (x, a = 0, b = 1) => (x < a ? a : x > b ? b : x);
 const lerp = (a, b, t) => a + (b - a) * t;
 const P = (t, a, b) => clamp((t - a) / (b - a));
 const imp = (t, t0, k) => (t < t0 ? 0 : Math.exp(-(t - t0) * k));
+// Text that changes in steps holds still across a frame's motion-blur samples.
+const snap = (t) => Math.round(t * FPS) / FPS;
 function bezier(x1, y1, x2, y2) {
   const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
   const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
@@ -584,7 +586,7 @@ function u3(t) {
   meta.style.top = rowY + 76 + "px";
   meta.style.left = "330px";
   meta.style.opacity = P(t, bt(13.35), bt(13.35) + 0.2);
-  $("s3-n").textContent = Math.round(20 * E.oCubic(P(t, bt(13.35), bt(14.5))));
+  $("s3-n").textContent = Math.round(20 * E.oCubic(P(snap(t), bt(13.35), bt(14.5))));
   const list = $("s3-list");
   list.style.left = "330px";
   list.style.top = rowY + 118 + "px";
@@ -688,11 +690,11 @@ function u4(t) {
   $("s4-ring").style.strokeDasharray = `${pr} 1`;
   const done = spr(t - bt(19.2), 20, 0.45);
   $("s4-ok").style.transform = `scale(${done})`;
-  $("s4-st").textContent = t < bt(19.2) ? "importing history" : "history complete";
+  $("s4-st").textContent = snap(t) < bt(19.2) ? "importing history" : "history complete";
   const cnt = $("s4-count");
   cnt.style.opacity = clamp((t - bt(16.45)) / 0.15) * (1 - out);
   cnt.style.transform = `translateY(${-50 * out}px)`;
-  $("s4-n").textContent = Math.round(48213 * pr).toLocaleString("en-US");
+  $("s4-n").textContent = Math.round(48213 * prog4(snap(t))).toLocaleString("en-US");
   const yin = E.app(P(t, bt(16.3), bt(16.3) + 0.6));
   $("s4-year").style.opacity = yin * (1 - out);
   $("s4-year").style.transform = `translateY(${(1 - yin) * 60 - 50 * out}px)`;
@@ -723,7 +725,7 @@ function u4(t) {
   scan.style.height = sh + "px";
   scan.firstElementChild.style.height = sh + "px";
   scan.style.opacity = P(t, I4[0] - 0.05, I4[0] + 0.1) * (1 - P(t, I4[1], I4[1] + 0.2));
-  const q = Math.min(NBAR - 1, Math.floor((1 - pr) * NBAR));
+  const q = Math.min(NBAR - 1, Math.floor((1 - prog4(snap(t))) * NBAR));
   const lab = scan.querySelector("b");
   lab.textContent = `Q${(q % 4) + 1} ${2012 + Math.floor(q / 4)}`;
   lab.style.top = "-34px";
