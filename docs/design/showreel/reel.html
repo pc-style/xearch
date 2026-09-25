@@ -1735,7 +1735,17 @@
             }
           }
           col.innerHTML = html + html;
-          s6.cols.push({ col, hgt, dir: ci % 2 ? 1 : -1, v: 0.8 + r() * 0.45, ph: r() * hgt });
+          const f = el("div", "", document.body);
+          f.innerHTML = `<svg width="0" height="0" style="position:absolute"><filter id="vblur${ci}" x="0" y="-5%" width="100%" height="110%"><feGaussianBlur stdDeviation="0 0"/></filter></svg>`;
+          const blur = f.querySelector("feGaussianBlur");
+          s6.cols.push({
+            col,
+            blur,
+            hgt,
+            dir: ci % 2 ? 1 : -1,
+            v: 0.8 + r() * 0.45,
+            ph: r() * hgt,
+          });
         });
         for (let i = 0; i < 56; i++) {
           const p = el("div", "pt", $("s6-parts"));
@@ -1768,10 +1778,16 @@
         s6.plane.style.transform = `rotateX(${rx}deg) rotateZ(${rz}deg) scale(${sc})`;
         s6.plane.style.opacity = clamp(dt / 0.3) * (1 - P(t, bt(27.55), bt(27.95)));
         const pos = 150 * dt + 12000 * Math.pow(Math.max(0, t - bt(26)), 3);
-        for (const c of s6.cols) {
+        const vel = 150 + 36000 * Math.pow(Math.max(0, t - bt(26)), 2);
+        s6.cols.forEach((c, i) => {
           const y = -((((c.ph + c.dir * pos * c.v) % c.hgt) + c.hgt) % c.hgt);
           c.col.style.transform = `translate3d(0,${y}px,0)`;
-        }
+          // Blur along the scroll by 15% of the travel in a 180° shutter, which
+          // fills the gaps between motion-blur samples once the ramp is fast.
+          const sd = (0.15 * vel * c.v) / (2 * FPS);
+          c.blur.setAttribute("stdDeviation", `0 ${sd.toFixed(1)}`);
+          c.col.style.filter = sd > 0.5 ? `url(#vblur${i})` : "none";
+        });
         const lx = lerp(300, 2300, drift),
           ly = lerp(2300, 700, drift);
         s6.plane.style.background = `radial-gradient(circle 800px at ${lx}px ${ly}px, #ffc99b1f, #ffc99b00 70%)`;

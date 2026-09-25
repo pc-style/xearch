@@ -35,13 +35,17 @@ const FPS = 60,
   SHUTTER = 0.5;
 
 // Frame ranges that move too fast for SUB samples, with the count each needs:
-// the zoom into the X, the band wipe, the whip into import, the wall
-// speed-ramp and the burst.
+// the zoom into the X and its peak, the band wipe, the whip into import, the
+// wall speed-ramp, and the implosion and burst. The whip and the wall also
+// blur along their motion in the page, so they need fewer.
 const FAST_FRAMES = [
-  [90, 116, 8],
-  [206, 228, 8],
+  [90, 102, 8],
+  [102, 112, 48],
+  [112, 116, 8],
+  [206, 228, 24],
   [428, 464, 8],
-  [738, 808, 8],
+  [738, 774, 8],
+  [774, 808, 24],
 ];
 
 const WORKERS = Number(process.env.WORKERS ?? 2);
