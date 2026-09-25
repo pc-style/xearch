@@ -110,6 +110,8 @@ describe("the search app's own refresh", () => {
     await settled();
     expect(bootstraps(convex)).toHaveLength(2);
     expect(bootstraps(convex)[1].args.now).toBe(Date.now());
+    // A refresh that went ahead takes the "again in N s" notice with it.
+    expect(mounted!.html()).not.toMatch(/Refresh again in/);
 
     button().click();
     await settled();

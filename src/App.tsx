@@ -973,7 +973,7 @@ export default function App() {
                 onClick={() => {
                   const message = publicRefresh.request(Date.now());
 
-                  if (message) setNotice(message);
+                  setNotice(message ?? "");
                 }}
               >
                 <Icon name="refresh-cw" />

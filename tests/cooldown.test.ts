@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { cooldownLabel, COOLDOWN_STORAGE_PREFIX, createCooldown } from "../src/library/cooldown";
+import {
+  cooldownLabel,
+  COOLDOWN_STORAGE_PREFIX,
+  createCooldown,
+  defaultStorage,
+} from "../src/library/cooldown";
 import { needsFreshSession } from "../src/data/httpQuery";
 import { ConvexError } from "convex/values";
 
@@ -44,6 +49,44 @@ describe("createCooldown", () => {
       ).until(),
     ).toBe(0);
     expect(createCooldown("a", 1_000, null).remaining(0)).toBe(0);
+  });
+
+  it("lives in memory when storage is blocked, even reaching it throws", () => {
+    const blocked = {
+      getItem: () => {
+        throw new Error("SecurityError");
+      },
+      setItem: () => {
+        throw new Error("SecurityError");
+      },
+    };
+
+    const cooldown = createCooldown("a", 1_000, blocked);
+
+    expect(cooldown.remaining(0)).toBe(0);
+    cooldown.start(0);
+    expect(cooldown.remaining(500)).toBe(500);
+
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("SecurityError");
+      },
+    });
+
+    try {
+      expect(defaultStorage()).toBeNull();
+      expect(createCooldown("a", 1_000).remaining(0)).toBe(0);
+    } finally {
+      // SAFETY: only the `localStorage` property is touched, and it was
+      // defined above by this test.
+      const scope = globalThis as { localStorage?: unknown };
+
+      if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+      else delete scope.localStorage;
+    }
   });
 
   it("labels the remainder in whole seconds, rounded up", () => {

@@ -19,12 +19,20 @@ export type Cooldown = {
 
 export const COOLDOWN_STORAGE_PREFIX = "xearch:cooldown:";
 
+/** `localStorage` itself throws where storage is blocked (third-party
+ * frames, some privacy settings), not only its methods. */
+export const defaultStorage = (): Pick<Storage, "getItem" | "setItem"> | null => {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+};
+
 export function createCooldown(
   key: string,
   durationMs: number,
-  storage: Pick<Storage, "getItem" | "setItem"> | null = typeof localStorage === "undefined"
-    ? null
-    : localStorage,
+  storage: Pick<Storage, "getItem" | "setItem"> | null = defaultStorage(),
 ): Cooldown {
   const storageKey = COOLDOWN_STORAGE_PREFIX + key;
 
