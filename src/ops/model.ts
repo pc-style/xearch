@@ -382,7 +382,7 @@ export const shortId = (id: Id<"jobs">) => id.slice(-6);
 export function queueInfo(timeline: Timeline | undefined) {
   const info = new Map<Id<"jobs">, { position?: number; finish?: number }>();
 
-  if (!timeline || timeline.truncated) return info;
+  if (!timeline || timeline.queueTruncated) return info;
   let position = 0;
 
   for (const entry of timeline.entries) {

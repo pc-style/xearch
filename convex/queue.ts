@@ -153,6 +153,8 @@ const timelineValidator = v.object({
   // True when the QUEUE_SCAN_CAP whole-table scan hit its bound before
   // finishing — the entries above may be missing older queued/terminal jobs.
   truncated: v.boolean(),
+  // Positions depend only on complete running and queued reads.
+  queueTruncated: v.boolean(),
 });
 
 export type Timeline = Infer<typeof timelineValidator>;
@@ -261,9 +263,10 @@ function remainingPages(job: Doc<"jobs">, medianPages: number | undefined): numb
 /** Every job the worker will act on next, or that a person could retry. */
 async function loadCandidateJobs(
   ctx: QueryCtx,
-): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
+): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean; queueTruncated: boolean }> {
   const jobs: Doc<"jobs">[] = [];
   let truncated = false;
+  let queueTruncated = false;
 
   jobs.push(
     ...(await ctx.db
@@ -277,6 +280,7 @@ async function loadCandidateJobs(
 
     if (remaining <= 0) {
       truncated = true;
+      queueTruncated = true;
       break;
     }
 
@@ -287,7 +291,11 @@ async function loadCandidateJobs(
       )
       .take(remaining + 1);
 
-    if (lane.length > remaining) truncated = true;
+    if (lane.length > remaining) {
+      truncated = true;
+      queueTruncated = true;
+    }
+
     jobs.push(...lane.slice(0, remaining));
   }
 
@@ -309,7 +317,7 @@ async function loadCandidateJobs(
     );
   }
 
-  return { jobs, truncated };
+  return { jobs, truncated, queueTruncated };
 }
 
 // `timelineSnapshot` replaced `timeline` when the dashboard moved to
@@ -337,7 +345,7 @@ export const timelineSnapshot = query({
     // x.md (convex/lib/xmd.ts), so that is the one provider whose throttle
     // state matters here — "receiver"/"search" are about this app's own
     // services, not a job's own calls.
-    const [{ jobs, truncated }, sample, xmdLimit] = await Promise.all([
+    const [{ jobs, truncated, queueTruncated }, sample, xmdLimit] = await Promise.all([
       loadCandidateJobs(ctx),
       loadEstimateSample(ctx),
       loadProviderLimit(ctx, "xmd"),
@@ -525,6 +533,7 @@ export const timelineSnapshot = query({
       estimateInputs,
       workerBusy: running.length > 0,
       truncated,
+      queueTruncated,
     };
   },
 });
