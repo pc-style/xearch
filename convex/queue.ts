@@ -52,8 +52,18 @@ const ESTIMATE_SAMPLE_SIZE = 30;
 
 const MIN_ESTIMATE_SAMPLE_SIZE = 5;
 
-// Bound the completed-job scan across all kinds, including excluded completions.
+// Bound each kind's completed-job scan, including excluded completions.
 const ESTIMATE_SCAN_CAP = 400;
+
+const ESTIMATE_KINDS = [
+  "bulk",
+  "live",
+  "post",
+  "profile",
+  "following",
+  "followers",
+  "archive",
+] as const satisfies readonly Doc<"jobs">["kind"][];
 
 export const waitReasonValidator = v.union(
   v.object({ kind: v.literal("running") }),
@@ -172,39 +182,42 @@ function median(values: number[]): number | undefined {
  * with an observed provider wait cannot calibrate active download speed.
  */
 async function loadEstimateSample(ctx: QueryCtx): Promise<Map<Doc<"jobs">["kind"], Doc<"jobs">[]>> {
-  const samples = new Map<Doc<"jobs">["kind"], Doc<"jobs">[]>();
-  let scanned = 0;
+  const samples = await Promise.all(
+    ESTIMATE_KINDS.map(async (kind) => {
+      const sample: Doc<"jobs">[] = [];
+      let scanned = 0;
 
-  for await (const job of ctx.db
-    .query("jobs")
-    .withIndex("by_status", (q) => q.eq("status", "complete"))
-    .order("desc")) {
-    if (++scanned > ESTIMATE_SCAN_CAP) break;
-    const sample = samples.get(job.kind) ?? [];
+      for await (const job of ctx.db
+        .query("jobs")
+        .withIndex("by_status_and_kind", (q) => q.eq("status", "complete").eq("kind", kind))
+        .order("desc")) {
+        if (++scanned > ESTIMATE_SCAN_CAP || sample.length >= ESTIMATE_SAMPLE_SIZE) break;
 
-    if (
-      sample.length >= ESTIMATE_SAMPLE_SIZE ||
-      (job.pages ?? 0) <= 0 ||
-      job.attemptStartedAt === undefined ||
-      job.updatedAt <= job.attemptStartedAt ||
-      job.error?.includes("provider_timeout")
-    )
-      continue;
+        if (
+          (job.pages ?? 0) <= 0 ||
+          job.attemptStartedAt === undefined ||
+          job.updatedAt <= job.attemptStartedAt ||
+          job.error?.includes("provider_timeout")
+        )
+          continue;
 
-    // A provider wait can consume most of a run's wall time. Its observation
-    // is retained even if the job later completes successfully.
-    const throttle = await ctx.db
-      .query("providerThrottleEvents")
-      .withIndex("by_job", (q) => q.eq("jobId", job._id))
-      .first();
+        // A provider wait can consume most of a run's wall time. Its
+        // observation is retained even if the job later completes.
+        const throttle = await ctx.db
+          .query("providerThrottleEvents")
+          .withIndex("by_job", (q) => q.eq("jobId", job._id))
+          .first();
 
-    if (throttle) continue;
+        if (throttle) continue;
 
-    sample.push(job);
-    samples.set(job.kind, sample);
-  }
+        sample.push(job);
+      }
 
-  return samples;
+      return [kind, sample] as const;
+    }),
+  );
+
+  return new Map(samples);
 }
 
 function computeEstimateInputs(sample: Doc<"jobs">[]): EstimateInputs {
