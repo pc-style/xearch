@@ -32,12 +32,8 @@ import { activeThrottleUntil, loadProviderLimit } from "./limits";
  * someone retries them right now.
  */
 
-// Bounded read (convex/_generated/ai/guidelines.md "never an unbounded
-// scan"). Queued/running/terminal-retryable jobs are always a small,
-// currently-relevant subset of the table, and this table's default order is
-// `_creationTime` descending — recent-first — so a generous cap over the
-// newest rows catches the entire live queue in ordinary operation; `truncated`
-// admits when it might not have.
+// Bounded read; queued jobs are read by the same indexed priority lanes used
+// by the worker, so old manual jobs cannot vanish behind completed rows.
 const QUEUE_SCAN_CAP = 2_000;
 
 // How many recent clean completions of each kind feed its duration and page medians.
@@ -267,27 +263,50 @@ async function loadCandidateJobs(
   ctx: QueryCtx,
 ): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
   const jobs: Doc<"jobs">[] = [];
-  let scanned = 0;
   let truncated = false;
 
-  for await (const job of ctx.db.query("jobs").order("desc")) {
-    if (++scanned > QUEUE_SCAN_CAP) {
+  jobs.push(
+    ...(await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", "running"))
+      .take(2)),
+  );
+
+  for (const origin of [undefined, "manual", "history", "discovered"] as const) {
+    const remaining = QUEUE_SCAN_CAP - jobs.length;
+
+    if (remaining <= 0) {
       truncated = true;
       break;
     }
 
-    if (job.dismissedAt !== undefined) continue;
+    const lane = await ctx.db
+      .query("jobs")
+      .withIndex("by_status_and_origin_and_ready_at", (q) =>
+        q.eq("status", "queued").eq("origin", origin),
+      )
+      .take(remaining + 1);
 
-    // Mirrors convex/jobs.ts `retry`'s own eligibility exactly: "cancelled"
-    // is always retryable (a person's own choice to stop, not a failure),
-    // and "failed"/"partial" are retryable unless the provider said the
-    // failure is permanent (`retryable === false` — see that field's
-    // comment on the `jobs` table in convex/schema.ts).
-    const terminalRetryable =
-      job.status === "cancelled" ||
-      ((job.status === "failed" || job.status === "partial") && job.retryable !== false);
+    if (lane.length > remaining) truncated = true;
+    jobs.push(...lane.slice(0, remaining));
+  }
 
-    if (job.status === "queued" || job.status === "running" || terminalRetryable) jobs.push(job);
+  // Mirrors jobs.retry: cancelled is always retryable, while failed/partial
+  // jobs are retryable unless the provider marked their error permanent.
+  for (const status of ["cancelled", "failed", "partial"] as const) {
+    const stopped = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", status))
+      .order("desc")
+      .take(QUEUE_SCAN_CAP);
+
+    if (stopped.length === QUEUE_SCAN_CAP) truncated = true;
+    jobs.push(
+      ...stopped.filter(
+        (job) =>
+          job.dismissedAt === undefined && (status === "cancelled" || job.retryable !== false),
+      ),
+    );
   }
 
   return { jobs, truncated };
@@ -342,22 +361,36 @@ export const timelineSnapshot = query({
       return 0;
     };
 
-    const queued = jobs
-      .filter((j) => j.status === "queued")
-      .sort((a, b) => {
-        const aDue = (a.readyAt ?? 0) <= now;
-        const bDue = (b.readyAt ?? 0) <= now;
+    const pending = jobs.filter((j) => j.status === "queued");
+    const queued: Doc<"jobs">[] = [];
+
+    const projectedDuration = (job: Doc<"jobs">) => {
+      const estimate = estimates.get(job.kind);
+
+      return remainingPages(job, estimate?.medianPages) * (estimate?.secondsPerPage ?? 0) * 1000;
+    };
+
+    let projectedAt = Math.max(now, xmdThrottleUntil ?? now);
+
+    for (const job of running) projectedAt += projectedDuration(job);
+
+    while (pending.length > 0) {
+      pending.sort((a, b) => {
+        const aDue = (a.readyAt ?? 0) <= projectedAt;
+        const bDue = (b.readyAt ?? 0) <= projectedAt;
 
         if (aDue !== bDue) return aDue ? -1 : 1;
 
-        if (!aDue) {
-          const readyDifference = (a.readyAt ?? 0) - (b.readyAt ?? 0);
-
-          if (readyDifference !== 0) return readyDifference;
-        }
+        if (!aDue) return (a.readyAt ?? 0) - (b.readyAt ?? 0);
 
         return priority(a) - priority(b) || a._creationTime - b._creationTime;
       });
+
+      const next = pending.shift()!;
+
+      queued.push(next);
+      projectedAt = Math.max(projectedAt, next.readyAt ?? 0) + projectedDuration(next);
+    }
 
     const terminalRetryable = jobs
       .filter((j) => j.status === "failed" || j.status === "partial" || j.status === "cancelled")

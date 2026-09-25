@@ -155,6 +155,41 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     ]);
   });
 
+  it("rechecks a manual job's ready time after the running job's projected finish", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    for (let i = 0; i < 5; i++)
+      await seedJob(t, userId, {
+        kind: "live",
+        input: `sample-${i}`,
+        status: "complete",
+        pages: 1,
+        attemptStartedAt: now - 20_000,
+        updatedAt: now,
+      });
+
+    const running = await seedJob(t, userId, { kind: "live", status: "running" });
+
+    const history = await seedJob(t, userId, {
+      kind: "live",
+      origin: "history",
+      status: "queued",
+    });
+
+    const manual = await seedJob(t, userId, {
+      kind: "live",
+      origin: "manual",
+      status: "queued",
+      readyAt: now + 5_000,
+    });
+
+    const result = await a.query(timeline, { now });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([running, manual, history]);
+  });
+
   it("requires a signed-in caller", async () => {
     const t = setup();
     await expect(t.query(timeline, { now: Date.now() })).rejects.toThrow(
@@ -804,15 +839,16 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     expect(entry?.until).toBe("2025-12-01");
   });
 
-  it("sets truncated when the whole-table scan hits its bound", async () => {
+  it("keeps an old queued manual job visible behind more than 2,000 completed jobs", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
     const now = Date.now();
 
-    // Insert more (non-candidate) jobs than QUEUE_SCAN_CAP so the scan
-    // exhausts its bound before reaching the one queued job seeded first
-    // (oldest -> scanned last, since the scan orders newest-first).
-    const queuedId = await seedJob(t, userId, { input: "old-queued", status: "queued" });
+    const queuedId = await seedJob(t, userId, {
+      input: "old-queued",
+      status: "queued",
+      origin: "manual",
+    });
 
     await t.run(async (ctx) => {
       for (let i = 0; i < 2_001; i++) {
@@ -830,8 +866,15 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
       }
     });
 
+    const historyId = await seedJob(t, userId, {
+      input: "history",
+      status: "queued",
+      origin: "history",
+    });
+
     const result = await a.query(timeline, { now });
-    expect(result.truncated).toBe(true);
-    expect(result.entries.some((e) => e.jobId === queuedId)).toBe(false);
+
+    expect(result.truncated).toBe(false);
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([queuedId, historyId]);
   });
 });

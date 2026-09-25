@@ -79,8 +79,8 @@ export const claimNext = internalMutation({
 
     const now = Date.now();
 
-    // Old jobs have no origin and are manual. The readyAt index excludes
-    // delayed jobs; among the due rows, claim the oldest by creation time.
+    // Old jobs have no origin and are manual. The readyAt range excludes
+    // delayed jobs; among due rows, original creation order wins.
     const firstDue = async (origin: Doc<"jobs">["origin"]) => {
       let oldest: Doc<"jobs"> | null = null;
 
