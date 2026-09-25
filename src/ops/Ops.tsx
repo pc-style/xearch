@@ -227,7 +227,7 @@ function Header(props: { ops: OpsContext }) {
         </span>
         <span>{email() ? `signed in as ${email()}` : "signed in with the operator key"}</span>
         <button type="button" class="b s" onClick={() => props.ops.openSearch()}>
-          Public site ↗
+          Search posts
         </button>
       </div>
     </header>

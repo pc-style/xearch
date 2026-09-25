@@ -1687,7 +1687,7 @@ export function ProviderPage(props: Props) {
             <big>
               {until() !== undefined ? "Limited" : "Available"}
               {/* 0 is the case that matters most, so test for a value, not truthiness. */}
-              <Show when={remaining() !== undefined}>
+              <Show when={until() !== undefined && remaining() !== undefined}>
                 <span class="unit"> {n(remaining()!)} calls left</span>
               </Show>
             </big>

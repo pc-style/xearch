@@ -628,9 +628,11 @@ export default function App() {
       });
       markRouteApplied();
       window.scrollTo(0, 0);
-    });
 
-    if (trimmed && runSearch(request)) kickedAttempt = request.attemptId;
+      // A browser may delay this callback until after a fast mutation resolves.
+      // Start only after the new view has cleared the previous session.
+      if (trimmed && runSearch(request)) kickedAttempt = request.attemptId;
+    });
   };
 
   const goHome = () => {
@@ -810,8 +812,8 @@ export default function App() {
     pushHref(OPS_PATH);
   };
 
-  // The dashboard's way back to the search app ("Public site", and "Search
-  // posts" on an account). `?search=1` keeps the operator build on search
+  // The dashboard and account rows both open the operator build's search view.
+  // `?search=1` keeps the operator build on search
   // with an empty query; a query goes through the URL like a shared link.
   const openSearch = (query?: string) => {
     pushHref(query ? `/?search=1&q=${encodeURIComponent(query)}` : "/?search=1");

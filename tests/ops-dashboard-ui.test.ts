@@ -65,10 +65,10 @@ describe("ops shell", () => {
     expect(ops.find(".pgd").textContent).toContain("Queued, running, stalled and failed work");
   });
 
-  it("Public site goes back to search", async () => {
+  it("Search posts goes back to search", async () => {
     const ops = await open("overview");
 
-    ops.click(".who button", "Public site");
+    ops.click(".who button", "Search posts");
     expect(ops.openSearch).toEqual([""]);
   });
 
@@ -599,5 +599,27 @@ describe("provider", () => {
     });
 
     expect(ops.find(".pc", "Rate limit").textContent).toContain("0 calls left");
+  });
+
+  it("does not present an expired allowance as calls left now", async () => {
+    const now = Date.now();
+
+    const ops = await open("provider", {
+      limit: {
+        kind: "throttled",
+        provider: "xmd",
+        operation: "history",
+        reason: "x.md rate limit reached.",
+        remaining: { kind: "known", value: 0 },
+        nextRetryAt: now - 30_000,
+        observedAt: now - MINUTE,
+      },
+    });
+
+    const card = ops.find(".pc", "Rate limit").textContent;
+
+    expect(card).toContain("Available");
+    expect(card).toContain("that window has passed");
+    expect(card).not.toContain("0 calls left");
   });
 });
