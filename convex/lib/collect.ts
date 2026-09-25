@@ -128,7 +128,7 @@ export async function collectXmd(
   client: XmdClient,
   request: CollectionRequest,
   sink: (capture: Capture) => Promise<Receipt>,
-  onReceipt: (receipt: Receipt, count: number) => Promise<void>,
+  onReceipt: (receipt: Receipt, count: number, posts: number) => Promise<void>,
   now = Date.now,
   onIdentity?: (id: string) => Promise<void>,
   onStage?: (phase: string) => Promise<void>,
@@ -170,7 +170,15 @@ export async function collectXmd(
       terminal,
     });
 
-    await onReceipt(receipt, pending.length);
+    const posts = pending.reduce(
+      (count, record) =>
+        count +
+        (Array.isArray(record.payload.posts) ? record.payload.posts.length : 0) +
+        (record.payload.post ? 1 : 0),
+      0,
+    );
+
+    await onReceipt(receipt, pending.length, posts);
     pending = [];
     bytes = 0;
     sequence++;

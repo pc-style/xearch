@@ -144,7 +144,13 @@ async function insertPublication(
 
 async function insertReceipt(
   t: Awaited<ReturnType<typeof setup>>["t"],
-  args: { jobId: Id<"jobs">; captureId: string; receiptId?: string; records?: number },
+  args: {
+    jobId: Id<"jobs">;
+    captureId: string;
+    receiptId?: string;
+    records?: number;
+    posts?: number;
+  },
 ) {
   return t.run((ctx) =>
     ctx.db.insert("receipts", {
@@ -152,6 +158,7 @@ async function insertReceipt(
       captureId: args.captureId,
       receiptId: args.receiptId ?? args.captureId,
       records: args.records ?? 1,
+      posts: args.posts,
     }),
   );
 }
@@ -375,6 +382,67 @@ describe("summary.summary", () => {
       kind: "known",
       unit: "captures",
       value: 1,
+    });
+  });
+
+  it("confirms profile-only receipts on a partial job without hiding posts", async () => {
+    const { t, alice, a } = await setup();
+    const job = await insertJob(t, alice, { input: "missing-account" });
+
+    await t.run((ctx) => ctx.db.patch(job, { status: "partial", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "profile-only", records: 1, posts: 0 });
+    await insertReceipt(t, { jobId: job, captureId: "has-posts", records: 1, posts: 1 });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 1,
+    });
+  });
+
+  it("corrects only a verified legacy partial-job receipt", async () => {
+    const { t, alice, a } = await setup();
+    const job = await insertJob(t, alice, { input: "missing-account" });
+
+    await t.run((ctx) => ctx.db.patch(job, { status: "partial", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "legacy-profile", records: 1 });
+
+    await t.mutation(anyApi.jobs.confirmVerifiedEmptyReceipt, {
+      jobId: job,
+      captureId: "legacy-profile",
+    });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
+    });
+    await expect(
+      t.mutation(anyApi.jobs.confirmVerifiedEmptyReceipt, { jobId: job, captureId: "wrong" }),
+    ).rejects.toThrow("Receipt does not match");
+  });
+
+  it("also corrects a verified profile-only receipt on a failed job", async () => {
+    const { t, alice, a } = await setup();
+    const job = await insertJob(t, alice, { input: "missing-account" });
+
+    await t.run((ctx) => ctx.db.patch(job, { status: "failed", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "failed-profile", records: 1 });
+    await t.mutation(anyApi.jobs.confirmVerifiedEmptyReceipt, {
+      jobId: job,
+      captureId: "failed-profile",
+    });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
     });
   });
 

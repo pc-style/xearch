@@ -995,6 +995,7 @@ export const ack = internalMutation({
     captureId: v.string(),
     receiptId: v.string(),
     count: v.number(),
+    posts: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
@@ -1013,11 +1014,41 @@ export const ack = internalMutation({
       captureId: args.captureId,
       receiptId: args.receiptId,
       records: args.count,
+      posts: args.posts,
     });
     await ctx.db.patch(job._id, {
       count: job.count + args.count,
       updatedAt: Date.now(),
     });
+  },
+});
+
+// One-time correction for legacy profile-only captures verified against their
+// retained raw JSON. Existing receipts recorded envelope count, not post count.
+export const confirmVerifiedEmptyReceipt = internalMutation({
+  args: { jobId: v.id("jobs"), captureId: v.string() },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+
+    const receipt = await ctx.db
+      .query("receipts")
+      .withIndex("by_capture", (q) => q.eq("jobId", args.jobId).eq("captureId", args.captureId))
+      .unique();
+
+    if (
+      !job ||
+      (job.status !== "partial" && job.status !== "failed") ||
+      job.postsReceived !== 0 ||
+      !receipt ||
+      receipt.records !== 1
+    )
+      throw new Error("Receipt does not match a stopped zero-post legacy job.");
+
+    if (receipt.posts === 0) return;
+
+    if (receipt.posts !== undefined) throw new Error("Receipt already has a post count.");
+
+    await ctx.db.patch(receipt._id, { posts: 0 });
   },
 });
 

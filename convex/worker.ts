@@ -214,6 +214,7 @@ export const report = action({
     captureId: v.optional(v.string()),
     receiptId: v.optional(v.string()),
     count: v.optional(v.number()),
+    posts: v.optional(v.number()),
     warnings: v.optional(v.array(v.string())),
     error: v.optional(v.string()),
     retryAfter: v.optional(v.number()),
@@ -298,6 +299,7 @@ export const report = action({
         captureId: args.captureId!,
         receiptId: args.receiptId!,
         count: args.count!,
+        posts: args.posts,
       });
     else
       await ctx.runMutation(internal.jobs.finish, {
