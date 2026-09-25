@@ -152,6 +152,7 @@ describe("x.md raw acquisition handoff", () => {
     expect(r.ack).toHaveBeenCalledWith(
       expect.objectContaining({ captureId: expect.any(String) }),
       1,
+      0,
     );
   });
 

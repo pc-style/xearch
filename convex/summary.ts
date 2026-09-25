@@ -365,9 +365,9 @@ async function computeSavedCapturesAwaitingIndexing(
     }
 
     for (const receipt of receipts) {
-      // An empty capture has no posts to index. Its durable receipt already
-      // confirms all the work it contained, even without a publication update.
-      if (receipt.records === 0) continue;
+      // A profile or empty page still contains a raw record. The post count
+      // says whether this capture has anything for search to index.
+      if (receipt.posts === 0 || receipt.records === 0) continue;
 
       const seenAt = bucket.get(receipt.captureId);
 

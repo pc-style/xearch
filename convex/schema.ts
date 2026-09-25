@@ -483,6 +483,7 @@ export default defineSchema({
     captureId: v.string(),
     receiptId: v.string(),
     records: v.number(),
+    posts: v.optional(v.number()),
   }).index("by_capture", ["jobId", "captureId"]),
   sessions: defineTable({
     owner: v.id("users"),
