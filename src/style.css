@@ -991,6 +991,141 @@ select.sort {
   border-radius: 3px;
   padding: 0 2px;
 }
+.r .r-reply {
+  margin-top: 2px;
+  font-size: 13.5px;
+  color: var(--faint);
+}
+/* Embeds: media, link previews and quoted posts, sized like X's. */
+.em-media {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  max-width: 560px;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+}
+.em-media[data-count="1"] {
+  grid-template-columns: 1fr;
+  aspect-ratio: auto;
+  width: fit-content;
+  max-width: min(100%, 560px);
+}
+.em-media[data-count="3"] > :first-child {
+  grid-row: span 2;
+}
+.em-item {
+  position: relative;
+  display: block;
+  min-height: 0;
+  background: var(--field);
+}
+.em-media[data-count="1"] .em-item {
+  max-height: 510px;
+}
+.em-item img,
+.em-item video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.em-media[data-count="1"] .em-item img,
+.em-media[data-count="1"] .em-item video {
+  max-height: 510px;
+  object-fit: contain;
+}
+.em-badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #000000b3;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.em-card,
+.em-quote {
+  display: flex;
+  max-width: 560px;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  color: var(--text);
+  text-decoration: none;
+  transition: background-color 150ms ease;
+}
+.em-card:hover,
+.em-quote:hover {
+  background: var(--hover);
+}
+.em-card {
+  align-items: stretch;
+}
+.em-card > img {
+  width: 120px;
+  flex: none;
+  object-fit: cover;
+  background: var(--field);
+  border-right: 1px solid var(--line);
+}
+.em-card > span {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  padding: 10px 14px;
+  min-width: 0;
+  font-size: 14px;
+}
+.em-card small {
+  color: var(--faint);
+  font-size: 12.5px;
+}
+.em-card b {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.em-desc {
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.em-quote {
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  font-size: 14.5px;
+}
+.em-quote-by {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.em-quote-by b {
+  color: var(--text);
+  font-weight: 500;
+}
+.em-quote-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.em-quote > img {
+  margin-top: 6px;
+  max-height: 240px;
+  width: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+}
 /* Scoped to result rows: the header's own nav is also `.links`. */
 .r .links {
   display: flex;

@@ -220,6 +220,8 @@ export default function App() {
   // only ever holds one page; this is what lets "Load more" grow the list
   // instead of swapping it. A fresh search resets it.
   const [rows, setRows] = createSignal<ResultPost[]>([]);
+  // How many posts the current search matches in all, from its first page.
+  const [total, setTotal] = createSignal<number | undefined>(undefined);
   let appendMode = false;
   let mergedSession: Id<"sessions"> | null = null;
   // Which page (session) each loaded row came from. `search.bookmark` only
@@ -303,6 +305,7 @@ export default function App() {
       setStatsForNerds(next.includeStats);
       setSearchKey(null);
       setRows([]);
+      setTotal(undefined);
       setSearchRequest(
         next.raw.trim()
           ? {
@@ -495,7 +498,11 @@ export default function App() {
     // Reset here, synchronously, not in `search`'s view transition: that
     // callback waits for a frame, and on a slow frame this search's first
     // page can land before it — the reset would then wipe it.
-    if (!appendMode) setRows([]);
+    if (!appendMode) {
+      setRows([]);
+      setTotal(undefined);
+    }
+
     setSearchKey(clientKey);
     setBusy(true);
     setNotice("");
@@ -554,7 +561,10 @@ export default function App() {
       mergedSession = current._id;
       mergeStartedAt = performance.now();
 
-      if (!appendMode) rowSession.clear();
+      if (!appendMode) {
+        rowSession.clear();
+        setTotal(current.total);
+      }
 
       for (const row of current.rows)
         if (!rowSession.has(row.tweetId)) rowSession.set(row.tweetId, current._id);
@@ -656,6 +666,7 @@ export default function App() {
       if (!trimmed) {
         setSearchKey(null);
         setRows([]);
+        setTotal(undefined);
       }
 
       setView(ViewMode.Search);
@@ -1301,6 +1312,7 @@ export default function App() {
                   result={result()}
                   queryError={queryError()}
                   visible={visible()}
+                  total={total()}
                   bookmarkedIds={bookmarkedIds()}
                   busy={busy()}
                   unknownAuthor={unknownAuthor()}

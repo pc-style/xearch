@@ -14,6 +14,7 @@ import { Avatar } from "./Avatar";
 import { Icon } from "./icons";
 import { compact, postDate, safeHostname } from "./format";
 import { ringAvatarUrl } from "./avatarUrl";
+import { PostEmbeds, replyText } from "./PostEmbeds";
 import type { Account } from "./Wall";
 import { parseQuery } from "../convex/lib/search";
 import { capture, redactEmail } from "./posthog";
@@ -92,7 +93,8 @@ export function PostRow(props: {
   avatarFor?: (handle: string) => string | undefined;
 }) {
   const [expanded, setExpanded] = createSignal(false);
-  const text = () => props.post.text.trim();
+  const text = () => replyText(props.post.text, props.post.replyTo).trim();
+  const hasEmbeds = () => !!(props.post.media?.length || props.post.card || props.post.quote);
   const long = () => text().length > PREVIEW_CHARS;
 
   // Linkify the full text first, then truncate the *segments*: slicing the
@@ -130,13 +132,20 @@ export function PostRow(props: {
             )}
           </Show>
         </div>
+        <Show when={props.post.replyTo && props.post.replyTo !== props.post.author}>
+          <div class="r-reply">Replying to @{props.post.replyTo}</div>
+        </Show>
         <Show
           when={text()}
           fallback={
-            // The search API carries no media field (convex/lib/results.ts),
-            // so an empty text is the only sign of a media-only post. Say so
-            // rather than render a blank row or invent a thumbnail.
-            <p class="muted-copy">Media post — its text wasn't captured. Open it on X to see it.</p>
+            // Posts indexed before the search service kept media carry
+            // none, so an empty text with nothing to embed is a media post
+            // we can't show. Say so rather than render a blank row.
+            <Show when={!hasEmbeds()}>
+              <p class="muted-copy">
+                Media post — its media wasn't captured. Open it on X to see it.
+              </p>
+            </Show>
           }
         >
           <p>
@@ -163,6 +172,7 @@ export function PostRow(props: {
             {expanded() ? "Show less" : "Read full post"}
           </button>
         </Show>
+        <PostEmbeds post={props.post} />
         <Show when={props.isOperator && props.post.links.length}>
           <div class="links">
             <For each={props.post.links.slice(0, 3)}>
@@ -401,6 +411,8 @@ export interface ResultsSectionProps {
   result: SessionResult | undefined;
   queryError: string;
   visible: ResultPost[];
+  /** How many posts the search matches in all, when the service says. */
+  total?: number;
   bookmarkedIds: Set<string>;
   busy: boolean;
   /** An `@handle` the query filters to that isn't among the imported accounts. */
@@ -440,8 +452,20 @@ export function ResultsSection(props: ResultsSectionProps) {
     props.statsForNerds &&
     (props.result?.stats || props.frontendStats);
 
-  const count = () =>
-    `${props.visible.length} ${props.visible.length === 1 ? "post" : "posts"} loaded`;
+  // "43 posts" once everything is on screen, "20 of 43 posts" before; a
+  // page from an older search service has no total, so only say what loaded.
+  const count = () => {
+    const shown = props.visible.length;
+    const total = props.total;
+
+    if (total === undefined || total < shown)
+      return `${shown} ${shown === 1 ? "post" : "posts"} loaded`;
+    const noun = total === 1 ? "post" : "posts";
+
+    return total === shown
+      ? `${total.toLocaleString()} ${noun}`
+      : `${shown.toLocaleString()} of ${total.toLocaleString()} ${noun}`;
+  };
 
   return (
     <section class="results" aria-live="polite">

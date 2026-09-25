@@ -73,6 +73,87 @@ pub struct Post {
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    /// Views and bookmarks feed the ranking prior; the app does not show them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub views: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bookmarks: Option<u32>,
+    /// The handle this post answers, when it is a reply. A reply to the
+    /// author's own post (a thread) still names the author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    /// Attached photos, videos and GIFs, in the order the post shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<Media>,
+    /// The link preview X shows under the post.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<Card>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<Quote>,
+}
+
+impl Post {
+    /// A reply to someone else. Continuing one's own thread is not.
+    #[must_use]
+    pub fn replies_to_other(&self) -> bool {
+        self.reply_to
+            .as_deref()
+            .is_some_and(|handle| !handle.eq_ignore_ascii_case(&self.author))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Photo,
+    Video,
+    Gif,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Media {
+    pub kind: MediaKind,
+    /// The photo itself, or the still shown before a video plays.
+    pub image: String,
+    /// The playable MP4 for a video or GIF.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Card {
+    pub url: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+}
+
+/// The quoted post, reduced to what its embed shows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Quote {
+    pub url: String,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    /// The first attached image, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,6 +205,9 @@ impl SearchRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
     pub rows: Vec<Post>,
+    /// Every post the query matches, on the first page only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     pub warnings: Vec<String>,

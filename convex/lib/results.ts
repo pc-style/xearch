@@ -22,6 +22,34 @@ const safeLink = z.string().check(
 
 const metric = z.number().check(z.gte(0));
 
+const pixels = z.int().check(z.gt(0), z.lte(100_000));
+
+const media = z.object({
+  kind: z.enum(["photo", "video", "gif"]),
+  image: safeLink,
+  video: z.optional(safeLink),
+  width: z.optional(pixels),
+  height: z.optional(pixels),
+  alt: z.optional(z.string().check(z.maxLength(1000))),
+});
+
+const card = z.object({
+  url: safeLink,
+  title: z.string().check(z.maxLength(300)),
+  description: z.optional(z.string().check(z.maxLength(500))),
+  domain: z.optional(z.string().check(z.maxLength(253))),
+  image: z.optional(safeLink),
+});
+
+const quote = z.object({
+  url: safeLink,
+  author: z.string().check(z.regex(/^[A-Za-z0-9_]{1,15}$/)),
+  displayName: z.optional(z.string().check(z.maxLength(100))),
+  text: z.string().check(z.maxLength(2000)),
+  createdAt: z.optional(z.number()),
+  image: z.optional(safeLink),
+});
+
 /** Wire contract for the external indexer/search service, not a corpus model. */
 export const resultPost = z.object({
   tweetId: z.string().check(z.regex(/^\d+$/)),
@@ -35,6 +63,10 @@ export const resultPost = z.object({
   links: z.array(safeLink).check(z.maxLength(10)),
   avatar: z.optional(safeLink),
   displayName: z.optional(z.string().check(z.maxLength(100))),
+  replyTo: z.optional(z.string().check(z.regex(/^[A-Za-z0-9_]{1,15}$/))),
+  media: z.optional(z.array(media).check(z.maxLength(4))),
+  card: z.optional(card),
+  quote: z.optional(quote),
 });
 
 export type ResultPost = z.infer<typeof resultPost>;
@@ -76,6 +108,7 @@ export const searchStats = z.object({
 
 export const searchResponse = z.object({
   rows: z.array(resultPost).check(z.maxLength(20)),
+  total: z.optional(stat),
   nextCursor: z.optional(z.string().check(z.maxLength(4000))),
   stats: z.optional(searchStats),
   warnings: z.optional(z.array(z.string().check(z.maxLength(500))).check(z.maxLength(10))),
