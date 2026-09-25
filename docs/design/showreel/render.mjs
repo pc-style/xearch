@@ -5,11 +5,22 @@
 //   node render.mjs encode                 re-mux existing chunks with new audio
 //
 // Each output frame averages SUB samples across a 180° shutter in linear
-// light, and FAST samples on the fastest moves, where fewer samples show as
-// stepped copies. Output goes to $OUT (default /tmp/xreel/out). $CHROME
-// overrides the browser; otherwise the newest Playwright headless shell is used.
+// light, and more on the fastest moves, where fewer samples show as stepped
+// copies. Finished chunks are named by page hash and frame range and reused,
+// so changing one range re-renders only that range. Output goes to $OUT
+// (default /tmp/xreel/out). $CHROME overrides the browser; otherwise the
+// newest Playwright headless shell is used.
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,16 +32,16 @@ const OUT = process.env.OUT ?? "/tmp/xreel/out";
 const FPS = 60,
   DUR = 15,
   SUB = Number(process.env.SUB ?? 4),
-  FAST = Number(process.env.FAST ?? 8),
   SHUTTER = 0.5;
 
-// Frame ranges that move fast enough to need FAST samples: the zoom into the
-// X, the band wipe, the whip into import, the wall speed-ramp and the burst.
+// Frame ranges that move too fast for SUB samples, with the count each needs:
+// the zoom into the X, the band wipe, the whip into import, the wall
+// speed-ramp and the burst.
 const FAST_FRAMES = [
-  [90, 116],
-  [206, 228],
-  [428, 464],
-  [738, 808],
+  [90, 116, 8],
+  [206, 228, 8],
+  [428, 464, 8],
+  [738, 808, 8],
 ];
 
 const WORKERS = Number(process.env.WORKERS ?? 2);
@@ -205,8 +216,8 @@ async function stills(times) {
 const blur = (sub) =>
   `zscale=tin=iec61966-2-1:t=linear,format=gbrpf32le,tmix=frames=${sub},select='eq(mod(n\\,${sub})\\,${sub - 1})',zscale=tin=linear:t=iec61966-2-1,format=gbrp,setpts=N/${FPS}/TB`;
 
-async function chunk(page, n, from, to, sub) {
-  const file = path.join(OUT, `chunk-${String(n).padStart(2, "0")}.mkv`);
+async function chunk(page, { file, from, to, sub }) {
+  const part = file.replace(/\.mkv$/, ".part.mkv");
 
   const ff = spawn(
     "nice",
@@ -236,13 +247,17 @@ async function chunk(page, n, from, to, sub) {
       "ultrafast",
       "-qp",
       "0",
-      file,
+      part,
     ],
     { stdio: ["pipe", "inherit", "inherit"] },
   );
 
   const done = new Promise((res, rej) =>
-    ff.on("exit", (c) => (c === 0 ? res(file) : rej(new Error(`ffmpeg ${c}`)))),
+    ff.on("exit", (c) => {
+      if (c !== 0) return rej(new Error(`ffmpeg ${c}`));
+      renameSync(part, file);
+      res(file);
+    }),
   );
 
   for (let f = from; f < to; f++) {
@@ -259,43 +274,51 @@ async function chunk(page, n, from, to, sub) {
   return done;
 }
 
-// Split the reel into ~1s chunks at the FAST_FRAMES edges, so each chunk has
-// one sample count, and let the workers pull chunks in order.
+// Split the reel into 1s chunks, cut again at the FAST_FRAMES edges so each
+// chunk has one sample count, and into 12-frame pieces inside fast ranges so
+// the workers share the expensive parts.
 function plan() {
   const total = FPS * DUR;
-  const edges = new Set([0, total, ...FAST_FRAMES.flat()]);
+
+  const page = createHash("sha1")
+    .update(readFileSync(path.join(here, "reel.html")))
+    .digest("hex")
+    .slice(0, 8);
+
+  const edges = new Set([0, total]);
 
   for (let f = 0; f < total; f += FPS) edges.add(f);
+
+  for (const [a, b] of FAST_FRAMES) for (let f = a; f < b; f += 12) edges.add(f).add(b);
   const cuts = [...edges].sort((a, b) => a - b);
 
   return cuts.slice(0, -1).map((from, i) => {
     const to = cuts[i + 1];
-    const fast = FAST_FRAMES.some(([a, b]) => from >= a && to <= b);
+    const sub = FAST_FRAMES.find(([a, b]) => from >= a && to <= b)?.[2] ?? SUB;
+    const file = path.join(OUT, `chunk-${page}-${from}-${to}-${sub}.mkv`);
 
-    return { from, to, sub: fast ? FAST : SUB };
+    return { file, from, to, sub };
   });
 }
 
 async function video() {
   const jobs = plan();
-  const cost = jobs.reduce((s, j) => s + (j.to - j.from) * j.sub, 0);
+  const todo = jobs.filter((j) => !existsSync(j.file));
+  const cost = todo.reduce((s, j) => s + (j.to - j.from) * j.sub, 0);
   const t0 = Date.now();
 
-  let next = 0,
-    done = 0;
+  let done = 0;
 
   await Promise.all(
-    Array.from({ length: WORKERS }, async (_, w) => {
+    Array.from({ length: Math.min(WORKERS, todo.length) }, async (_, w) => {
       const page = await openPage(w);
 
-      while (next < jobs.length) {
-        const n = next++;
-        const j = jobs[n];
-        await chunk(page, n, j.from, j.to, j.sub);
+      for (let j = todo.shift(); j; j = todo.shift()) {
+        await chunk(page, j);
         done += (j.to - j.from) * j.sub;
         const rate = done / ((Date.now() - t0) / 1000);
         console.log(
-          `chunk ${n + 1}/${jobs.length} (frames ${j.from}-${j.to}, ${j.sub} samples) · ${((cost - done) / rate / 60).toFixed(1)} min left`,
+          `${path.basename(j.file)} · ${((cost - done) / rate / 60).toFixed(1)} min left`,
         );
       }
 
@@ -303,12 +326,7 @@ async function video() {
     }),
   );
 
-  writeFileSync(
-    path.join(OUT, "chunks.txt"),
-    jobs
-      .map((_, n) => `file '${path.join(OUT, `chunk-${String(n).padStart(2, "0")}.mkv`)}'`)
-      .join("\n"),
-  );
+  writeFileSync(path.join(OUT, "chunks.txt"), jobs.map((j) => `file '${j.file}'`).join("\n"));
   encode();
 }
 
