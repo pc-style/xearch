@@ -554,6 +554,54 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     expect(estimate).toMatchObject({ measured: true, start: now, finish: now + 20_000 });
   });
 
+  it("samples recent completions even when their jobs were created before 401 older completions", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    // These jobs were queued first, then completed after the next 401 jobs.
+    const lateJobs: Id<"jobs">[] = [];
+
+    for (let i = 0; i < 5; i++)
+      lateJobs.push(
+        await seedJob(t, userId, {
+          input: `late-finish-${i}`,
+          kind: "live",
+          status: "queued",
+          pages: 1,
+          attemptStartedAt: now - 20_000,
+          updatedAt: now - 20_000,
+        }),
+      );
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 401; i++)
+        await ctx.db.insert("jobs", {
+          owner: userId,
+          kind: "live",
+          input: `early-finish-${i}`,
+          refresh: false,
+          status: "complete",
+          count: 0,
+          attempt: 1,
+          pages: 0,
+          warnings: [],
+          updatedAt: now - 60_000,
+        });
+    });
+
+    await t.run(async (ctx) => {
+      for (const jobId of lateJobs)
+        await ctx.db.patch(jobId, { status: "complete", updatedAt: now });
+    });
+
+    const pending = await seedJob(t, userId, { input: "live-pending", kind: "live" });
+    const result = await a.query(timeline, { now });
+    const estimate = result.entries.find((entry) => entry.jobId === pending)?.estimate;
+
+    expect(estimate).toMatchObject({ measured: true, start: now, finish: now + 20_000 });
+  });
+
   it("chains a second queued job's start to the first job's estimated finish", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);

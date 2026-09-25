@@ -177,8 +177,8 @@ function median(values: number[]): number | undefined {
 }
 
 /**
- * Up to ESTIMATE_SAMPLE_SIZE clean completed jobs per kind, newest first,
- * within a bounded recent-job scan. Durations without a claim timestamp or
+ * Up to ESTIMATE_SAMPLE_SIZE clean completed jobs per kind, most recently
+ * finished first, within a bounded completed-job scan. Durations without a claim timestamp or
  * with an observed provider wait cannot calibrate active download speed.
  */
 async function loadEstimateSample(ctx: QueryCtx): Promise<Map<Doc<"jobs">["kind"], Doc<"jobs">[]>> {
@@ -189,7 +189,9 @@ async function loadEstimateSample(ctx: QueryCtx): Promise<Map<Doc<"jobs">["kind"
 
       for await (const job of ctx.db
         .query("jobs")
-        .withIndex("by_status_and_kind", (q) => q.eq("status", "complete").eq("kind", kind))
+        .withIndex("by_status_and_kind_and_updated_at", (q) =>
+          q.eq("status", "complete").eq("kind", kind),
+        )
         .order("desc")) {
         if (++scanned > ESTIMATE_SCAN_CAP || sample.length >= ESTIMATE_SAMPLE_SIZE) break;
 
