@@ -18,8 +18,37 @@ use search_model::Post;
 /// if it had a third as much. Continuing one's own thread is not penalised.
 const REPLY_PENALTY: f64 = 1.098_612_288_668_109_8; // ln(3)
 
+/// How much less a post with almost nothing in it is worth ("lol", "💀", a
+/// bare link): as if it had a tenth as much engagement. BM25 favours short
+/// posts, and these are the shortest; anything gentler still lets "rust lol"
+/// outrank "rust compile times are fine now" under "Relevant". A viral one
+/// still ranks, as it should.
+const THIN_PENALTY: f64 = core::f64::consts::LN_10;
+
+/// Fewer words than this, with nothing attached, is a thin post.
+const THIN_WORDS: usize = 3;
+
+/// Whether a post says too little to be worth finding on its own: under
+/// [`THIN_WORDS`] words (links and @handles don't count) and no photo,
+/// video, link preview or quoted post.
+#[must_use]
+pub fn is_thin(post: &Post) -> bool {
+    let words = post
+        .body()
+        .split_whitespace()
+        .filter(|word| {
+            !word.starts_with('@')
+                && !word.starts_with("http")
+                && word.chars().any(char::is_alphanumeric)
+        })
+        .take(THIN_WORDS)
+        .count();
+    words < THIN_WORDS && post.media.is_empty() && post.card.is_none() && post.quote.is_none()
+}
+
 /// The post's quality as far as the index can know it: log-weighted
-/// engagement, less a penalty for replying to someone else. Stored in the
+/// engagement, less penalties for replying to someone else and for saying
+/// almost nothing. Stored in the
 /// `engagement` fast field.
 ///
 /// Weights follow how much each action costs the person taking it: a like
@@ -35,12 +64,13 @@ pub fn prior(post: &Post) -> f64 {
             count(post.replies).mul_add(2.0, count(post.bookmarks).mul_add(2.0, count(post.likes))),
         ),
     );
-    let penalty = if post.replies_to_other() {
+    let reply = if post.replies_to_other() {
         REPLY_PENALTY
     } else {
         0.0
     };
-    weighted.ln_1p() - penalty
+    let thin = if is_thin(post) { THIN_PENALTY } else { 0.0 };
+    weighted.ln_1p() - reply - thin
 }
 
 /// How the text match, prior and freshness are weighed against each other.
@@ -107,7 +137,7 @@ mod tests {
         Post {
             tweet_id: TweetId(1),
             author: "theo".into(),
-            text: "ssd".into(),
+            text: "fast ssd speeds".into(),
             url: "https://x.com/theo/status/1".into(),
             created_at: None,
             likes: Some(likes),
@@ -131,6 +161,29 @@ mod tests {
         let alone = prior(&post(100, None));
         assert!((prior(&post(100, Some("theo"))) - alone).abs() < 1e-9);
         assert!(prior(&post(100, Some("someone"))) < alone);
+    }
+
+    #[test]
+    fn thin_posts_say_under_three_words_with_nothing_attached() {
+        let with = |text: &str| Post {
+            text: text.into(),
+            reply_to: Some("someone".into()),
+            ..post(0, None)
+        };
+        assert!(is_thin(&with("@someone lol 💀 https://t.co/x")));
+        assert!(!is_thin(&with("@someone that is fair")));
+        let captioned = Post {
+            media: vec![search_model::Media {
+                kind: search_model::MediaKind::Photo,
+                image: "https://pbs.twimg.com/media/a.jpg".into(),
+                video: None,
+                width: None,
+                height: None,
+                alt: None,
+            }],
+            ..with("lol")
+        };
+        assert!(!is_thin(&captioned));
     }
 
     #[test]

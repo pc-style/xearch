@@ -489,7 +489,7 @@ impl IndexSink for Writer {
             self.fields.author,
             search_query::normalize_author(&post.author)?,
         );
-        document.add_text(self.fields.text, &post.text);
+        document.add_text(self.fields.text, post.body());
         document.add_text(
             self.fields.post,
             serde_json::to_string(post).map_err(storage)?,

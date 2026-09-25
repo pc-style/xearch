@@ -5,11 +5,11 @@ signals, multiplied together (added in log space). The code is
 `search/crates/ranking/src/lib.rs`; the weights were tuned by hand on a copy of
 the production index (September 25, 2026).
 
-| Signal    | What it is                                                                                   | Relevant   | Relevant + engagement |
-| --------- | -------------------------------------------------------------------------------------------- | ---------- | --------------------- |
-| Text      | Tantivy BM25, plus a phrase bonus when the searched words sit side by side                   | BM25^0.6   | BM25^0.8              |
-| Prior     | 1 + likes + 2·replies + 2·bookmarks + 3·reposts + 4·quotes; a reply to someone else counts ⅓ | prior^0.15 | prior^0.35            |
-| Freshness | Up to +15% (+10%) for a post made now, falling to a third after 30 days                      | ×1.15 max  | ×1.10 max             |
+| Signal    | What it is                                                                                                  | Relevant   | Relevant + engagement |
+| --------- | ----------------------------------------------------------------------------------------------------------- | ---------- | --------------------- |
+| Text      | Tantivy BM25, plus a phrase bonus when the searched words sit side by side                                  | BM25^0.6   | BM25^0.8              |
+| Prior     | 1 + likes + 2·replies + 2·bookmarks + 3·reposts + 4·quotes; a reply to someone else counts ⅓, a thin post ⅒ | prior^0.15 | prior^0.35            |
+| Freshness | Up to +15% (+10%) for a post made now, falling to a third after 30 days                                     | ×1.15 max  | ×1.10 max             |
 
 Queries that only filter (`@theo` on its own) have no text score, so the prior
 and freshness decide.
@@ -34,6 +34,37 @@ scale. This is Elasticsearch's recommended way to fold popularity into BM25
 (`function_score` with `field_value_factor`, `log1p` modifier and
 `boost_mode: multiply`).
 
+## Keeping quiet posts from crowding out good ones
+
+Two rules keep posts nobody engaged with out of the top unless nothing better
+matches:
+
+- **A reply's leading @handles are not searched.** They are the reply chain,
+  which X (and xearch) show as "Replying to", not words the author wrote.
+  Searching "beyang" used to return a wall of "@beyang omg." and
+  "@beyang BORB" replies; now it finds posts that say "beyang". Handles later
+  in the text still match.
+- **A thin post counts a tenth.** Under three words once links and @handles
+  are left out, with no photo, video, link preview or quote: "lol", "💀", a
+  bare link. BM25 rates these highest because they are shortest. A viral one
+  still ranks.
+
+On 150 random words from the corpus, the number of top-10 results with under
+3 engagements (likes, replies, reposts and quotes together), and how many of
+those a better-engaged match further down could have replaced:
+
+| Ranking                  | Relevant: low / avoidable | Relevant + engagement: low / avoidable |
+| ------------------------ | ------------------------- | -------------------------------------- |
+| Before (additive blend)  | 309 / 193                 | 113 / 7                                |
+| Multiplicative score     | 112 / 19                  | 102 / 10                               |
+| Plus the two rules above | 62 / 15                   | 53 / 6                                 |
+
+What remains is mostly words with fewer than 20 matches, where the top 10
+has to include quiet posts. About 2% of posts, mostly from before 2017, start
+with @handles but carry no reply metadata; they are treated as ordinary posts,
+because some of them name the handle as the subject ("@PakHei_Yeung will be
+presenting…").
+
 ## Matching
 
 - A word also matches its plural or singular (`ssd` finds "SSDs",
@@ -48,10 +79,11 @@ scale. This is Elasticsearch's recommended way to fold popularity into BM25
 
 ## What needs a reindex
 
-The prior is stored per post when it is indexed, and so are media, link cards,
-quoted posts and reply targets. Posts indexed before this change keep their
-old prior (engagement without bookmarks or the reply penalty) and have no
-embeds until the index is rebuilt from `archive/`. The index schema is
+The prior and the searched text are fixed per post when it is indexed, and so
+are media, link cards, quoted posts and reply targets. Posts indexed before
+this change keep their old prior (engagement without bookmarks or the reply
+and thin penalties), stay searchable by their reply handles and have no embeds
+until the index is rebuilt from `archive/`. The index schema is
 unchanged, so the new binary serves the old index in the meantime. Rebuild
 into a new directory and swap it in:
 

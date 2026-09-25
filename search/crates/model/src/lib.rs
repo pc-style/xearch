@@ -100,6 +100,27 @@ impl Post {
             .as_deref()
             .is_some_and(|handle| !handle.eq_ignore_ascii_case(&self.author))
     }
+
+    /// What the author wrote: a reply's text without the @handles it starts
+    /// with. Those are the reply chain, which X shows as "Replying to", not
+    /// words the author chose, so they are neither searched nor shown.
+    #[must_use]
+    pub fn body(&self) -> &str {
+        if self.reply_to.is_none() {
+            return &self.text;
+        }
+        let mut rest = self.text.trim_start();
+        while let Some(handle) = rest.strip_prefix('@') {
+            let end = handle
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(handle.len());
+            if end == 0 {
+                break;
+            }
+            rest = handle.get(end..).unwrap_or_default().trim_start();
+        }
+        rest
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -259,6 +280,22 @@ pub struct ApiStats {
 #[cfg(test)]
 mod tests {
     use super::{Post, TweetId};
+
+    #[test]
+    fn body_drops_only_a_replys_leading_handles() {
+        let mut post: Post = serde_json::from_value(serde_json::json!({
+            "tweetId": "1", "author": "a", "url": "https://x.com/a/status/1",
+            "text": "@b @c_d thanks @e", "links": []
+        }))
+        .unwrap();
+        assert_eq!(post.body(), "@b @c_d thanks @e");
+        post.reply_to = Some("b".into());
+        assert_eq!(post.body(), "thanks @e");
+        post.text = "@b".into();
+        assert_eq!(post.body(), "");
+        post.text = "@ hi".into();
+        assert_eq!(post.body(), "@ hi");
+    }
 
     #[test]
     fn tweet_id_is_compact_in_rust_and_decimal_on_wire() {

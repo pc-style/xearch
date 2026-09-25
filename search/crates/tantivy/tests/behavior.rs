@@ -392,3 +392,32 @@ fn replies_to_others_rank_below_equal_posts() {
         .collect::<Vec<_>>();
     assert_eq!(order.last().map(String::as_str), Some("1"));
 }
+
+#[test]
+fn reply_handles_are_not_searched_and_thin_posts_rank_last() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    // Only the reply chain says "beyang": not a match.
+    let mut chain = post(1, "@beyang @theo nice");
+    chain.reply_to = Some("beyang".into());
+    // Named in what the author wrote: a match.
+    let mut named = post(2, "@sqs ask beyang about it");
+    named.reply_to = Some("sqs".into());
+    // The same words, but one says almost nothing.
+    let thin = post(3, "rust lol");
+    let full = post(4, "rust compile times are fine now");
+    for post in [chain, named, thin, full] {
+        writer.upsert(&post).unwrap();
+    }
+    writer.commit().unwrap();
+    let ids = |query| {
+        all(&engine, request(query))
+            .unwrap()
+            .iter()
+            .map(|p| p.tweet_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids("beyang"), ["2"]);
+    assert_eq!(ids("rust"), ["4", "3"]);
+}
