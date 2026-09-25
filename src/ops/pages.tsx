@@ -1111,7 +1111,7 @@ export function JobsPage(props: Props) {
   const now = () => ops.now();
   const all = () => ops.jobs() ?? [];
   const active = () => all().filter((j) => isActiveJob(jobState(j, now())));
-  const failed = () => active().filter((j) => j.status === "failed");
+  const failed = () => active().filter((j) => jobState(j, now()) === "failed");
   const history = () => all().filter((j) => !isActiveJob(jobState(j, now())));
   const shown = () => sortJobs(view() === "active" ? active() : history(), now());
   const queue = () => queueInfo(ops.timeline());

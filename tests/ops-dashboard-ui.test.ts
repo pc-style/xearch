@@ -506,7 +506,7 @@ describe("jobs", () => {
     const ops = await open("jobs", {
       jobs: [
         job(1, { status: "failed", error: "a" }),
-        job(2, { status: "failed", error: "b" }),
+        job(2, { status: "partial", error: "b" }),
         job(3, { status: "running", updatedAt: Date.now() - MINUTE }),
       ],
     });
