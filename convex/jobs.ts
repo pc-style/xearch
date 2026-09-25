@@ -167,6 +167,7 @@ export const failedForRetry = query({
   args: {
     status: v.union(v.literal("failed"), v.literal("partial")),
     paginationOpts: paginationOptsValidator,
+    operatorToken: v.optional(v.string()),
   },
   returns: v.object({
     jobIds: v.array(v.id("jobs")),
@@ -174,7 +175,7 @@ export const failedForRetry = query({
     done: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    await user(ctx);
+    await requireOperator(ctx, args.operatorToken);
 
     const page = await ctx.db
       .query("jobs")

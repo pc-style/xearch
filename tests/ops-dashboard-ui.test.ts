@@ -545,6 +545,31 @@ describe("accounts", () => {
 });
 
 describe("jobs", () => {
+  it("disables Retry all failed until its batch settles", async () => {
+    let release: (() => void) | undefined;
+
+    const pending = new Promise<null>((resolve) => {
+      release = () => resolve(null);
+    });
+
+    const ops = await open(
+      "jobs",
+      { jobs: [job(1, { status: "failed", error: "provider outage" })] },
+      { mutation: () => pending },
+    );
+
+    ops.click(".sh button", "Retry all failed");
+    expect(ops.find(".sh button", "Retry all failed").hasAttribute("disabled")).toBe(true);
+    ops.click(".sh button", "Retry all failed");
+    await vi.waitFor(() => expect(ops.calls).toHaveLength(1));
+
+    release?.();
+    await vi.waitFor(() => {
+      expect(ops.find(".sh button", "Retry all failed").hasAttribute("disabled")).toBe(false);
+    });
+    expect(ops.calls).toHaveLength(1);
+  });
+
   it("retries every eligible failed job and leaves permanent failures alone", async () => {
     const ops = await open("jobs", {
       jobs: [

@@ -1145,7 +1145,7 @@ export function JobsPage(props: Props) {
           <button
             type="button"
             class="b"
-            disabled={view() !== "active"}
+            disabled={view() !== "active" || ops.retryAllBusy()}
             title="Retry every failed job that can run again"
             onClick={() => void ops.retryAll()}
           >

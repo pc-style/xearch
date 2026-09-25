@@ -74,6 +74,7 @@ function useOps(props: DashboardProps) {
   const [confirming, setConfirming] = createSignal<Confirm | null>(null);
   const [toast, setToast] = createSignal("");
   const [importKind, setImportKind] = createSignal<ImportKind>("post");
+  const [retryAllBusy, setRetryAllBusy] = createSignal(false);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   const say = (message: string) => {
@@ -193,6 +194,7 @@ function useOps(props: DashboardProps) {
     importKind,
     setImportKind,
     openSearch: props.openSearch,
+    retryAllBusy,
     retry: (job: Job, label: string) =>
       perform(
         async () => {
@@ -209,6 +211,9 @@ function useOps(props: DashboardProps) {
         () => label,
       ),
     retryAll: () => {
+      if (retryAllBusy()) return Promise.resolve(false);
+
+      setRetryAllBusy(true);
       let queued = 0;
 
       return perform(
@@ -227,6 +232,7 @@ function useOps(props: DashboardProps) {
                 {
                   status,
                   paginationOpts: { numItems: 100, cursor },
+                  ...token(),
                 },
               );
 
@@ -260,7 +266,7 @@ function useOps(props: DashboardProps) {
             throw new Error(`${queued} retries queued; ${failed} failed: ${firstError}`);
         },
         () => (queued ? `Queued ${queued} failed jobs for retry` : "No failed jobs to retry"),
-      );
+      ).finally(() => setRetryAllBusy(false));
     },
     cancel: (jobId: Id<"jobs">, label: string) =>
       perform(

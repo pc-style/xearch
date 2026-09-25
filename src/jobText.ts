@@ -193,12 +193,22 @@ export function jobKindLabel(job: Doc<"jobs">): string {
  * transient one (timeout, 5xx, rate limit) that already got its own
  * automatic backoff attempts before giving up (convex/jobs.ts `finish`).
  * Backed by `job.retryable`, written from `ProviderError.retryable`
- * (convex/lib/xmd.ts) at the moment the run stopped — never guessed from the
- * error text, which varies by provider response and is not a stable
- * contract to parse.
+ * (convex/lib/xmd.ts) at the moment the run stopped. The one legacy exception
+ * matches the known-account bulk failures from before transient 404s and
+ * partial streams were classified as retryable.
  */
 export function isPermanentFailure(job: Doc<"jobs">): boolean {
-  return (job.status === "failed" || job.status === "partial") && job.retryable === false;
+  const legacyAccountFailure =
+    job.kind === "bulk" &&
+    job.expectedUserId !== undefined &&
+    (/\b404\b/.test(job.error ?? "") ||
+      /x\.md stopped before completing the import/.test(job.error ?? ""));
+
+  return (
+    (job.status === "failed" || job.status === "partial") &&
+    job.retryable === false &&
+    !legacyAccountFailure
+  );
 }
 
 /** "HH:MM" in the viewer's own locale/timezone, for src/JobRow.tsx: a
