@@ -379,6 +379,7 @@ h1 em {
   flex-wrap: wrap;
 }
 .q {
+  position: relative;
   flex: 1 1 100%;
   min-width: 0;
   display: flex;
@@ -414,6 +415,42 @@ h1 em {
 }
 .q svg {
   color: var(--faint);
+}
+.account-suggestions {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(100%, 420px);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--field);
+  border: 1px solid var(--field-line);
+  border-radius: 5px;
+  box-shadow: 0 12px 30px #0006;
+}
+.account-suggestions button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.account-suggestions button:hover,
+.account-suggestions button[aria-selected="true"] {
+  background: var(--field-line);
+}
+.account-suggestions button span {
+  color: var(--muted);
+  font-size: 13px;
 }
 select.sort {
   background: var(--field);

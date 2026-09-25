@@ -57,6 +57,7 @@ export const list = query({
     includeDismissed: v.optional(v.boolean()),
     scope: v.optional(jobScopeValidator),
     limit: v.optional(v.number()),
+    activeFirst: v.optional(v.boolean()),
   },
   returns: v.object({
     jobs: v.array(schema.doc("jobs")),
@@ -79,6 +80,63 @@ export const list = query({
       args.limit !== undefined && Number.isFinite(args.limit) ? args.limit : JOB_FEED_LIMIT;
 
     const limit = Math.max(1, Math.min(JOB_FEED_MAX_LIMIT, Math.floor(requested)));
+
+    if (args.activeFirst) {
+      const active: Doc<"jobs">[] = [];
+      let truncated = false;
+
+      for (const status of ["queued", "running", "failed", "partial"] as const) {
+        let scanned = 0;
+
+        for await (const job of ctx.db
+          .query("jobs")
+          .withIndex("by_status", (q) => q.eq("status", status))
+          .order("desc")) {
+          if (++scanned > JOB_FEED_SCAN) {
+            truncated = true;
+            break;
+          }
+
+          if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
+
+          if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
+          active.push(job);
+
+          if (active.length >= limit) break;
+        }
+
+        if (active.length >= limit) break;
+      }
+
+      active.sort((a, b) => b._creationTime - a._creationTime);
+      const history: Doc<"jobs">[] = [];
+      let scanned = 0;
+
+      for await (const job of ctx.db.query("jobs").order("desc")) {
+        if (history.length >= limit - active.length) break;
+
+        if (++scanned > JOB_FEED_SCAN) {
+          truncated = true;
+          break;
+        }
+
+        if (!args.includeDismissed && job.dismissedAt !== undefined) continue;
+
+        if (scope === "other" && job.kind === ACCOUNT_JOB_KIND) continue;
+
+        if (
+          job.status === "queued" ||
+          job.status === "running" ||
+          job.status === "failed" ||
+          job.status === "partial"
+        )
+          continue;
+
+        history.push(job);
+      }
+
+      return { jobs: [...active, ...history], truncated };
+    }
 
     const out: Doc<"jobs">[] = [];
     let scanned = 0;

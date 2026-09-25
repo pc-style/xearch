@@ -89,6 +89,22 @@ async function insertJob(
 }
 
 describe("clearing finished runs", () => {
+  it("keeps older active failures visible when newer finished runs fill the page", async () => {
+    const { t, alice, a } = await setup();
+    const failed = await insertJob(t, alice, { input: "failed", status: "failed" });
+    const partial = await insertJob(t, alice, { input: "partial", status: "partial" });
+
+    for (let i = 0; i < 101; i++)
+      await insertJob(t, alice, { input: `finished-${i}`, status: "complete" });
+
+    const ordinary = await a.query(api.jobs.list, { limit: 100 });
+    expect(ordinary.jobs.some((job) => job._id === failed)).toBe(false);
+
+    const prioritized = await a.query(api.jobs.list, { limit: 100, activeFirst: true });
+    expect(prioritized.jobs.slice(0, 2).map((job) => job._id)).toEqual([partial, failed]);
+    expect(prioritized.jobs).toHaveLength(100);
+  });
+
   it("hides a dismissed run from the feed and the retryable count without deleting it or its receipts", async () => {
     const { t, alice, a } = await setup();
     const failed = await insertJob(t, alice, { input: "@theo one", status: "failed" });

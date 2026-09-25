@@ -106,7 +106,9 @@ function useOps(props: DashboardProps) {
     signedIn() ? { now: queryNow(), ...operatorArgs() } : "skip",
   );
 
-  const jobFeed = useStableQuery(api.jobs.list, () => (signedIn() ? { limit: 100 } : "skip"));
+  const jobFeed = useStableQuery(api.jobs.list, () =>
+    signedIn() ? { limit: 100, activeFirst: true } : "skip",
+  );
 
   const start = useMutation(api.jobs.start),
     cancel = useMutation(api.jobs.cancel),

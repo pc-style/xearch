@@ -220,6 +220,8 @@ export default function App() {
   const [busy, setBusy] = createSignal(false);
   const [accountInput, setAccountInput] = createSignal("");
   const [since, setSince] = createSignal("");
+  const [accountSuggestionsOpen, setAccountSuggestionsOpen] = createSignal(false);
+  const [activeAccountSuggestion, setActiveAccountSuggestion] = createSignal(-1);
 
   // Imports started from a result (Import from X / Fetch conversation) are
   // real x.md jobs, so their status is read live from `jobs.list`. The live
@@ -309,6 +311,16 @@ export default function App() {
   // --- Data -----------------------------------------------------------------
   const accountResults = useQuery(api.search.accounts, () => ({}));
   const accounts = () => accountResults() ?? [];
+
+  const accountSuggestions = createMemo(() => {
+    const value = draft().trim().toLowerCase();
+
+    if (value && !/^@[a-z0-9_]*$/.test(value)) return [];
+
+    return accounts()
+      .filter((account) => !value || account.handle.toLowerCase().startsWith(value.slice(1)))
+      .slice(0, 8);
+  });
 
   const accountAvatar = (handle: string) =>
     accounts().find((a) => a.handle.toLowerCase() === handle.toLowerCase())?.avatar;
@@ -1048,6 +1060,7 @@ export default function App() {
                   e.preventDefault();
 
                   if (draft().trim()) {
+                    setAccountSuggestionsOpen(false);
                     capture("search_submitted", {
                       query: redactEmail(draft().trim()),
                       sort: sort(),
@@ -1060,7 +1073,16 @@ export default function App() {
                   Search posts
                 </label>
                 <div class="row">
-                  <div class="q">
+                  <div
+                    class="q"
+                    onFocusOut={(event) => {
+                      if (
+                        !(event.relatedTarget instanceof Node) ||
+                        !event.currentTarget.contains(event.relatedTarget)
+                      )
+                        setAccountSuggestionsOpen(false);
+                    }}
+                  >
                     <Icon name="search" size={18} />
                     <input
                       id="query"
@@ -1068,20 +1090,75 @@ export default function App() {
                       type="search"
                       maxlength={300}
                       value={draft()}
-                      onInput={(e) => setDraft(e.currentTarget.value)}
+                      onInput={(e) => {
+                        setDraft(e.currentTarget.value);
+                        setActiveAccountSuggestion(-1);
+                        setAccountSuggestionsOpen(true);
+                      }}
+                      onFocus={() => setAccountSuggestionsOpen(true)}
+                      onKeyDown={(event) => {
+                        if (!accountSuggestionsOpen() || !accountSuggestions().length) return;
+
+                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                          event.preventDefault();
+                          const step = event.key === "ArrowDown" ? 1 : -1;
+                          setActiveAccountSuggestion(
+                            (index) =>
+                              (index + step + accountSuggestions().length) %
+                              accountSuggestions().length,
+                          );
+                        } else if (event.key === "Enter" && activeAccountSuggestion() >= 0) {
+                          event.preventDefault();
+                          setDraft(`@${accountSuggestions()[activeAccountSuggestion()].handle}`);
+                          setAccountSuggestionsOpen(false);
+                        } else if (event.key === "Escape") {
+                          setAccountSuggestionsOpen(false);
+                        }
+                      }}
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-controls="account-suggestions"
+                      aria-expanded={
+                        accountSuggestionsOpen() && accountSuggestions().length > 0
+                          ? "true"
+                          : "false"
+                      }
+                      aria-activedescendant={
+                        activeAccountSuggestion() >= 0 && accountSuggestionsOpen()
+                          ? `account-suggestion-${activeAccountSuggestion()}`
+                          : undefined
+                      }
                       placeholder={
                         scopedAccount()
                           ? `e.g. GPUs in @${scopedAccount()!.handle}’s posts`
                           : "e.g. local-first software or @handle"
                       }
                       autocomplete="off"
-                      list="accounts"
                     />
-                    <datalist id="accounts">
-                      <For each={accounts()} keyed={(a) => a._id}>
-                        {(a) => <option value={`@${a().handle}`}>{a().name}</option>}
-                      </For>
-                    </datalist>
+                    <Show when={accountSuggestionsOpen() && accountSuggestions().length > 0}>
+                      <div id="account-suggestions" class="account-suggestions" role="listbox">
+                        <For each={accountSuggestions()}>
+                          {(account, index) => (
+                            <button
+                              id={`account-suggestion-${index()}`}
+                              type="button"
+                              role="option"
+                              aria-selected={
+                                activeAccountSuggestion() === index() ? "true" : "false"
+                              }
+                              onClick={() => {
+                                setDraft(`@${account.handle}`);
+                                document.getElementById("query")?.focus();
+                                setAccountSuggestionsOpen(false);
+                              }}
+                            >
+                              <strong>@{account.handle}</strong>
+                              <span>{account.name}</span>
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
                   </div>
                   <select
                     class="sort"
