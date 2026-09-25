@@ -205,6 +205,35 @@ function useOps(props: DashboardProps) {
           updatedAt: Date.now(),
         }));
       }, label),
+    retryAll: (jobs: Job[]) =>
+      perform(async () => {
+        let failed = 0;
+        let firstError = "";
+
+        for (const job of jobs) {
+          try {
+            await retry({ jobId: job._id, ...token() });
+          } catch (error) {
+            failed++;
+            firstError ||= describeError(error);
+            continue;
+          }
+
+          patchJob(job._id, (j) => ({
+            ...j,
+            status: "queued",
+            error: undefined,
+            retryable: undefined,
+            phase: "Retry queued",
+            updatedAt: Date.now(),
+          }));
+        }
+
+        if (failed > 0)
+          throw new Error(
+            `${jobs.length - failed} retries queued; ${failed} failed: ${firstError}`,
+          );
+      }, `Queued ${jobs.length} failed jobs for retry`),
     cancel: (jobId: Id<"jobs">, label: string) =>
       perform(async () => {
         await cancel({ jobId, ...token() });

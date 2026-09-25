@@ -542,6 +542,13 @@ export class XmdClient {
 
       const message = Match.value(response.status).pipe(
         Match.when(401, () => "x.md rejected the API key. Check X_MD_API_KEY on the backend."),
+        Match.when(404, () =>
+          operation === "bulk" || operation === "history"
+            ? "x.md could not fetch this account's history (404). The account may be available again; retry the import."
+            : operation === "post"
+              ? "x.md could not find this post or thread (404). Retrying the same request will not help."
+              : `x.md could not finish this request (404, ${code}).`,
+        ),
         Match.when(
           429,
           () => "x.md rate limit reached. The job will retry after the provider's delay.",
@@ -556,7 +563,8 @@ export class XmdClient {
           code,
           message,
           retryDelay(response.headers.get("Retry-After")),
-          [408, 429, 500, 502, 503, 504].includes(response.status),
+          [408, 429, 500, 502, 503, 504].includes(response.status) ||
+            (response.status === 404 && (operation === "bulk" || operation === "history")),
           problem ? { error: problem, httpStatus: response.status } : undefined,
           readThrottle("xmd", operation, response.status, response.headers, problem),
         ),
@@ -679,7 +687,7 @@ export class XmdClient {
           "partial_import",
           "x.md stopped before completing the import. Only acknowledged captures are retained; retry to continue.",
           0,
-          false,
+          true,
           item,
         );
 

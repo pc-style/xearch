@@ -654,7 +654,16 @@ export const retry = mutation({
     // way on every attempt — src/JobRow.tsx already hides the Retry button
     // for these, but this is the actual boundary: a repeat request against a
     // permanent failure spends another provider call to learn nothing new.
-    if ((job.status === "failed" || job.status === "partial") && job.retryable === false)
+    const legacyAccountFailure =
+      job.kind === "bulk" &&
+      (/\b404\b/.test(job.error ?? "") ||
+        /x\.md stopped before completing the import/.test(job.error ?? ""));
+
+    if (
+      (job.status === "failed" || job.status === "partial") &&
+      job.retryable === false &&
+      !legacyAccountFailure
+    )
       throw new ConvexError("x.md can't fetch this. Retrying will not change the result.");
 
     for (const status of ["queued", "running"] as const) {
@@ -697,6 +706,11 @@ export const retry = mutation({
     // provider's own reset/retry-after time would just fail the same way
     // again, so there is nothing to gain from firing this any sooner.
     await ctx.scheduler.runAfter(Math.max(0, readyAt - now), internal.importer.run, { jobId });
+    await capturePostHog(ctx, {
+      distinctId: job.owner,
+      event: "job_retried",
+      properties: { job_id: jobId, kind: job.kind, origin: job.origin ?? "manual" },
+    });
 
     return null;
   },

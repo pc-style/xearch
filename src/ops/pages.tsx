@@ -1112,6 +1112,7 @@ export function JobsPage(props: Props) {
   const all = () => ops.jobs() ?? [];
   const active = () => all().filter((j) => isActiveJob(jobState(j, now())));
   const failed = () => active().filter((j) => jobState(j, now()) === "failed");
+  const retryableFailed = () => failed().filter(canRetry);
   const history = () => all().filter((j) => !isActiveJob(jobState(j, now())));
   const shown = () => sortJobs(view() === "active" ? active() : history(), now());
   const queue = () => queueInfo(ops.timeline());
@@ -1142,6 +1143,15 @@ export function JobsPage(props: Props) {
               History<span class="n">{history().length}</span>
             </button>
           </div>
+          <button
+            type="button"
+            class="b"
+            disabled={view() !== "active" || retryableFailed().length === 0}
+            title="Retry every failed job that can run again"
+            onClick={() => void ops.retryAll(retryableFailed())}
+          >
+            Retry all failed
+          </button>
           <button
             type="button"
             class="b"

@@ -362,7 +362,11 @@ export function jobTarget(job: Job): JobTarget {
 export const canRetry = (job: Job) =>
   !isHistoryWindow(job) &&
   (job.status === "cancelled" ||
-    ((job.status === "failed" || job.status === "partial") && job.retryable !== false));
+    ((job.status === "failed" || job.status === "partial") &&
+      (job.retryable !== false ||
+        (job.kind === "bulk" && /\b404\b/.test(job.error ?? "")) ||
+        (job.kind === "bulk" &&
+          /x\.md stopped before completing the import/.test(job.error ?? "")))));
 
 /** "Run again" starts the same request fresh through `jobs.start`. */
 export const canRerun = (job: Job) => job.status === "complete" && !isHistoryWindow(job);

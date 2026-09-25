@@ -545,6 +545,64 @@ describe("accounts", () => {
 });
 
 describe("jobs", () => {
+  it("retries every eligible failed job and leaves permanent failures alone", async () => {
+    const ops = await open("jobs", {
+      jobs: [
+        job(1, {
+          kind: "bulk",
+          status: "failed",
+          retryable: false,
+          error: "x.md could not finish this request (404, not_found).",
+        }),
+        job(2, { kind: "post", status: "failed", retryable: false, error: "x.md 404" }),
+        job(3, {
+          kind: "bulk",
+          status: "failed",
+          retryable: false,
+          error: "x.md stopped before completing the import.",
+        }),
+      ],
+    });
+
+    ops.click(".sh button", "Retry all failed");
+    await ops.settle();
+
+    expect(ops.calls).toEqual([
+      { name: "jobs:retry", args: { jobId: jobId(1) } },
+      { name: "jobs:retry", args: { jobId: jobId(3) } },
+    ]);
+    expect(ops.find(`tr[data-job=${jobId(1)}]`).textContent).toContain("Waiting");
+    expect(ops.find(`tr[data-job=${jobId(3)}]`).textContent).toContain("Waiting");
+    expect(ops.find(`tr[data-job=${jobId(2)}]`).textContent).toContain("x.md 404");
+  });
+
+  it("keeps retrying later failed jobs when one retry is rejected", async () => {
+    const ops = await open(
+      "jobs",
+      {
+        jobs: [
+          job(1, { status: "failed", error: "first" }),
+          job(2, { status: "failed", error: "second" }),
+          job(3, { status: "failed", error: "third" }),
+        ],
+      },
+      {
+        mutation: (name, args) =>
+          name === "jobs:retry" && args.jobId === jobId(2)
+            ? Promise.reject(new Error("Already active"))
+            : Promise.resolve(null),
+      },
+    );
+
+    ops.click(".sh button", "Retry all failed");
+    await ops.settle();
+
+    expect(ops.calls.map((call) => call.args.jobId)).toEqual([jobId(1), jobId(2), jobId(3)]);
+    expect(ops.find(`tr[data-job=${jobId(1)}]`).textContent).toContain("Waiting");
+    expect(ops.find(`tr[data-job=${jobId(2)}]`).textContent).toContain("second");
+    expect(ops.find(`tr[data-job=${jobId(3)}]`).textContent).toContain("Waiting");
+    expect(ops.find(".toast").textContent).toContain("2 retries queued; 1 failed: Already active");
+  });
   it("measures a finished job's run time from its attempt, not from when it was queued", async () => {
     const now = Date.now();
 
