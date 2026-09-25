@@ -6,6 +6,34 @@ import schema from "../convex/schema";
 const modules = import.meta.glob("../convex/**/*.ts");
 
 describe("worker job priority", () => {
+  it("keeps creation FIFO when a due delayed job precedes ready-now discovered jobs", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
+    const insert = (input: string, readyAt?: number) =>
+      t.run((ctx) =>
+        ctx.db.insert("jobs", {
+          owner,
+          kind: "bulk",
+          input,
+          origin: "discovered",
+          refresh: false,
+          status: "queued",
+          count: 0,
+          attempt: 0,
+          warnings: [],
+          updatedAt: Date.now(),
+          readyAt,
+        }),
+      );
+
+    const older = await insert("older", Date.now() - 1000);
+
+    for (let i = 0; i < 100; i++) await insert(`newer-${i}`);
+
+    expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(older);
+  });
+
   it("claims due manual jobs before older history windows, FIFO within each group", async () => {
     const t = convexTest(schema, modules);
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));

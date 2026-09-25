@@ -79,15 +79,24 @@ export const claimNext = internalMutation({
 
     const now = Date.now();
 
-    // Old jobs have no origin and are manual. The readyAt range excludes
-    // delayed jobs; among due rows, original creation order wins.
+    // Old jobs have no origin and are manual. Jobs without readyAt share an
+    // index range ordered by creation time; only delayed due jobs need a scan.
     const firstDue = async (origin: Doc<"jobs">["origin"]) => {
-      let oldest: Doc<"jobs"> | null = null;
+      let oldest = await ctx.db
+        .query("jobs")
+        .withIndex("by_status_and_origin_and_ready_at", (q) =>
+          q.eq("status", "queued").eq("origin", origin).eq("readyAt", undefined),
+        )
+        .first();
 
       for await (const job of ctx.db
         .query("jobs")
         .withIndex("by_status_and_origin_and_ready_at", (q) =>
-          q.eq("status", "queued").eq("origin", origin).lte("readyAt", now),
+          q
+            .eq("status", "queued")
+            .eq("origin", origin)
+            .gt("readyAt", undefined)
+            .lte("readyAt", now),
         )) {
         if (oldest === null || job._creationTime < oldest._creationTime) oldest = job;
       }
