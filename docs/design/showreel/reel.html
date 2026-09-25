@@ -1,0 +1,1107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>xearch — motion reel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,100..1000&display=block" />
+<style>
+:root {
+  --bg: #080808; --text: #e9e7e3; --muted: #b3b0ab; --faint: #8b8883; --line: #292827;
+  --field: #0d0d0d; --field-line: #42403c; --accent: #ffc99b; --ink: #201a15;
+  --sans: "DM Sans", sans-serif; --mono: "DM Mono", monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 1920px; height: 1080px; background: #000; overflow: hidden; }
+#stage {
+  position: relative; width: 1920px; height: 1080px; overflow: hidden;
+  background: var(--bg); color: var(--text); font-family: var(--sans);
+  -webkit-font-smoothing: antialiased; font-optical-sizing: auto;
+}
+#cam, .scene, .fill { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+.scene { visibility: hidden; }
+.a { position: absolute; left: 0; top: 0; }
+svg { overflow: visible; }
+.mono { font-family: var(--mono); text-transform: uppercase; letter-spacing: .22em; white-space: nowrap; }
+.kick { font-size: 20px; color: var(--accent); }
+.acc { color: var(--accent); }
+.mask { display: inline-block; overflow: hidden; vertical-align: top; padding: 0 .06em .14em; margin: 0 -.06em -.14em; }
+.mask > span { display: inline-block; }
+.head { font-size: 132px; font-weight: 600; letter-spacing: -.055em; line-height: .95; white-space: nowrap; }
+.av {
+  border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none;
+  color: #1a1511; font-weight: 600; letter-spacing: -.02em;
+}
+.num { font-variant-numeric: tabular-nums; }
+
+/* 1 · mark */
+#s1 svg { position: absolute; left: 0; top: 0; }
+
+/* 2 · they said it */
+#s2 { background: var(--accent); }
+.said-row { position: absolute; left: 0; white-space: nowrap; color: #1a1511; font-weight: 500; letter-spacing: -.02em; }
+.s2line {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: .2em;
+  font-size: 250px; letter-spacing: -.055em; line-height: 1; color: #0a0807;
+}
+.s2line .mask { text-align: center; }
+.band { position: absolute; left: -540px; width: 3000px; background: #080808; }
+
+/* 3 · search */
+#s3 { perspective: 1600px; }
+#s3-in { transform-origin: 50% 40%; }
+.hero { font-size: 250px; font-weight: 600; letter-spacing: -.055em; line-height: .92; color: var(--accent); white-space: nowrap; }
+.hero .ch { display: inline-block; }
+#s3-row { width: 1260px; height: 96px; }
+#s3-field { position: absolute; left: 0; top: 0; width: 1040px; height: 96px; border-radius: 12px; }
+#s3-fill { position: absolute; inset: 0; background: var(--field); border-radius: 12px; }
+#s3-outline { position: absolute; left: 0; top: 0; }
+#s3-icon { position: absolute; left: 32px; top: 31px; color: var(--faint); }
+#s3-typed { position: absolute; left: 88px; top: 0; line-height: 96px; font-size: 34px; white-space: pre; }
+#s3-typed span { display: inline-block; }
+#s3-caret { position: absolute; top: 27px; width: 3px; height: 42px; background: var(--accent); border-radius: 2px; }
+#s3-btn {
+  position: absolute; left: 1060px; top: 0; width: 200px; height: 96px; border-radius: 12px;
+  background: var(--accent); color: var(--ink); font-size: 32px; font-weight: 500;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+#s3-ripple { position: absolute; left: 50%; top: 50%; border-radius: 50%; background: #fff; }
+#s3-meta { font-size: 22px; color: var(--muted); }
+.res { position: absolute; left: 0; width: 1260px; height: 156px; display: flex; gap: 22px; padding-top: 26px; transform-origin: 50% 0; }
+.res .body { flex: 1; min-width: 0; }
+.res .hd { font-size: 23px; color: var(--muted); white-space: nowrap; }
+.res .hd b { color: var(--text); font-weight: 600; margin-right: 8px; }
+.res .tx { font-size: 30px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.res mark { position: relative; background: none; color: inherit; padding: 0 4px; margin: 0 -2px; }
+.res mark i { position: absolute; inset: 2px 0; background: #ffc99b2e; border-radius: 5px; transform-origin: 0 50%; }
+.res mark span { position: relative; }
+.res .acts { display: flex; align-items: center; gap: 34px; margin-top: 14px; font-size: 20px; color: var(--faint); }
+.res .acts span { display: inline-flex; gap: 9px; align-items: center; }
+.res .acts .open { margin-left: auto; gap: 7px; }
+.res .sep { position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); transform-origin: 0 0; }
+
+/* 4 · import */
+.odo { font-size: 250px; font-weight: 200; letter-spacing: -.04em; line-height: 1; color: var(--text); display: flex; }
+.odo .col { height: 1em; overflow: hidden; }
+.odo .col div { display: flex; flex-direction: column; }
+.odo .col span { height: 1em; text-align: center; }
+.bar { position: absolute; bottom: 0; border-radius: 4px 4px 0 0; }
+#s4-scan { width: 2px; }
+#s4-scan i { position: absolute; left: -1px; bottom: 0; width: 4px; background: linear-gradient(to top, var(--accent), #ffc99b00); }
+#s4-scan b { position: absolute; left: -60px; width: 120px; text-align: center; font-weight: 500; font-size: 17px; color: var(--accent); }
+.tick { position: absolute; font-size: 16px; color: var(--faint); transform: translateX(-50%); }
+#s4-acct { display: flex; align-items: center; gap: 26px; }
+#s4-acct .who { font-size: 42px; font-weight: 600; letter-spacing: -.02em; }
+#s4-acct .st { font-size: 16px; color: var(--faint); margin-top: 6px; }
+#s4-count { font-size: 104px; font-weight: 300; letter-spacing: -.04em; line-height: 1; white-space: nowrap; }
+#s4-count small { font-size: 32px; font-weight: 400; letter-spacing: 0; color: var(--muted); margin-left: 14px; }
+.line { position: absolute; height: 3px; border-radius: 2px; }
+
+/* 5 · read */
+#s5 { perspective: 1500px; }
+#s5-in { perspective: 1800px; transform-origin: 50% 50%; }
+.card { position: absolute; border: 1px solid var(--line); background: var(--field); border-radius: 18px; }
+#s5-card { width: 760px; height: 400px; padding: 38px 40px; }
+#s5-card .hd { display: flex; gap: 18px; align-items: center; font-size: 25px; color: var(--muted); }
+#s5-card .hd b { color: var(--text); font-weight: 600; }
+#s5-card .tx { font-size: 33px; line-height: 1.32; margin-top: 24px; }
+#s5-link { position: relative; display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 30px; color: var(--accent); padding: 2px 0 10px; }
+#s5-link .hl { position: absolute; inset: -4px -12px 2px; border-radius: 10px; background: #ffc99b24; }
+#s5-under { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: var(--accent); }
+#s5-card .acts { position: absolute; left: 40px; bottom: 34px; display: flex; gap: 34px; font-size: 20px; color: var(--faint); }
+#s5-card .acts span { display: inline-flex; gap: 9px; align-items: center; }
+#s5-panel { width: 780px; height: 640px; padding: 44px 48px; overflow: hidden; background: #0e0d0c; transform-origin: 0 50%; }
+#s5-panel .top { display: flex; align-items: center; gap: 14px; font-size: 18px; color: var(--muted); }
+#s5-panel .top i { width: 26px; height: 26px; border-radius: 7px; background: var(--accent); }
+#s5-panel .top .mono { letter-spacing: .12em; }
+#s5-panel .top span:last-child { margin-left: auto; color: var(--faint); }
+#s5-panel h2 { font-size: 56px; font-weight: 600; letter-spacing: -.04em; line-height: 1.02; margin-top: 30px; }
+#s5-panel .by { font-size: 21px; color: var(--faint); margin-top: 14px; }
+#s5-panel .rule { height: 1px; background: var(--line); margin-top: 26px; transform-origin: 0 0; }
+.pl { position: absolute; left: 48px; height: 36px; }
+.pl .sk { position: absolute; left: 0; top: 11px; height: 14px; border-radius: 7px; background: #1e1d1b; transform-origin: 0 50%; }
+.pl .ln { position: absolute; left: 0; top: 0; font-size: 21px; line-height: 36px; color: var(--muted); white-space: nowrap; }
+#s5-beam { position: absolute; left: 0; width: 780px; height: 2px; background: var(--accent); box-shadow: 0 0 28px 6px #ffc99b55; }
+#s5-beam i { position: absolute; left: 0; right: 0; bottom: 2px; height: 140px; background: linear-gradient(to top, #ffc99b1c, #ffc99b00); }
+
+/* 6 · wall */
+#s6-view { perspective: 1500px; perspective-origin: 50% 42%; }
+#s6-plane { width: 2600px; height: 3000px; left: -340px; top: -960px; transform-origin: 1300px 1500px; }
+.wcol { position: absolute; top: 0; }
+.wcard { width: 340px; border: 1px solid var(--line); background: var(--field); border-radius: 12px; padding: 20px 22px; display: flex; flex-direction: column; justify-content: space-between; }
+.wcard p { font-size: 22px; line-height: 1.42; color: var(--text); }
+.wcard .cm { display: flex; align-items: center; gap: 10px; font-size: 16px; color: var(--faint); }
+.wcard .cm b { color: var(--muted); font-weight: 500; }
+.wcard .cm .n { margin-left: auto; display: flex; gap: 14px; }
+.wcard .cm .n span { display: inline-flex; gap: 5px; align-items: center; }
+#s6-scrim { background: linear-gradient(to top, #080808f2 0%, #080808cc 26%, #08080800 55%), radial-gradient(ellipse 80% 70% at 50% 45%, #08080800 40%, #080808c0 100%); }
+.pt { position: absolute; left: 0; top: 0; border-radius: 50%; }
+
+/* 7 · wordmark */
+#s7-word { font-size: 236px; font-weight: 600; letter-spacing: -.045em; line-height: 1; white-space: nowrap; display: flex; align-items: baseline; }
+#s7-word .ch { display: inline-block; color: var(--text); -webkit-background-clip: text; background-clip: text; }
+#s7-dot { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); }
+#s7-tag { font-size: 50px; font-weight: 500; letter-spacing: -.025em; white-space: nowrap; color: var(--muted); }
+#s7-foot { font-size: 19px; color: var(--faint); }
+
+/* fx + hud */
+#flash { background: #ffe9d6; opacity: 0; mix-blend-mode: screen; }
+#vig { background: radial-gradient(ellipse 72% 72% at 50% 50%, #0000 55%, #0000008c 100%); }
+#grain { opacity: .028; }
+#hud { font-family: var(--mono); font-size: 14px; letter-spacing: .2em; text-transform: uppercase; color: var(--faint); }
+#hud > div { position: absolute; white-space: nowrap; }
+.crop { width: 18px; height: 18px; border-color: currentColor; border-style: solid; border-width: 0; }
+#beats { display: flex; align-items: flex-end; height: 18px; gap: 5px; }
+#beats i { width: 3px; background: currentColor; border-radius: 1px; }
+#beats i.bar { margin-left: 7px; }
+#fade { background: #000; opacity: 0; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="cam">
+    <section id="s1" class="scene">
+      <svg width="1920" height="1080" viewBox="-960 -540 1920 1080">
+        <defs>
+          <filter id="glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="26" /></filter>
+        </defs>
+        <g id="s1-speed" stroke="#ffc99b" stroke-width="3" stroke-linecap="round"></g>
+        <circle id="s1-ring" r="40" fill="none" stroke="#ffc99b" />
+        <circle id="s1-ring0" r="40" fill="none" stroke="#ffc99b" />
+        <g id="s1-x">
+          <path id="s1-tile" pathLength="1" fill="#0f0e0d" fill-opacity="0" stroke="#ffc99b" stroke-width="2.5"
+            d="M0 -280 H158 A122 122 0 0 1 280 -158 V158 A122 122 0 0 1 158 280 H-158 A122 122 0 0 1 -280 158 V-158 A122 122 0 0 1 -158 -280 Z" />
+          <g id="s1-glow" filter="url(#glow)" opacity=".55"></g>
+          <g id="s1-r" style="mix-blend-mode:screen"></g>
+          <g id="s1-c" style="mix-blend-mode:screen"></g>
+          <g id="s1-main"></g>
+          <circle id="s1-dot" r="0" fill="#ffc99b" />
+        </g>
+      </svg>
+    </section>
+
+    <section id="s2" class="scene">
+      <div id="s2-rows" class="fill"></div>
+      <div id="s2-a" class="fill"></div>
+      <div id="s2-b" class="fill"></div>
+      <div id="s2-b1" class="band"></div>
+      <div id="s2-b2" class="band"></div>
+    </section>
+
+    <section id="s3" class="scene">
+      <div id="s3-in" class="fill">
+        <div id="s3-head" class="a hero"></div>
+        <div id="s3-row" class="a">
+          <div id="s3-field">
+            <div id="s3-fill"></div>
+            <svg id="s3-outline" width="1040" height="96"><path pathLength="1" fill="none" stroke="#ffc99b" stroke-width="1.6"
+              d="M0.8 48 V12.8 A12 12 0 0 1 12.8 0.8 H1027.2 A12 12 0 0 1 1039.2 12.8 V83.2 A12 12 0 0 1 1027.2 95.2 H12.8 A12 12 0 0 1 0.8 83.2 Z" /></svg>
+            <svg id="s3-icon" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle pathLength="1" cx="11" cy="11" r="8" /><path pathLength="1" d="m21 21-4.34-4.34" /></svg>
+            <div id="s3-typed"></div>
+            <div id="s3-caret"></div>
+          </div>
+          <div id="s3-btn"><div id="s3-ripple"></div><span>Xearch</span></div>
+        </div>
+        <div id="s3-meta" class="a"><span class="num" id="s3-n">0</span> posts loaded</div>
+        <div id="s3-list" class="a" style="perspective:1100px"></div>
+      </div>
+    </section>
+
+    <section id="s4" class="scene">
+      <div id="s4-in" class="fill">
+        <div id="s4-kick" class="a mono kick">Import — via x.md</div>
+        <div id="s4-head" class="a head"></div>
+        <div id="s4-acct" class="a"></div>
+        <div id="s4-count" class="a num"><span id="s4-n">0</span><small>posts imported</small></div>
+        <div id="s4-yl" class="a mono" style="font-size:18px;color:var(--faint)">reaching back to</div>
+        <div id="s4-year" class="a odo num"></div>
+        <div id="s4-bars" class="a" style="left:160px;top:940px"></div>
+        <div id="s4-ticks" class="a mono" style="left:0;top:962px;letter-spacing:.12em"></div>
+        <div id="s4-base" class="line" style="left:160px;top:939px;width:1600px;transform-origin:100% 50%"></div>
+        <div id="s4-scan" class="a"><i></i><b class="mono"></b></div>
+      </div>
+    </section>
+
+    <div id="morph" class="line" style="background:var(--accent)"></div>
+
+    <section id="s5" class="scene">
+      <div id="s5-in" class="fill">
+        <div id="s5-card" class="card" style="left:160px;top:190px"></div>
+        <svg id="s5-conn" class="a" width="1920" height="1080">
+          <path pathLength="1" fill="none" stroke="#ffc99b" stroke-width="2.5" stroke-linecap="round" />
+          <circle r="7" fill="#ffc99b" /><circle r="7" fill="#ffc99b" />
+        </svg>
+        <div id="s5-panel" class="card" style="left:980px;top:150px"></div>
+        <div id="s5-kick" class="a mono kick" style="left:160px;top:792px">Read — via firecrawl</div>
+        <div id="s5-head" class="a head" style="left:160px;top:830px;font-size:112px"></div>
+        <div id="s5-ripple" class="a" style="border:2px solid var(--accent);border-radius:50%"></div>
+        <svg id="s5-cursor" class="a" width="40" height="40" viewBox="0 0 24 24">
+          <path d="M4.2 2.6 20 11.4c.7.4.6 1.4-.1 1.6l-6.6 1.9-3 6.2c-.3.7-1.3.6-1.5-.1L3 3.6c-.2-.7.5-1.3 1.2-1z" fill="#f4f2ee" stroke="#080808" stroke-width="1.3" stroke-linejoin="round" />
+        </svg>
+      </div>
+    </section>
+
+    <section id="s6" class="scene">
+      <div id="s6-view" class="fill"><div id="s6-plane" class="a"></div></div>
+      <div id="s6-scrim" class="fill"></div>
+      <div id="s6-kick" class="a mono kick" style="left:160px;top:728px">The wall</div>
+      <div id="s6-h" class="a head" style="left:160px;top:768px;font-size:120px"></div>
+      <div id="s6-parts" class="fill"></div>
+      <div id="s6-dot" class="pt" style="background:var(--accent)"></div>
+    </section>
+
+    <section id="s7" class="scene">
+      <svg class="a" width="1920" height="1080" viewBox="-960 -540 1920 1080"><circle id="s7-ring" r="30" fill="none" stroke="#ffc99b" /></svg>
+      <div id="s7-parts" class="fill"></div>
+      <div id="s7-word" class="a"></div>
+      <div id="s7-dot" class="a"></div>
+      <div id="s7-tag" class="a"></div>
+      <div id="s7-foot" class="a mono">search posts · import histories · read the links</div>
+    </section>
+  </div>
+
+  <div id="flash" class="fill"></div>
+  <div id="vig" class="fill"></div>
+  <div id="grain" class="fill"></div>
+  <div id="hud" class="fill">
+    <div id="hud-tl" style="left:64px;top:52px">Xearch <span style="opacity:.55">/ motion reel</span></div>
+    <div id="hud-tr" style="right:64px;top:52px"><span id="hud-n" class="num">01</span><span style="opacity:.55">/07</span>&nbsp;&nbsp;<span id="hud-name">Mark</span></div>
+    <div id="hud-bl" style="left:64px;bottom:50px" class="num">00:00:00:00</div>
+    <div id="hud-br" style="right:64px;bottom:50px"><div id="beats"></div></div>
+    <div class="crop" style="left:36px;top:36px;border-left-width:1.5px;border-top-width:1.5px"></div>
+    <div class="crop" style="right:36px;top:36px;border-right-width:1.5px;border-top-width:1.5px"></div>
+    <div class="crop" style="left:36px;bottom:36px;border-left-width:1.5px;border-bottom-width:1.5px"></div>
+    <div class="crop" style="right:36px;bottom:36px;border-right-width:1.5px;border-bottom-width:1.5px"></div>
+  </div>
+  <div id="fade" class="fill"></div>
+</div>
+
+<script>
+// Every property below is a pure function of time t (seconds), so any frame
+// renders identically on its own; render.mjs samples it for motion blur.
+const BPM = 128, B = 60 / BPM, DUR = 15, FPS = 60;
+const bt = (n) => n * B;
+const clamp = (x, a = 0, b = 1) => (x < a ? a : x > b ? b : x);
+const lerp = (a, b, t) => a + (b - a) * t;
+const P = (t, a, b) => clamp((t - a) / (b - a));
+const imp = (t, t0, k) => (t < t0 ? 0 : Math.exp(-(t - t0) * k));
+function bezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const sx = (u) => ((ax * u + bx) * u + cx) * u, sy = (u) => ((ay * u + by) * u + cy) * u;
+  return (x) => {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    let lo = 0, hi = 1, u = x;
+    for (let i = 0; i < 40; i++) { if (sx(u) < x) lo = u; else hi = u; u = (lo + hi) / 2; }
+    return sy(u);
+  };
+}
+const E = {
+  app: bezier(0.23, 1, 0.32, 1), // the app's own --ease
+  io: bezier(0.65, 0, 0.35, 1),
+  oExpo: (x) => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * x)),
+  iExpo: (x) => (x <= 0 ? 0 : Math.pow(2, 10 * x - 10)),
+  oCubic: (x) => 1 - (1 - x) ** 3,
+  iCubic: (x) => x ** 3,
+  iQuart: (x) => x ** 4,
+};
+// damped spring step response, dt in seconds
+const spr = (dt, w = 16, z = 0.45) => {
+  if (dt <= 0) return 0;
+  const wd = w * Math.sqrt(1 - z * z);
+  return 1 - Math.exp(-z * w * dt) * (Math.cos(wd * dt) + ((z * w) / wd) * Math.sin(wd * dt));
+};
+function rng(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const hash = (s) => [...s].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7);
+const mix = (a, b, t) => {
+  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  return `rgb(${pa.map((v, i) => Math.round(lerp(v, pb[i], t))).join(",")})`;
+};
+const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, cls, parent, html) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html != null) e.innerHTML = html;
+  if (parent) parent.appendChild(e);
+  return e;
+};
+const vis = (e, on) => { e.style.visibility = on ? "visible" : "hidden"; };
+const att = (e, o) => { for (const k in o) e.setAttribute(k, o[k]); };
+
+const ICON = {
+  up: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+  heart: '<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/>',
+  reply: '<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/>',
+  repost: '<path d="m2 9 3-3 3 3"/><path d="M13 18H7a2 2 0 0 1-2-2V6"/><path d="m22 15-3 3-3-3"/><path d="M11 6h6a2 2 0 0 1 2 2v10"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+};
+const icon = (n, s, w = 1.75) =>
+  `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${ICON[n]}</svg>`;
+const AVC = [["#ffc99b", "#c68a58"], ["#a8c69a", "#6b8b5e"], ["#f0b27a", "#b3703a"], ["#d6d1c9", "#8b8883"], ["#e6aaa1", "#a4645c"], ["#abbfd1", "#6a8197"], ["#cdbbe2", "#8a76a5"]];
+const avatar = (handle, size) => {
+  const [a, b] = AVC[hash(handle) % AVC.length];
+  return `<div class="av" style="width:${size}px;height:${size}px;font-size:${size * 0.36}px;background:radial-gradient(circle at 32% 28%, ${a}, ${b})">${handle.slice(0, 2).toUpperCase()}</div>`;
+};
+const maskWords = (parent, words, cls = "") =>
+  words.map((w) => {
+    const m = el("span", "mask " + cls, parent);
+    const s = el("span", "", m, w);
+    parent.append(" ");
+    return s;
+  });
+const reveal = (spans, t, t0, step, dur = 0.55) =>
+  spans.forEach((s, i) => {
+    const p = E.app(P(t, t0 + i * step, t0 + i * step + dur));
+    s.style.transform = `translateY(${(1 - p) * 108}%)`;
+  });
+const hide = (spans, t, t0, step, dur = 0.45) =>
+  spans.forEach((s, i) => {
+    const p = E.iCubic(P(t, t0 + i * step, t0 + i * step + dur));
+    if (p > 0) s.style.transform = `translateY(${-p * 108}%)`;
+  });
+
+/* ---------------------------------------------------------------- 1 · mark */
+const s1 = { root: $("s1"), x: $("s1-x"), dot: $("s1-dot"), ring: $("s1-ring"), ring0: $("s1-ring0"), tile: $("s1-tile") };
+const DIRS = [[-1, -1], [1, 1], [1, -1], [-1, 1]];
+const strokes = (g, color) =>
+  DIRS.map(() => {
+    const l = document.createElementNS(NS, "line");
+    att(l, { x1: 0, y1: 0, x2: 0, y2: 0, stroke: color, "stroke-width": 61, "stroke-linecap": "round" });
+    g.appendChild(l);
+    return l;
+  });
+s1.sets = [strokes($("s1-glow"), "#ffc99b"), strokes($("s1-r"), "#ff2d55"), strokes($("s1-c"), "#1ed2ff"), strokes($("s1-main"), "#ffc99b")];
+s1.speed = Array.from({ length: 20 }, (_, i) => {
+  const l = document.createElementNS(NS, "line");
+  $("s1-speed").appendChild(l);
+  const r = rng(i + 11);
+  return { l, a: (i / 20) * Math.PI * 2 + r() * 0.2, j: r() * 0.05, w: 1.5 + r() * 3 };
+});
+function u1(t) {
+  const on = t < bt(4);
+  vis(s1.root, on);
+  if (!on) return;
+  const r = lerp(15 * spr(t - 0.05, 24, 0.36), 30.5, E.iCubic(P(t, bt(0.55), bt(1))));
+  att(s1.dot, { r: Math.max(0, r) });
+  s1.dot.style.opacity = t < bt(1) ? 1 : 0;
+  const p1 = t < bt(1) ? -1 : spr(t - bt(1), 19, 0.6);
+  const p2 = t < bt(2) ? -1 : spr(t - bt(2), 22, 0.58);
+  for (const set of s1.sets)
+    set.forEach((l, i) => {
+      const p = i < 2 ? p1 : p2;
+      l.style.opacity = p < 0 ? 0 : 1;
+      att(l, { x2: DIRS[i][0] * 122.5 * Math.max(p, 0), y2: DIRS[i][1] * 122.5 * Math.max(p, 0) });
+    });
+  const ca = 18 * imp(t, bt(2) + 0.03, 5.5) + 8 * imp(t, bt(1) + 0.03, 8);
+  att($("s1-r"), { transform: `translate(${-ca} ${ca * 0.35})` });
+  att($("s1-c"), { transform: `translate(${ca} ${-ca * 0.35})` });
+  $("s1-r").style.opacity = $("s1-c").style.opacity = clamp(ca / 2.5);
+  $("s1-glow").style.opacity = t < bt(3.2) ? 0.55 * clamp((t - 0.05) / 0.3) : 0;
+
+  const ringAt = (ring, t0, r1, w0, dur) => {
+    const rp = P(t, t0, t0 + dur);
+    ring.style.opacity = rp > 0 && rp < 1 ? 1 - E.iCubic(rp) : 0;
+    att(ring, { r: lerp(30, r1, E.oExpo(rp)), "stroke-width": lerp(w0, 0.5, E.oCubic(rp)) });
+  };
+  ringAt(s1.ring0, bt(1) + 0.03, 420, 8, 0.6);
+  ringAt(s1.ring, bt(2) + 0.03, 1050, 30, 0.95);
+  for (const s of s1.speed) {
+    const t0 = bt(2) + 0.03 + s.j;
+    const ph = E.oExpo(P(t, t0, t0 + 0.55)), pt = E.oExpo(P(t, t0 + 0.08, t0 + 0.62));
+    const r1 = lerp(250, 1300, pt), r2 = lerp(250, 1300, ph);
+    s.l.style.opacity = ph > 0 && pt < 1 ? 1 : 0;
+    att(s.l, { x1: Math.cos(s.a) * r1, y1: Math.sin(s.a) * r1, x2: Math.cos(s.a) * r2, y2: Math.sin(s.a) * r2, "stroke-width": s.w });
+  }
+  const td = E.io(P(t, bt(2) + 0.1, bt(3.1)));
+  s1.tile.style.strokeDasharray = `${td} 1`;
+  s1.tile.style.stroke = mix("#ffc99b", "#3a3733", P(t, bt(3), bt(3.35)));
+  att(s1.tile, { "fill-opacity": P(t, bt(2.6), bt(3.3)) });
+
+  const sp = E.io(P(t, bt(2.5), bt(3.3)));
+  let rot = 90 * sp;
+  let sc = (1 - 0.1 * Math.sin(Math.PI * sp)) * (1 + 0.07 * imp(t, bt(2) + 0.03, 11) * (t > bt(2) ? 1 : 0));
+  const zp = P(t, bt(3.3), bt(4));
+  sc *= Math.exp(Math.log(90) * E.iQuart(zp));
+  rot += 38 * E.iCubic(zp);
+  att(s1.x, { transform: `rotate(${rot}) scale(${sc})` });
+}
+
+/* --------------------------------------------------------- 2 · they said it */
+const SAID = ["shipping this weekend", "hot take", "who else is still up", "a thread", "we’re hiring", "this changed how i think about sync",
+  "ok this is huge", "unpopular opinion", "just pushed v2", "can’t stop thinking about this", "gm", "the real problem is state",
+  "bookmarking this", "wrote it up here", "local-first is the future", "i was wrong about this", "big news today", "one year ago today",
+  "reminder", "hear me out", "new post", "nobody talks about this", "this aged well", "quick thread on search", "i finally get it",
+  "read the whole thing", "screenshot this", "the demo is live", "source in replies", "who’s building this"];
+const s2 = { root: $("s2"), rows: [], copies: [] };
+{
+  const r = rng(4);
+  for (let i = 0; i < 13; i++) {
+    const size = [30, 38, 26, 44, 32][i % 5];
+    const row = el("div", "said-row", $("s2-rows"));
+    let txt = "";
+    while (txt.length < 420) txt += SAID[Math.floor(r() * SAID.length)] + "   ·   ";
+    row.textContent = txt;
+    row.style.fontSize = size + "px";
+    row.style.top = i * 86 - 18 + "px";
+    row.style.opacity = 0.1 + r() * 0.12;
+    s2.rows.push({ row, x0: -r() * 2200, dir: i % 2 ? 1 : -1, v: 70 + r() * 150 });
+  }
+  for (const id of ["s2-a", "s2-b"]) {
+    const line = el("div", "s2line", $(id));
+    s2.copies.push({ root: $(id), words: maskWords(line, ["They", "said", "it."]), line });
+  }
+}
+function u2(t) {
+  const on = t >= bt(4) && t < bt(8);
+  vis(s2.root, on);
+  if (!on) return;
+  const dt = t - bt(4);
+  for (const r of s2.rows) r.row.style.transform = `translate3d(${r.x0 + r.dir * (r.v * dt + 34 * dt * dt * dt)}px,0,0)`;
+  const push = 1 + 0.06 * E.io(P(t, bt(6.2), bt(7.4)));
+  for (const c of s2.copies) {
+    c.words.forEach((w, i) => {
+      const t0 = bt(4 + i);
+      const p = E.app(P(t, t0, t0 + 0.36));
+      w.style.transform = `translateY(${(1 - p) * 112}%) skewY(${(1 - p) * 9}deg)`;
+      w.style.fontWeight = Math.round(lerp(240, 720, E.oCubic(P(t, t0 + 0.02, t0 + 0.24))));
+    });
+    let bump = 0;
+    for (let i = 0; i < 3; i++) bump += 0.022 * imp(t, bt(4 + i) + 0.1, 10) * (t > bt(4 + i) + 0.1 ? 1 : 0);
+    c.line.style.transform = `scale(${push + bump})`;
+  }
+  const w1 = 380 * E.oExpo(P(t, bt(7), bt(7) + 0.35)) + 2700 * E.iCubic(P(t, bt(7.45), bt(8)));
+  const w2 = 300 * E.oExpo(P(t, bt(7.5), bt(7.5) + 0.3)) + 2700 * E.iCubic(P(t, bt(7.55), bt(8)));
+  const band = (b, w, deg) => {
+    b.style.height = w + "px";
+    b.style.top = 540 - w / 2 + "px";
+    b.style.transform = `rotate(${deg}deg)`;
+    b.style.opacity = w > 0.5 ? 1 : 0;
+  };
+  band($("s2-b1"), w1, 45);
+  band($("s2-b2"), w2, -45);
+  const [A, Bc] = s2.copies;
+  if (t < bt(7)) {
+    A.root.style.clipPath = "none";
+    A.root.style.transform = "none";
+    Bc.root.style.visibility = "hidden";
+  } else {
+    Bc.root.style.visibility = "";
+    const sep = w1 / 2 + 8, s = 80 * E.oExpo(P(t, bt(7), bt(7) + 0.6)) + 1100 * E.iExpo(P(t, bt(7.4), bt(8)));
+    const k = Math.SQRT1_2;
+    A.root.style.clipPath = "polygon(420px 0, 1920px 0, 1920px 1080px, 1500px 1080px)";
+    Bc.root.style.clipPath = "polygon(0 0, 420px 0, 1500px 1080px, 0 1080px)";
+    A.root.style.transform = `translate(${(sep - s) * k}px,${(-sep - s) * k}px)`;
+    Bc.root.style.transform = `translate(${(-sep + s) * k}px,${(sep + s) * k}px)`;
+  }
+}
+
+/* --------------------------------------------------------------- 3 · search */
+const QUERY = "local-first software";
+const RESULTS = [
+  { n: "Ada Lin", h: "adalin", d: "Mar 3, 2026", pre: "we rewrote the sync layer and it works on a plane now. ", post: " is just better software", c: [24, 118, "1.2k"] },
+  { n: "Kenji Mori", h: "kenjibuilds", d: "Jan 18, 2026", pre: "reading list for anyone getting into ", post: ": CRDTs, sync engines, the cloud as a peer", c: [9, 61, "604"] },
+  { n: "Noor Haddad", h: "noorcodes", d: "Nov 2, 2025", pre: "hot take: ", post: " isn’t a feature. it’s respect for your users.", c: [41, 203, "2.8k"] },
+  { n: "Priya Rao", h: "priyarao", d: "Aug 9, 2025", pre: "", post: " means the spinner is gone. that’s the whole pitch.", c: [12, 77, "951"] },
+  { n: "Sol Reyes", h: "solreyes", d: "Jun 21, 2025", pre: "shipped offline mode today. ", post: " took three rewrites and zero regrets", c: [5, 30, "388"] },
+];
+const s3 = { root: $("s3"), inner: $("s3-in"), head: $("s3-head"), row: $("s3-row"), rows: [] };
+{
+  s3.chars = [..."Xearch it."].map((c) => el("span", "ch", s3.head, c === " " ? "&nbsp;" : c));
+  s3.typed = [...QUERY].map((c) => el("span", "", $("s3-typed"), c === " " ? "&nbsp;" : c));
+  RESULTS.forEach((r, i) => {
+    const row = el("div", "res", $("s3-list"));
+    row.style.top = i * 156 + "px";
+    row.innerHTML = `${avatar(r.h, 60)}<div class="body">
+      <div class="hd"><b>${r.n}</b>@${r.h} · ${r.d}</div>
+      <div class="tx">${r.pre}<mark><i></i><span>local-first</span></mark>${r.post}</div>
+      <div class="acts"><span>${icon("reply", 22)}${r.c[0]}</span><span>${icon("repost", 22)}${r.c[1]}</span><span>${icon("heart", 22)}${r.c[2]}</span>
+      <span class="open">Open on X ${icon("up", 18)}</span></div></div><div class="sep"></div>`;
+    s3.rows.push({ row, mark: row.querySelector("mark i"), word: row.querySelector("mark span"), sep: row.querySelector(".sep") });
+  });
+}
+function u3(t) {
+  const on = t >= bt(8) && t < bt(16.05);
+  vis(s3.root, on);
+  if (!on) return;
+  s3.chars.forEach((c, i) => {
+    const t0 = bt(8) + i * 0.022;
+    const p = spr(t - t0, 17, 0.5);
+    c.style.transform = `translate3d(0,${(1 - p) * 160}px,0) rotate(${(1 - p) * -14}deg)`;
+    c.style.opacity = clamp((t - t0) / 0.06);
+  });
+  const hp = E.app(P(t, bt(9.7), bt(9.7) + 0.75));
+  const ex = E.app(P(t, bt(13.15), bt(13.15) + 0.6));
+  const hs = lerp(1 + 0.035 * E.oCubic(P(t, bt(8), bt(9.7))), 0.4, hp);
+  s3.head.style.transform = `translate3d(0,${-330 * hp - 420 * ex}px,0) scale(${hs})`;
+  s3.head.style.opacity = 1 - ex;
+
+  const rowY = lerp(500, 150, E.app(P(t, bt(13.2), bt(13.2) + 0.7)));
+  const rin = E.app(P(t, bt(9.85), bt(9.85) + 0.6));
+  s3.row.style.top = rowY - 48 + (1 - rin) * 40 + "px";
+  s3.row.style.opacity = clamp((t - bt(9.85)) / 0.12);
+  $("s3-outline").firstElementChild.style.strokeDasharray = `${E.oExpo(P(t, bt(9.9), bt(9.9) + 0.6))} 1`;
+  $("s3-outline").firstElementChild.style.strokeOpacity = lerp(1, 0.7, P(t, bt(10.6), bt(11)));
+  $("s3-fill").style.opacity = P(t, bt(10), bt(10.45));
+  const ip = E.oCubic(P(t, bt(10), bt(10.5)));
+  for (const s of $("s3-icon").children) s.style.strokeDasharray = `${ip} 1`;
+
+  let n = 0;
+  s3.typed.forEach((c, k) => {
+    const tk = bt(10.5) + (k * B) / 8;
+    const q = E.oCubic(P(t, tk, tk + 0.09));
+    if (t >= tk) n = k + 1;
+    c.style.opacity = t >= tk ? 1 : 0;
+    c.style.transform = `translateY(${(1 - q) * 12}px) scale(${1 + 0.3 * (1 - q)})`;
+  });
+  const caret = $("s3-caret");
+  const cx = n ? s3.typedEnd[n - 1] : 0;
+  caret.style.left = 88 + cx + 3 + "px";
+  const blink = t < bt(13) + 0.05 || (t - bt(13)) % B < B / 2;
+  caret.style.opacity = t >= bt(10.25) && blink ? 1 : 0;
+
+  const bp = spr(t - bt(10.1), 15, 0.55);
+  const dip = 0.08 * Math.sin(Math.PI * P(t, bt(13), bt(13) + 0.15));
+  const btn = $("s3-btn");
+  btn.style.transform = `scale(${lerp(0.7, 1, bp) * (1 - dip)})`;
+  btn.style.opacity = clamp((t - bt(10.1)) / 0.1);
+  const g = t > bt(13) ? imp(t, bt(13), 4.5) : 0;
+  btn.style.boxShadow = `0 0 ${70 * g}px ${12 * g}px rgba(255,201,155,${0.55 * g})`;
+  const rp = P(t, bt(13), bt(13) + 0.55);
+  const rs = lerp(0, 560, E.oCubic(rp));
+  Object.assign($("s3-ripple").style, { width: rs + "px", height: rs + "px", marginLeft: -rs / 2 + "px", marginTop: -rs / 2 + "px", opacity: rp > 0 && rp < 1 ? 0.45 * (1 - rp) : 0 });
+
+  const meta = $("s3-meta");
+  meta.style.top = rowY + 76 + "px";
+  meta.style.left = "330px";
+  meta.style.opacity = P(t, bt(13.35), bt(13.35) + 0.2);
+  $("s3-n").textContent = Math.round(20 * E.oCubic(P(t, bt(13.35), bt(14.5))));
+  const list = $("s3-list");
+  list.style.left = "330px";
+  list.style.top = rowY + 118 + "px";
+  s3.rows.forEach((r, i) => {
+    const t0 = bt(13.45) + (i * B) / 4;
+    const p = spr(t - t0, 15, 0.55);
+    r.row.style.transform = `translate3d(0,${(1 - p) * 90}px,0) rotateX(${(1 - p) * -38}deg)`;
+    r.row.style.opacity = clamp((t - t0) / 0.12);
+    const m = E.app(P(t, t0 + 0.28, t0 + 0.62));
+    r.mark.style.transform = `scaleX(${m})`;
+    r.word.style.color = mix("#e9e7e3", "#ffc99b", m);
+    r.sep.style.transform = `scaleX(${E.app(P(t, t0 + 0.05, t0 + 0.6))})`;
+  });
+
+  const cp = E.io(P(t, bt(13.3), bt(15.6)));
+  const whip = E.iExpo(P(t, bt(15.3), bt(16)));
+  s3.inner.style.transform = `translate3d(${-2900 * whip}px,0,${70 * cp}px) rotateX(${7 * cp}deg) rotateY(${-4 * cp}deg)`;
+  s3.inner.style.filter = whip > 0.02 ? `url(#hblur)` : "none";
+  setHBlur(whip > 0.02 ? 60 * Math.min(1, whip * 3) : 0);
+}
+
+/* --------------------------------------------------------------- 4 · import */
+const NBAR = 56, X0 = 160, XW = 1600, BW = XW / NBAR;
+const s4 = { root: $("s4"), inner: $("s4-in"), bars: [], ticks: [], cols: [] };
+{
+  s4.head = maskWords($("s4-head"), ["Whole", '<span class="acc">histories.</span>']);
+  $("s4-head").style.cssText += ";left:160px;top:168px";
+  $("s4-kick").style.cssText += ";left:164px;top:126px";
+  $("s4-acct").style.cssText += ";left:160px;top:348px";
+  $("s4-acct").innerHTML = `<div style="position:relative;width:100px;height:100px">
+      <svg width="100" height="100" style="position:absolute;inset:0;transform:rotate(-90deg)">
+        <circle cx="50" cy="50" r="46" fill="none" stroke="#292827" stroke-width="4"/>
+        <circle id="s4-ring" cx="50" cy="50" r="46" fill="none" stroke="#ffc99b" stroke-width="4" stroke-linecap="round" pathLength="1"/></svg>
+      <div style="position:absolute;left:12px;top:12px">${avatar("mira", 76)}</div>
+      <div id="s4-ok" class="av" style="position:absolute;right:-4px;bottom:-4px;width:34px;height:34px;background:var(--accent);border:3px solid #080808">${icon("check", 18, 3)}</div>
+    </div><div><div class="who">@mira</div><div class="st mono" id="s4-st">importing history</div></div>`;
+  $("s4-count").style.cssText += ";left:160px;top:486px";
+  $("s4-yl").style.cssText += ";left:1340px;top:112px";
+  $("s4-year").style.cssText += ";left:1330px;top:140px";
+  for (let d = 0; d < 4; d++) {
+    const col = el("div", "col", $("s4-year"));
+    const strip = el("div", "", col, Array.from({ length: 11 }, (_, i) => `<span>${i % 10}</span>`).join(""));
+    s4.cols.push(strip);
+  }
+  const r = rng(9);
+  for (let i = 0; i < NBAR; i++) {
+    const f = i / (NBAR - 1);
+    const hgt = 330 * (0.1 + 0.9 * Math.pow(f, 1.6)) * (0.62 + 0.38 * r()) * (r() < 0.08 ? 1.25 : 1);
+    const b = el("div", "bar", $("s4-bars"));
+    b.style.left = i * BW + 3 + "px";
+    b.style.width = BW - 6 + "px";
+    s4.bars.push({ b, hgt: Math.min(hgt, 360) });
+  }
+  for (let y = 0; y < 14; y++) {
+    const tk = el("div", "tick", $("s4-ticks"), String(2012 + y));
+    tk.style.left = X0 + (y * 4 + 2) * BW + "px";
+    s4.ticks.push(tk);
+  }
+}
+const I4 = [bt(16.55), bt(19.2)];
+const prog4 = (t) => E.io(P(t, I4[0], I4[1]));
+// time at which the scan passes a given progress (inverse of prog4)
+const when4 = (p) => {
+  let lo = I4[0], hi = I4[1];
+  for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (prog4(m) < p) lo = m; else hi = m; }
+  return lo;
+};
+s4.bars.forEach((b, i) => (b.t0 = when4((NBAR - 1 - i) / NBAR)));
+function odo(cols, value) {
+  const digits = cols.length;
+  for (let d = 0; d < digits; d++) {
+    const k = digits - 1 - d;
+    const place = Math.pow(10, k);
+    let pos = Math.floor(value / place) % 10;
+    const below = value % place;
+    if (place > 1 && below > place - 1) pos += below - (place - 1);
+    else if (place === 1) pos = value % 10;
+    cols[d].style.transform = `translateY(${-pos}em)`;
+  }
+}
+function u4(t) {
+  const on = t >= bt(15.9) && t < bt(20.6);
+  vis(s4.root, on);
+  if (!on) return;
+  const wi = 1 - E.oExpo(P(t, bt(15.92), bt(15.92) + 0.62));
+  s4.inner.style.transform = `translate3d(${2900 * wi}px,0,0)`;
+  s4.inner.style.filter = wi > 0.02 ? "url(#hblur)" : "none";
+  if (t >= bt(15.92)) setHBlur(wi > 0.02 ? 70 * Math.min(1, wi * 2) : 0);
+  const out = E.app(P(t, bt(19.4), bt(19.4) + 0.5));
+  const lift = (e, k = 1) => { e.style.transform = `translateY(${-50 * out * k}px)`; e.style.opacity = 1 - out; };
+
+  $("s4-kick").style.clipPath = `inset(0 ${(1 - E.app(P(t, bt(15.9), bt(15.9) + 0.5))) * 100}% 0 0)`;
+  lift($("s4-kick"));
+  reveal(s4.head, t, bt(15.92), 0.08);
+  lift($("s4-head"));
+  const pr = prog4(t);
+  const acct = $("s4-acct");
+  const ap = spr(t - bt(16.35), 14, 0.6);
+  acct.style.transform = `translateY(${(1 - ap) * 40 - 50 * out}px)`;
+  acct.style.opacity = clamp((t - bt(16.35)) / 0.15) * (1 - out);
+  $("s4-ring").style.strokeDasharray = `${pr} 1`;
+  const done = spr(t - bt(19.2), 20, 0.45);
+  $("s4-ok").style.transform = `scale(${done})`;
+  $("s4-st").textContent = t < bt(19.2) ? "importing history" : "history complete";
+  const cnt = $("s4-count");
+  cnt.style.opacity = clamp((t - bt(16.45)) / 0.15) * (1 - out);
+  cnt.style.transform = `translateY(${-50 * out}px)`;
+  $("s4-n").textContent = Math.round(48213 * pr).toLocaleString("en-US");
+  const yin = E.app(P(t, bt(16.3), bt(16.3) + 0.6));
+  $("s4-year").style.opacity = yin * (1 - out);
+  $("s4-year").style.transform = `translateY(${(1 - yin) * 60 - 50 * out}px)`;
+  $("s4-yl").style.opacity = yin * 0.9 * (1 - out);
+  odo(s4.cols, 2026 - 14 * pr);
+
+  const base = $("s4-base");
+  base.style.transform = `scaleX(${E.app(P(t, bt(16.15), bt(16.15) + 0.6))})`;
+  base.style.background = mix("#42403c", "#ffc99b", P(t, bt(19.1), bt(19.4)));
+  base.style.visibility = t < bt(19.6) ? "" : "hidden";
+  s4.bars.forEach((b, i) => {
+    const g = Math.max(0, spr(t - b.t0, 21, 0.42));
+    const c0 = bt(19.3) + Math.abs(i - NBAR / 2) * 0.004;
+    const col = 1 - E.iCubic(P(t, c0, c0 + 0.26));
+    b.b.style.height = b.hgt * g * col + "px";
+    b.b.style.background = mix("#ffc99b", "#3b3834", P(t, b.t0 + 0.05, b.t0 + 0.55));
+  });
+  s4.ticks.forEach((tk, y) => {
+    const tt = when4((NBAR - 1 - (y * 4 + 2)) / NBAR);
+    tk.style.opacity = P(t, tt, tt + 0.2) * (1 - out);
+  });
+  const scan = $("s4-scan");
+  const sx = X0 + XW - pr * XW;
+  const hb = s4.bars[Math.max(0, Math.min(NBAR - 1, Math.floor((sx - X0) / BW)))];
+  const sh = hb.hgt + 90;
+  scan.style.left = sx + "px";
+  scan.style.top = 940 - sh + "px";
+  scan.style.height = sh + "px";
+  scan.firstElementChild.style.height = sh + "px";
+  scan.style.opacity = P(t, I4[0] - 0.05, I4[0] + 0.1) * (1 - P(t, I4[1], I4[1] + 0.2));
+  const q = Math.min(NBAR - 1, Math.floor((1 - pr) * NBAR));
+  const lab = scan.querySelector("b");
+  lab.textContent = `Q${(q % 4) + 1} ${2012 + Math.floor(q / 4)}`;
+  lab.style.top = "-34px";
+}
+
+/* ----------------------------------------------------------------- 5 · read */
+const s5 = { root: $("s5"), inner: $("s5-in"), lines: [] };
+const ESSAY = [
+  "Five years ago we argued that software should keep working when the",
+  "network doesn’t. Your data lives with you, and the cloud is a peer,",
+  "not a landlord. What we underestimated was how much of the work is",
+  "search. Once everything is local, finding it becomes the product.",
+  "The spinner goes away, but the question stays: where did I read that?",
+  "Sync engines got faster, CRDTs got smaller, and the interfaces finally",
+  "caught up. The best apps now feel instant because they are. This is",
+  "what we learned shipping three of them, and the mistake we kept",
+  "making: treating the link as a footnote instead of the whole story.",
+];
+{
+  $("s5-card").innerHTML = `<div class="hd">${avatar("mira", 60)}<div><b>Mira Okafor</b><br>@mira · 2h</div></div>
+    <div class="tx">the best thing i’ve read on local-first this year. still thinking about it.</div>
+    <div id="s5-link"><i class="hl"></i><span style="position:relative">essays.dev/local-first</span>${icon("up", 26, 2)}<i id="s5-under"></i></div>
+    <div class="acts"><span>${icon("reply", 22)}12</span><span>${icon("repost", 22)}48</span><span>${icon("heart", 22)}1.1k</span></div>`;
+  $("s5-panel").innerHTML = `<div class="top"><i></i><span class="mono">essays.dev</span><span class="mono">6 min read</span></div>
+    <h2>Local-first, five years in</h2><div class="by">Mira Okafor · September 2026</div><div class="rule"></div>
+    <div id="s5-beam"><i></i></div>`;
+  const r = rng(21);
+  ESSAY.forEach((txt, i) => {
+    const pl = el("div", "pl", $("s5-panel"), `<i class="sk"></i><span class="ln">${txt}</span>`);
+    pl.style.top = 256 + i * 36 + "px";
+    s5.lines.push({ pl, sk: pl.firstElementChild, ln: pl.lastElementChild, y: 256 + i * 36 + 18 });
+  });
+  s5.head = maskWords($("s5-head"), ["The", "page", "behind", '<span class="acc">the</span>', '<span class="acc">link.</span>']);
+}
+const bez2 = (p0, p1, p2, p3, u) => {
+  const v = 1 - u;
+  return [0, 1].map((k) => v * v * v * p0[k] + 3 * v * v * u * p1[k] + 3 * v * u * u * p2[k] + u * u * u * p3[k]);
+};
+function u5(t) {
+  const on = t >= bt(19.6) && t < bt(24.4);
+  vis(s5.root, on);
+  if (!on) return;
+  const L = s5.link;
+  const cin = E.app(P(t, bt(19.95), bt(19.95) + 0.55));
+  const card = $("s5-card");
+  card.style.opacity = cin;
+  card.style.transform = `translateY(${(1 - cin) * 40}px)`;
+  $("s5-under").style.opacity = t >= bt(20.4) ? 1 : 0;
+  $("s5-kick").style.clipPath = `inset(0 ${(1 - E.app(P(t, bt(20.2), bt(20.2) + 0.5))) * 100}% 0 0)`;
+  reveal(s5.head, t, bt(20.3), 0.06);
+
+  const cu = $("s5-cursor");
+  const cp = E.app(P(t, bt(20.2), bt(20.95)));
+  const [x, y] = bez2([1500, 1180], [1300, 820], [700, 700], [L.x + L.w * 0.42, L.y - 22], cp);
+  const click = 1 - 0.2 * Math.sin(Math.PI * P(t, bt(21), bt(21) + 0.16));
+  const cout = E.app(P(t, bt(22.1), bt(22.1) + 0.6));
+  cu.style.left = x + 360 * cout + "px";
+  cu.style.top = y + 260 * cout + "px";
+  cu.style.transform = `scale(${click})`;
+  cu.style.opacity = clamp((t - bt(20.2)) / 0.1) * (1 - cout);
+  const rp = P(t, bt(21), bt(21) + 0.5);
+  const rr = lerp(10, 90, E.oCubic(rp));
+  Object.assign($("s5-ripple").style, { left: L.x + L.w * 0.42 + 4 - rr + "px", top: L.y - 18 - rr + "px", width: rr * 2 + "px", height: rr * 2 + "px", opacity: rp > 0 && rp < 1 ? 1 - rp : 0 });
+  const press = t > bt(21) ? 1 - E.oCubic(P(t, bt(21) + 0.2, bt(22))) * 0.4 : 0;
+  card.querySelector(".hl").style.opacity = press;
+
+  const conn = $("s5-conn");
+  const [path, n0, n1] = conn.children;
+  const a = [L.x + L.w + 50, L.y - 16], b = [980, 470];
+  att(path, { d: `M${a[0]} ${a[1]} C${a[0] + 60} ${a[1]}, ${b[0] - 70} ${b[1]}, ${b[0]} ${b[1]}` });
+  path.style.strokeDasharray = `${E.oExpo(P(t, bt(21.05), bt(21.05) + 0.45))} 1`;
+  att(n0, { cx: a[0], cy: a[1], r: 7 * spr(t - bt(21.05), 20, 0.5) });
+  att(n1, { cx: b[0], cy: b[1], r: 7 * spr(t - bt(21.3), 20, 0.5) });
+
+  const panel = $("s5-panel");
+  const up = spr(t - bt(21.25), 10.5, 0.62);
+  panel.style.transform = `rotateY(${-96 * (1 - up)}deg)`;
+  panel.style.opacity = clamp((t - bt(21.25)) / 0.08);
+  const part = (e, t0) => {
+    const p = E.app(P(t, t0, t0 + 0.5));
+    e.style.opacity = p;
+    e.style.transform = `translateY(${(1 - p) * 24}px)`;
+  };
+  part(panel.querySelector(".top"), bt(21.5));
+  part(panel.querySelector("h2"), bt(21.6));
+  part(panel.querySelector(".by"), bt(21.75));
+  panel.querySelector(".rule").style.transform = `scaleX(${E.app(P(t, bt(21.8), bt(21.8) + 0.6))})`;
+  const by = lerp(238, 604, E.io(P(t, bt(22), bt(23.4))));
+  const beam = $("s5-beam");
+  beam.style.top = by + "px";
+  beam.style.opacity = P(t, bt(21.95), bt(22.05)) * (1 - P(t, bt(23.35), bt(23.6)));
+  s5.lines.forEach((l, i) => {
+    const t0 = bt(21.85) + i * 0.035;
+    l.sk.style.transform = `scaleX(${E.app(P(t, t0, t0 + 0.45))})`;
+    const rv = clamp((by - l.y) / 44) * (t > bt(22) ? 1 : 0);
+    l.sk.style.opacity = 1 - rv;
+    l.ln.style.opacity = rv;
+    l.ln.style.transform = `translateX(${(1 - rv) * 10}px)`;
+  });
+
+  const xp = E.io(P(t, bt(23.45), bt(24.35)));
+  s5.inner.style.transform = `rotateX(${48 * xp}deg) rotateZ(${-20 * xp}deg) scale(${lerp(1, 0.3, xp)})`;
+  s5.inner.style.opacity = 1 - P(t, bt(23.95), bt(24.35));
+}
+
+/* ----------------------------------------------------------------- 6 · wall */
+const WALL = [
+  ["mira", "the best interfaces disappear. you only notice them when they break.", "2.1k", "18k"],
+  ["adalin", "we rewrote the sync layer and it works on a plane now.", "118", "1.2k"],
+  ["kenjibuilds", "read the source before you read the docs.", "640", "9.4k"],
+  ["noorcodes", "ship small. ship often. write down why.", "1.3k", "12k"],
+  ["priyarao", "the spinner is a design decision. so is removing it.", "402", "5.1k"],
+  ["solreyes", "offline mode shipped. three rewrites, zero regrets.", "30", "388"],
+  ["junopark", "typography is ninety percent of the interface.", "2.4k", "21k"],
+  ["rheavance", "every great tool starts as a script someone refused to delete.", "877", "7.7k"],
+  ["felixw", "bookmarking this thread for the fifth time this week.", "96", "1.9k"],
+  ["orbitlabs", "we indexed everything so you never scroll for it again.", "1.1k", "8.8k"],
+  ["tomasz", "search is a feature until it becomes the product.", "512", "6.2k"],
+  ["lenacodes", "favorite commit message: make it simpler.", "3.3k", "27k"],
+  ["kaito", "motion should explain, not decorate.", "1.7k", "14k"],
+  ["imanis", "the link is the whole story. read it.", "220", "3.4k"],
+];
+const s6 = { root: $("s6"), plane: $("s6-plane"), cols: [], parts: [] };
+{
+  const r = rng(33);
+  const kinds = ["c", "f", "c", "f", "c", "f", "c", "f", "c"];
+  let x = 138;
+  kinds.forEach((k, ci) => {
+    const col = el("div", "wcol", s6.plane);
+    col.style.left = x + "px";
+    const w = k === "c" ? 340 : 104;
+    x += w + 26;
+    let hgt = 0, html = "";
+    let j = Math.floor(r() * WALL.length);
+    while (hgt < 3100) {
+      if (k === "c") {
+        const [h, txt, rt, lk] = WALL[j++ % WALL.length];
+        const ch = 180 + Math.floor(r() * 4) * 30;
+        html += `<div class="wcard" style="height:${ch}px;margin-bottom:26px"><p>${txt}</p><div class="cm">${avatar(h, 28)}<b>@${h}</b><span class="n"><span>${icon("repost", 15)}${rt}</span><span>${icon("heart", 15)}${lk}</span></span></div></div>`;
+        hgt += ch + 26;
+      } else {
+        html += `<div style="margin-bottom:26px">${avatar(WALL[j++ % WALL.length][0], 104)}</div>`;
+        hgt += 130;
+      }
+    }
+    col.innerHTML = html + html;
+    s6.cols.push({ col, hgt, dir: ci % 2 ? 1 : -1, v: 0.8 + r() * 0.45, ph: r() * hgt });
+  });
+  for (let i = 0; i < 56; i++) {
+    const p = el("div", "pt", $("s6-parts"));
+    const a = r() * Math.PI * 2, d = 650 + r() * 700, s = 3 + r() * 6;
+    Object.assign(p.style, { width: s + "px", height: s + "px", background: r() < 0.75 ? "#ffc99b" : "#e9e7e3" });
+    s6.parts.push({ p, x: Math.cos(a) * d, y: Math.sin(a) * d * 0.7, s, j: r() * 0.35 });
+  }
+  s6.head = [
+    maskWords(el("div", "", $("s6-h")), ["Every", "account."]),
+    maskWords(el("div", "acc", $("s6-h")), ["One", "search."]),
+  ].flat();
+}
+function u6(t) {
+  const on = t >= bt(23.7) && t < bt(28.02);
+  vis(s6.root, on);
+  if (!on) return;
+  const dt = t - bt(23.7);
+  const inP = E.oCubic(P(t, bt(23.7), bt(24.9)));
+  const drift = E.io(P(t, bt(24), bt(27)));
+  const im = P(t, bt(27), bt(28));
+  const sc = lerp(2.6, 1, inP) * (1 + 0.16 * drift) * (1 - 0.985 * E.iExpo(im));
+  const rz = -20 - 12 * drift + 160 * E.iCubic(im);
+  const rx = 48 + 6 * drift;
+  s6.plane.style.transform = `rotateX(${rx}deg) rotateZ(${rz}deg) scale(${sc})`;
+  s6.plane.style.opacity = clamp(dt / 0.3) * (1 - P(t, bt(27.55), bt(27.95)));
+  const pos = 150 * dt + 12000 * Math.pow(Math.max(0, t - bt(26)), 3);
+  for (const c of s6.cols) {
+    const y = -((((c.ph + c.dir * pos * c.v) % c.hgt) + c.hgt) % c.hgt);
+    c.col.style.transform = `translate3d(0,${y}px,0)`;
+  }
+  const lx = lerp(300, 2300, drift), ly = lerp(2300, 700, drift);
+  s6.plane.style.background = `radial-gradient(circle 800px at ${lx}px ${ly}px, #ffc99b1f, #ffc99b00 70%)`;
+  $("s6-scrim").style.opacity = 1 - P(t, bt(26.6), bt(27.4));
+  $("s6-kick").style.clipPath = `inset(0 ${(1 - E.app(P(t, bt(24.2), bt(24.2) + 0.5))) * 100}% 0 0)`;
+  $("s6-kick").style.opacity = 1 - P(t, bt(26.5), bt(26.8));
+  reveal(s6.head, t, bt(24.3), 0.07);
+  hide(s6.head, t, bt(26.45), 0.04);
+  s6.parts.forEach((q) => {
+    const t0 = bt(27) + q.j;
+    const pp = E.iCubic(P(t, t0, bt(27.97)));
+    q.p.style.transform = `translate3d(${960 + q.x * (1 - pp) - q.s / 2}px,${540 + q.y * (1 - pp) - q.s / 2}px,0)`;
+    q.p.style.opacity = P(t, t0, t0 + 0.15) * (1 - P(t, bt(27.95), bt(28)));
+  });
+  const dr = 16 * E.iCubic(P(t, bt(27.3), bt(28)));
+  Object.assign($("s6-dot").style, { width: dr * 2 + "px", height: dr * 2 + "px", transform: `translate(${960 - dr}px,${540 - dr}px)`, boxShadow: `0 0 ${dr * 3}px ${dr}px #ffc99b55` });
+}
+
+/* ------------------------------------------------------------- 7 · wordmark */
+const s7 = { root: $("s7"), parts: [] };
+{
+  s7.chars = [..."xearch"].map((c) => el("span", "ch", $("s7-word"), c));
+  s7.tag = maskWords($("s7-tag"), ["They", "said", "it.", '<span class="acc">Xearch</span>', '<span class="acc">it.</span>']);
+  const r = rng(77);
+  s7.rot = s7.chars.map(() => (r() - 0.5) * 60);
+  for (let i = 0; i < 46; i++) {
+    const p = el("div", "pt", $("s7-parts"));
+    const a = r() * Math.PI * 2, d = 240 + r() * 820, s = 2 + r() * 7;
+    Object.assign(p.style, { width: s + "px", height: s + "px", background: r() < 0.7 ? "#ffc99b" : "#e9e7e3" });
+    s7.parts.push({ p, x: Math.cos(a) * d, y: Math.sin(a) * d * 0.75, s, k: 0.8 + r() * 0.5 });
+  }
+}
+function u7(t) {
+  const on = t >= bt(27.98);
+  vis(s7.root, on);
+  if (!on) return;
+  const T = bt(28);
+  const M = s7.m;
+  s7.chars.forEach((c, i) => {
+    const t0 = T + (s7.chars.length - 1 - i) * 0.035;
+    const p = spr(t - t0, 13, 0.56);
+    const [fx, fy] = M.chars[i];
+    c.style.transform = `translate3d(${(960 - fx) * (1 - p)}px,${(540 - fy) * (1 - p)}px,0) rotate(${s7.rot[i] * (1 - p)}deg) scale(${lerp(0.08, 1, clamp(p, 0, 1.2))})`;
+    c.style.opacity = clamp((t - t0) / 0.05);
+    const sh = lerp(-600, M.w + 600, E.io(P(t, bt(30.2), bt(31.4))));
+    c.style.backgroundImage = `linear-gradient(100deg, #e9e7e3 0, #e9e7e3 ${sh - 90}px, #fffaf4 ${sh}px, #e9e7e3 ${sh + 90}px, #e9e7e3 100%)`;
+    c.style.backgroundSize = `${M.w}px 100%`;
+    c.style.backgroundPosition = `${-M.off[i]}px 0`;
+    c.style.color = "transparent";
+  });
+  const dp = spr(t - T, 11, 0.62);
+  const pulse = 1 + 0.4 * Math.sin(Math.PI * P(t, bt(31), bt(31) + 0.28));
+  const dx = lerp(960, M.dot[0], dp), dy = lerp(540, M.dot[1], dp);
+  const ds = 32 * pulse;
+  Object.assign($("s7-dot").style, { width: ds + "px", height: ds + "px", transform: `translate3d(${dx - ds / 2}px,${dy - ds / 2}px,0)`, boxShadow: `0 0 ${30 * (pulse - 1) * 3 + 14}px #ffc99b66` });
+  const rp = P(t, T, T + 1);
+  att($("s7-ring"), { r: lerp(20, 1100, E.oExpo(rp)), "stroke-width": lerp(36, 0.5, E.oCubic(rp)) });
+  $("s7-ring").style.opacity = rp > 0 && rp < 1 ? 1 - E.iCubic(rp) : 0;
+  const bp = E.oExpo(P(t, T, T + 1.3));
+  s7.parts.forEach((q) => {
+    q.p.style.transform = `translate3d(${960 + q.x * bp * q.k - q.s / 2}px,${540 + q.y * bp * q.k - q.s / 2}px,0)`;
+    q.p.style.opacity = 1 - E.iCubic(P(t, T + 0.1, T + 1.2));
+  });
+  reveal(s7.tag, t, bt(29.1), 0.07);
+  const f = E.app(P(t, bt(29.9), bt(29.9) + 0.9));
+  const foot = $("s7-foot");
+  foot.style.opacity = f;
+  foot.style.letterSpacing = lerp(0.6, 0.22, f) + "em";
+  foot.style.left = 960 - foot.offsetWidth / 2 + "px";
+}
+
+/* ------------------------------------------------------------ camera + fx */
+const HITS = [[bt(2) + 0.03, 15], [bt(1) + 0.03, 4], [bt(4) + 0.1, 5], [bt(5) + 0.1, 5], [bt(6) + 0.1, 7], [bt(8), 11], [bt(13), 4], [bt(16.25), 7], [bt(21), 3], [bt(28), 20]];
+const SCENES = [[0, "Mark"], [bt(4), "They said it"], [bt(8), "Search"], [bt(16), "Import"], [bt(20), "Read"], [bt(24), "Wall"], [bt(28), "Xearch"]];
+const hblur = { v: -1 };
+function setHBlur(v) {
+  if (v === hblur.v) return;
+  hblur.v = v;
+  $("hblur-dev").setAttribute("stdDeviation", `${v} 0`);
+}
+{
+  const d = el("div", "", document.body);
+  d.innerHTML = '<svg width="0" height="0" style="position:absolute"><filter id="hblur" x="-20%" y="0" width="140%" height="100%"><feGaussianBlur id="hblur-dev" stdDeviation="0 0"/></filter></svg>';
+  const c = document.createElement("canvas");
+  c.width = c.height = 384;
+  const g = c.getContext("2d"), id = g.createImageData(384, 384), r = rng(5);
+  for (let i = 0; i < id.data.length; i += 4) { id.data[i] = id.data[i + 1] = id.data[i + 2] = 255; id.data[i + 3] = r() * 255; }
+  g.putImageData(id, 0, 0);
+  $("grain").style.backgroundImage = `url(${c.toDataURL()})`;
+  for (let i = 0; i < 32; i++) el("i", i % 4 === 0 && i ? "bar" : "", $("beats"));
+}
+function fx(t) {
+  let x = 0, y = 0, r = 0;
+  for (const [t0, a] of HITS) {
+    if (t < t0) continue;
+    const d = t - t0, e = a * Math.exp(-d * 8);
+    x += e * Math.sin(d * 71 + t0 * 13);
+    y += e * Math.cos(d * 59 + t0 * 7);
+    r += e * 0.05 * Math.sin(d * 47 + t0);
+  }
+  $("cam").style.transform = `translate3d(${x}px,${y}px,0) rotate(${r}deg)`;
+  const fl = 0.22 * imp(t, bt(2) + 0.03, 16) + 0.1 * imp(t, bt(1) + 0.03, 18) + 0.14 * imp(t, bt(8), 16) + 0.06 * imp(t, bt(16.25), 18) + 0.3 * imp(t, bt(28), 13);
+  $("flash").style.opacity = fl;
+  const fr = Math.floor(t * FPS + 1e-6);
+  const gr = rng(fr + 1);
+  $("grain").style.backgroundPosition = `${Math.floor(gr() * 384)}px ${Math.floor(gr() * 384)}px`;
+  $("fade").style.opacity = E.iCubic(P(t, 14.62, 15));
+
+  const hud = $("hud");
+  const peach = t >= bt(4) && t < bt(8);
+  hud.style.color = peach ? "#6b4f3a" : "#8b8883";
+  hud.style.opacity = 0.8 * P(t, bt(0.8), bt(1.8)) * (1 - P(t, bt(27.4), bt(27.9)));
+  let si = 0;
+  SCENES.forEach(([s], i) => { if (t >= s) si = i; });
+  $("hud-n").textContent = String(si + 1).padStart(2, "0");
+  $("hud-name").textContent = SCENES[si][1];
+  const ff = fr % FPS, ss = Math.floor(fr / FPS);
+  $("hud-bl").textContent = `00:00:${String(ss).padStart(2, "0")}:${String(ff).padStart(2, "0")}`;
+  const beat = t / B;
+  [...$("beats").children].forEach((b, i) => {
+    const cur = Math.floor(beat) === i;
+    const kick = cur ? Math.exp(-(beat - i) * 4) : 0;
+    b.style.height = 6 + 12 * kick + (cur ? 2 : 0) + "px";
+    b.style.opacity = cur ? 1 : i < beat ? 0.55 : 0.18;
+    b.style.background = cur && !peach ? "#ffc99b" : "currentColor";
+  });
+}
+
+/* ---------------------------------------------------------------- layout */
+function measure() {
+  for (const s of document.querySelectorAll(".scene")) s.style.visibility = "hidden";
+  // headline: centered on the frame
+  const hd = s3.head;
+  hd.style.left = 960 - hd.offsetWidth / 2 + "px";
+  hd.style.top = 540 - hd.offsetHeight / 2 + "px";
+  hd.style.transformOrigin = "50% 50%";
+  s3.row.style.left = "330px";
+  s3.typedEnd = s3.typed.map((c) => c.offsetLeft + c.offsetWidth);
+  // "They said it.": fix each word at its landed weight so weight animation never reflows
+  for (const c of s2.copies) {
+    c.words.forEach((w) => { w.style.fontWeight = 720; });
+    c.words.forEach((w) => { w.parentElement.style.width = w.parentElement.offsetWidth + "px"; });
+  }
+  // wordmark: final letter centers, dot position, shimmer offsets
+  const word = $("s7-word");
+  const dotGap = 0.12 * 236, dotD = 32;
+  const ww = word.offsetWidth;
+  const left = 960 - (ww + dotGap + dotD) / 2;
+  word.style.left = left + "px";
+  word.style.top = 400 + "px";
+  const probe = el("span", "", word);
+  probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
+  const base = probe.offsetTop;
+  probe.remove();
+  s7.m = {
+    w: ww,
+    off: s7.chars.map((c) => c.offsetLeft),
+    chars: s7.chars.map((c) => [left + c.offsetLeft + c.offsetWidth / 2, 400 + c.offsetTop + c.offsetHeight / 2]),
+    dot: [left + ww + dotGap + dotD / 2, 400 + base - dotD / 2 - 2],
+  };
+  const tag = $("s7-tag");
+  tag.style.left = 960 - tag.offsetWidth / 2 + "px";
+  tag.style.top = 400 + word.offsetHeight + 34 + "px";
+  $("s7-foot").style.top = 400 + word.offsetHeight + 34 + 96 + "px";
+  // year odometer and its label hang off the right margin
+  $("s4-year").style.left = 1760 - $("s4-year").offsetWidth + "px";
+  $("s4-yl").style.left = 1760 - $("s4-yl").offsetWidth + "px";
+  // link underline (the S4 baseline morphs into it)
+  const card = $("s5-card"), lk = $("s5-link");
+  s5.link = { x: 160 + lk.offsetLeft, y: 190 + lk.offsetTop + lk.offsetHeight - 3, w: lk.offsetWidth };
+}
+function morph(t) {
+  const m = $("morph");
+  const on = t >= bt(19.6) && t < bt(20.4);
+  m.style.visibility = on ? "visible" : "hidden";
+  if (!on) return;
+  const p = E.app(P(t, bt(19.6), bt(20.35)));
+  const L = s5.link;
+  Object.assign(m.style, { left: lerp(160, L.x, p) + "px", top: lerp(939, L.y, p) + "px", width: lerp(1600, L.w, p) + "px" });
+}
+
+function render(t) {
+  t = clamp(t, 0, DUR - 1e-6);
+  setHBlur(0);
+  u1(t); u2(t); u3(t); u4(t); morph(t); u5(t); u6(t); u7(t); fx(t);
+}
+window.__render = render;
+window.__seek = (t) => { render(t); return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); };
+window.__ready = document.fonts.ready
+  .then(() => Promise.all(["400 20px 'DM Sans'", "600 20px 'DM Sans'", "200 20px 'DM Sans'", "400 20px 'DM Mono'"].map((f) => document.fonts.load(f))))
+  .then(() => { measure(); render(0); return true; });
+
+// ?play loops in real time for previewing; ?t=5.2 holds one frame.
+const q = new URLSearchParams(location.search);
+window.__ready.then(() => {
+  if (q.has("t")) render(parseFloat(q.get("t")));
+  if (q.has("play")) {
+    const start = performance.now();
+    const tick = () => { render(((performance.now() - start) / 1000) % DUR); requestAnimationFrame(tick); };
+    tick();
+  }
+});
+</script>
+</body>
+</html>
