@@ -52,7 +52,7 @@ const ESTIMATE_SAMPLE_SIZE = 30;
 
 const MIN_ESTIMATE_SAMPLE_SIZE = 5;
 
-// Bound the scan across all job kinds, including excluded completions.
+// Bound the completed-job scan across all kinds, including excluded completions.
 const ESTIMATE_SCAN_CAP = 400;
 
 export const waitReasonValidator = v.union(
@@ -175,12 +175,14 @@ async function loadEstimateSample(ctx: QueryCtx): Promise<Map<Doc<"jobs">["kind"
   const samples = new Map<Doc<"jobs">["kind"], Doc<"jobs">[]>();
   let scanned = 0;
 
-  for await (const job of ctx.db.query("jobs").order("desc")) {
+  for await (const job of ctx.db
+    .query("jobs")
+    .withIndex("by_status", (q) => q.eq("status", "complete"))
+    .order("desc")) {
     if (++scanned > ESTIMATE_SCAN_CAP) break;
     const sample = samples.get(job.kind) ?? [];
 
     if (
-      job.status !== "complete" ||
       sample.length >= ESTIMATE_SAMPLE_SIZE ||
       (job.pages ?? 0) <= 0 ||
       job.attemptStartedAt === undefined ||

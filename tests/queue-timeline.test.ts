@@ -481,6 +481,40 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     expect(estimate).toMatchObject({ measured: true, start: now, finish: now + 20_000 });
   });
 
+  it("finds completed samples behind more than 400 newer queued jobs", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    for (let i = 0; i < 5; i++)
+      await seedJob(t, userId, {
+        input: `sample-${i}`,
+        status: "complete",
+        pages: 1,
+        attemptStartedAt: now - 20_000,
+        updatedAt: now,
+      });
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 401; i++)
+        await ctx.db.insert("jobs", {
+          owner: userId,
+          kind: "bulk",
+          input: `queued-${i}`,
+          refresh: false,
+          status: "queued",
+          count: 0,
+          attempt: 0,
+          warnings: [],
+          updatedAt: now,
+        });
+    });
+
+    const result = await a.query(timeline, { now });
+    expect(result.estimateInputs).toEqual({ secondsPerPage: 20, medianPages: 1, sampleSize: 5 });
+    expect(result.entries[0]?.estimate.measured).toBe(true);
+  });
+
   it("chains a second queued job's start to the first job's estimated finish", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
