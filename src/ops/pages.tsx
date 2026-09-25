@@ -1044,14 +1044,21 @@ export function AccountsPage(props: Props) {
                           <Span a={a()} now={ops.now()} />
                         </td>
                         <td class={stale() ? "warn" : "muted"}>
-                          {refreshed() ? (
+                          {run()?.status === "failed" || run()?.status === "partial" ? (
+                            <>
+                              <span class="err">
+                                {run()!.status === "partial" ? "partial import" : "failed"}{" "}
+                                {ago(ops.now() - run()!.updatedAt)}
+                              </span>
+                              {" · last good "}
+                              {refreshed() ? ago(ops.now() - refreshed()!) : "never"}
+                              {" · see jobs"}
+                            </>
+                          ) : refreshed() ? (
                             ago(ops.now() - refreshed()!)
                           ) : (
                             <span class="faint">never</span>
                           )}
-                          <Show when={run()?.status === "failed" || run()?.status === "partial"}>
-                            <div class="err">failed · see jobs</div>
-                          </Show>
                         </td>
                         <td>
                           <div class="acts">
