@@ -6,7 +6,12 @@ use search_model::{BackendStats, Error, Post, Result, SearchRequest, SearchRespo
 use search_query::Expr;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{ops::Bound, path::Path, time::Instant};
+use std::{
+    ops::Bound,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::{Instant, SystemTime},
+};
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{
     AllQuery, BooleanQuery, ConstScoreQuery, EmptyQuery, Occur, PhraseQuery, Query, RangeQuery,
@@ -93,7 +98,40 @@ pub fn open(path: &Path, create: bool) -> Result<Engine> {
         index,
         reader,
         fields,
+        meta: path.join("meta.json"),
+        loaded: Mutex::new(None),
     })
+}
+
+/// What identifies one version of `meta.json`. Tantivy replaces the file
+/// atomically on every commit (a rename, so a new inode), so any commit —
+/// from this process or the separate indexer — changes this stamp.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MetaStamp {
+    modified: SystemTime,
+    len: u64,
+    inode: u64,
+}
+
+impl MetaStamp {
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: metadata.modified().ok()?,
+            len: metadata.len(),
+            inode: inode(&metadata),
+        })
+    }
+}
+
+#[cfg(unix)]
+fn inode(metadata: &std::fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(metadata)
+}
+
+#[cfg(not(unix))]
+const fn inode(_: &std::fs::Metadata) -> u64 {
+    0
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +164,10 @@ pub struct Engine {
     index: Index,
     reader: IndexReader,
     fields: Fields,
+    meta: PathBuf,
+    /// The `meta.json` the reader last reloaded, so a search only pays for
+    /// `reload()` — which reopens every segment — after a commit.
+    loaded: Mutex<Option<MetaStamp>>,
 }
 
 impl Engine {
@@ -135,12 +177,55 @@ impl Engine {
     /// Fails if another writer owns the lock or storage is unavailable.
     pub fn writer(&self) -> Result<Writer> {
         Ok(Writer {
-            writer: self
-                .index
-                .writer_with_num_threads(1, 32_000_000)
-                .map_err(storage)?,
+            writer: Some(
+                self.index
+                    .writer_with_num_threads(1, 32_000_000)
+                    .map_err(storage)?,
+            ),
             fields: self.fields,
         })
+    }
+
+    /// Merge every segment into one and delete the files that frees.
+    /// Returns how many segments there were before.
+    ///
+    /// For an index that grew while writers were dropped before their
+    /// background merges ran (one small segment per import): search and
+    /// reload cost both grow with the segment count.
+    ///
+    /// # Errors
+    /// Fails if another writer owns the lock, or on storage errors.
+    pub fn compact(&self) -> Result<usize> {
+        let mut writer: IndexWriter = self
+            .index
+            .writer_with_num_threads(1, 32_000_000)
+            .map_err(storage)?;
+        let segments = self.index.searchable_segment_ids().map_err(storage)?;
+        if segments.len() > 1 {
+            writer.merge(&segments).wait().map_err(storage)?;
+        }
+        writer.garbage_collect_files().wait().map_err(storage)?;
+        writer.wait_merging_threads().map_err(storage)?;
+        Ok(segments.len())
+    }
+
+    /// Reload the reader if the index has been committed to since the last
+    /// reload. A `stat` per search instead of reopening every segment.
+    fn refresh(&self) -> Result<()> {
+        let stamp = MetaStamp::read(&self.meta);
+        let mut loaded = self
+            .loaded
+            .lock()
+            .map_err(|_| storage("Index reader lock poisoned"))?;
+        if stamp.is_some() && *loaded == stamp {
+            return Ok(());
+        }
+        // Stamped before reloading: a commit landing in between leaves a
+        // newer stamp on disk, so the next search reloads again.
+        self.reader.reload().map_err(storage)?;
+        *loaded = stamp;
+        drop(loaded);
+        Ok(())
     }
 
     /// Live document count, reloaded from disk. Used to detect a registry
@@ -254,8 +339,30 @@ impl Engine {
 }
 
 pub struct Writer {
-    writer: IndexWriter,
+    /// `None` only once dropped (see `Drop`).
+    writer: Option<IndexWriter>,
     fields: Fields,
+}
+
+impl Writer {
+    fn inner(&mut self) -> Result<&mut IndexWriter> {
+        self.writer
+            .as_mut()
+            .ok_or_else(|| storage("Index writer already closed"))
+    }
+}
+
+/// Tantivy merges segments on background threads after a commit, and
+/// dropping an `IndexWriter` abandons them. Each import used its own writer,
+/// so nothing ever merged and every import left another segment behind.
+impl Drop for Writer {
+    fn drop(&mut self) {
+        if let Some(writer) = self.writer.take()
+            && let Err(error) = writer.wait_merging_threads()
+        {
+            eprintln!("index merge failed: {error}");
+        }
+    }
 }
 
 impl IndexSink for Writer {
@@ -279,13 +386,14 @@ impl IndexSink for Writer {
         if let Some(likes) = post.likes {
             document.add_u64(self.fields.likes, u64::from(likes));
         }
-        self.writer
-            .delete_term(Term::from_field_u64(self.fields.id, id));
-        self.writer.add_document(document).map_err(storage)?;
+        let key = Term::from_field_u64(self.fields.id, id);
+        let writer = self.inner()?;
+        writer.delete_term(key);
+        writer.add_document(document).map_err(storage)?;
         Ok(())
     }
     fn commit(&mut self) -> Result<()> {
-        self.writer.commit().map_err(storage)?;
+        self.inner()?.commit().map_err(storage)?;
         Ok(())
     }
 }
@@ -349,7 +457,7 @@ impl Engine {
         now: i64,
     ) -> Result<SearchResponse> {
         request.validate()?;
-        self.reader.reload().map_err(storage)?;
+        self.refresh()?;
         let searcher = self.reader.searcher();
         let fingerprint = fingerprint(&searcher, expression, request.sort, request.limit)?;
         let (offset, now) = cursor_bounds(request, &fingerprint, now)?;
@@ -417,7 +525,7 @@ impl SearchBackend for Engine {
         let mut backend = BackendStats::default();
 
         let stage = started(true);
-        self.reader.reload().map_err(storage)?;
+        self.refresh()?;
         let searcher = self.reader.searcher();
         backend.reload_us = elapsed_us(stage);
         backend.index_docs = searcher.num_docs();

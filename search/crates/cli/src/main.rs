@@ -49,6 +49,9 @@ enum Command {
         #[arg(long)]
         stats: bool,
     },
+    /// Merge the index into one segment. Run once on an index built before
+    /// imports waited for their merges; stop `watch` first (one writer).
+    Compact,
     /// Serve the existing app contract on loopback.
     Serve {
         #[arg(long, default_value = "127.0.0.1:4320")]
@@ -373,6 +376,12 @@ async fn main() -> color_eyre::Result<()> {
                 note.as_deref(),
             ),
         },
+        Command::Compact => {
+            let engine = search_tantivy::open(&resolve_top_index()?, false)?;
+            let before = engine.compact()?;
+            println!("{{\"segmentsBefore\":{before}}}");
+            Ok(())
+        }
         Command::Serve { listen } => run_serve(&resolve_top_index()?, listen).await,
         Command::Publish { state_dir, handle } => run_publish(
             &resolve_top_index()?,
