@@ -210,11 +210,15 @@ describe("jobs", () => {
       status: "queued" as const,
       createdAt: now,
       waitReason: { kind: "ready" as const },
-      estimate: { start: now, finish: now + HOUR },
+      estimate: { start: now, finish: now + HOUR, measured: false },
     };
 
     const guessed = { ...emptyTimeline(), entries: [entry] };
-    const measured = { ...guessed, estimateInputs: { secondsPerPage: 4, sampleSize: 3 } };
+
+    const measured = {
+      ...guessed,
+      entries: [{ ...entry, estimate: { ...entry.estimate, measured: true } }],
+    };
 
     expect(queueInfo(guessed).get(jobId(1))).toEqual({ position: 1, finish: undefined });
     expect(queueInfo(measured).get(jobId(1))).toEqual({ position: 1, finish: now + HOUR });
