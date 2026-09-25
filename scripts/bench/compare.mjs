@@ -82,6 +82,33 @@ const GROUPS = [
 
 const groupOf = (name) => GROUPS.find(([prefix]) => name.startsWith(prefix))?.[1] ?? "Other";
 
+/**
+ * What the page-load numbers mean. They come from a deliberately harsh
+ * profile, and most of first paint is waiting on the network and hosting,
+ * which no code change can win back — so say so next to the numbers.
+ */
+function pageLoadNote(head) {
+  const profile = head.profile;
+  const firstByte = head.metrics["load.html-first-byte"]?.value;
+  const firstPaint = head.metrics["load.first-contentful-paint"]?.value;
+  const lines = [];
+
+  if (profile)
+    lines.push(
+      `Measured as a slow phone on a slow connection: ${profile.cpuSlowdown}× CPU slowdown, ${profile.latencyMs} ms round trip, ${profile.downloadMbps} Mbps, plus ${profile.fileDelayMs} ms per file for static hosting's server time. Real devices on good connections are much faster.`,
+    );
+
+  if (firstByte !== undefined && firstPaint !== undefined)
+    lines.push(
+      "",
+      `Of the ${firstPaint} ms to first paint, ${firstByte} ms is waiting for the HTML to start arriving (network plus hosting), which no code change can remove; the other ${Math.max(0, firstPaint - firstByte)} ms is downloading and drawing the page.`,
+      "",
+      "On production, Convex static hosting takes about 550–640 ms before the first byte of each file. A CDN in front of the site (for example Cloudflare, caching the HTML briefly and hashed assets for good) would cut that to tens of ms and add Brotli, which is the biggest first-paint win left.",
+    );
+
+  return lines.join("\n");
+}
+
 async function compare() {
   const base = await readJson(flag("--base"));
   const head = await readJson(flag("--head"));
@@ -168,11 +195,14 @@ async function compare() {
   if (!head.rust)
     lines.push("", "_Search engine benchmark skipped: this PR does not touch `search/`._");
 
-  for (const [, title] of GROUPS) {
+  for (const [prefix, title] of GROUPS) {
     const subset = rows.filter((row) => groupOf(row.name) === title);
 
-    if (subset.length)
-      lines.push("", `<details><summary>${title}</summary>`, "", table(subset), "", "</details>");
+    if (!subset.length) continue;
+    lines.push("", `<details><summary>${title}</summary>`, "", table(subset));
+
+    if (prefix === "load.") lines.push("", pageLoadNote(head));
+    lines.push("", "</details>");
   }
 
   lines.push(

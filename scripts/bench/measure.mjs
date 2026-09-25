@@ -69,6 +69,14 @@ const FILE_DELAY_MS = 250;
 
 const UNREACHABLE_CONVEX = "https://bench.invalid";
 
+/** Written into every result so the report can say what "slow" meant. */
+const PROFILE = {
+  cpuSlowdown: CPU_SLOWDOWN,
+  latencyMs: LATENCY_MS,
+  downloadMbps: (DOWNLOAD_BPS * 8) / (1024 * 1024),
+  fileDelayMs: FILE_DELAY_MS,
+};
+
 if (!checkouts.length) {
   console.error(
     "usage: measure.mjs <label>=<dir> [<label>=<dir> ...] [--out-dir dir] [--runs n] [--rust]",
@@ -295,7 +303,9 @@ async function pageLoad(browser, url) {
       0,
     );
 
-    return { fcp, lcp: state.lcp || fcp, ready: state.ready, blocking };
+    const firstByte = performance.getEntriesByType("navigation")[0]?.responseStart ?? 0;
+
+    return { firstByte, fcp, lcp: state.lcp || fcp, ready: state.ready, blocking };
   });
 
   await context.close();
@@ -313,7 +323,7 @@ const median = (values) => {
 async function pageLoads(builts) {
   const servers = await Promise.all(builts.map((built) => serve(built.publicDir)));
   const browser = await chromium.launch();
-  const samples = builts.map(() => ({ fcp: [], lcp: [], ready: [], blocking: [] }));
+  const samples = builts.map(() => ({ firstByte: [], fcp: [], lcp: [], ready: [], blocking: [] }));
 
   try {
     // One throwaway load per side warms the browser process itself.
@@ -334,6 +344,9 @@ async function pageLoads(builts) {
   }
 
   return samples.map((sample) => ({
+    // The wait for the HTML itself: network plus hosting, not the code. No
+    // paint can come before it, so first paint minus this is the code's part.
+    "load.html-first-byte": { value: Math.round(median(sample.firstByte)), unit: "ms" },
     "load.first-contentful-paint": { value: Math.round(median(sample.fcp)), unit: "ms" },
     "load.largest-contentful-paint": { value: Math.round(median(sample.lcp)), unit: "ms" },
     "load.app-ready": { value: Math.round(median(sample.ready)), unit: "ms" },
@@ -430,6 +443,9 @@ for (const [index, built] of builts.entries()) {
   const commit = run("git", ["rev-parse", "HEAD"], { cwd: built.dir }).trim();
   const file = join(outDir, `${built.label}.json`);
 
-  await writeFile(file, `${JSON.stringify({ commit, rust: withRust, metrics }, null, 2)}\n`);
+  await writeFile(
+    file,
+    `${JSON.stringify({ commit, rust: withRust, profile: PROFILE, metrics }, null, 2)}\n`,
+  );
   console.log(`wrote ${file}`);
 }
