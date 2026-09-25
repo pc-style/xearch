@@ -1,0 +1,190 @@
+name: Performance
+
+# Pull requests: build and benchmark the PR and its base branch on the same
+# runner, so machine noise hits both, and flag any metric more than 10% worse
+# (bundle sizes, Convex function sizes, a throttled page load, and the Rust
+# search benchmark when search/ changed). The result is posted as one sticky
+# comment; the `perf-regression-ok` label accepts a flagged regression.
+#
+# main: re-measure and keep perf/baseline.json, the best numbers main has
+# reached. A metric that improved by more than 10% replaces its old value.
+#
+# See scripts/bench/measure.mjs and scripts/bench/compare.mjs.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+jobs:
+  pull-request:
+    # Adding or removing any other label is not worth a re-run.
+    if: >-
+      github.event_name == 'pull_request' &&
+      ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      github.event.label.name == 'perf-regression-ok')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: perf-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/head/search/target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: Check out the base branch
+        run: |
+          git -C head fetch --depth=1 origin "$BASE_SHA"
+          git -C head worktree add --detach ../base "$BASE_SHA"
+
+      - name: Does this touch the search engine?
+        id: rust
+        run: |
+          if git -C head diff --quiet "$BASE_SHA" HEAD -- search/; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - run: bun install --frozen-lockfile
+        working-directory: head
+
+      - run: bun install --frozen-lockfile
+        working-directory: base
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('head/bun.lock') }}
+
+      - run: node_modules/.bin/playwright-core install --with-deps chromium-headless-shell
+        working-directory: head
+
+      - if: steps.rust.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - if: steps.rust.outputs.run == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: head/search
+
+      - name: Measure
+        run: >-
+          node head/scripts/bench/measure.mjs base=base head=head --out-dir results
+          ${{ steps.rust.outputs.run == 'true' && '--rust' || '' }}
+
+      - name: Compare
+        run: |
+          node head/scripts/bench/compare.mjs --base results/base.json --head results/head.json \
+            --baseline head/perf/baseline.json --report results/report.md --summary results/summary.json
+          cat results/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # A pull request from a fork gets a read-only token and cannot comment;
+      # the report is still in the job summary.
+      - name: Post the report
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- perf-bench -->")) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@results/report.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file results/report.md
+          fi
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: results
+          if-no-files-found: ignore
+
+      - name: Flag regressions
+        env:
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'perf-regression-ok') }}
+        run: |
+          regressions=$(node -p 'require("./results/summary.json").regressions.join(", ")')
+          if [ -z "$regressions" ]; then exit 0; fi
+          if [ "$ACCEPTED" = "true" ]; then
+            echo "::warning::More than 10% worse, accepted with perf-regression-ok: $regressions"
+          else
+            echo "::error::More than 10% worse than the base branch: $regressions. Add the perf-regression-ok label if this is intended."
+            exit 1
+          fi
+
+  baseline:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: perf-baseline
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - run: bun install --frozen-lockfile
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - run: node_modules/.bin/playwright-core install --with-deps chromium-headless-shell
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: search
+
+      - name: Measure
+        run: node scripts/bench/measure.mjs head=. --rust --out-dir "$RUNNER_TEMP/perf"
+
+      - name: Record improvements
+        run: node scripts/bench/compare.mjs --update-baseline perf/baseline.json --head "$RUNNER_TEMP/perf/head.json"
+
+      # Pushed with the workflow token, which never triggers other workflows,
+      # so a baseline commit does not re-run Check or deploy.
+      - name: Commit the baseline
+        run: |
+          if [ -z "$(git status --porcelain -- perf/baseline.json)" ]; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add perf/baseline.json
+          git commit -m "Update performance baseline [skip ci]"
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep 5
+          done
+          exit 1
