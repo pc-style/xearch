@@ -1,5 +1,7 @@
 import { For, Show } from "solid-js";
-import { useConvex, useQuery } from "../data/convex";
+import { useConvex } from "../data/convex";
+import { useSnapshot } from "../data/snapshot";
+import { publicRefresh } from "../data/publicRefresh";
 import { api } from "../../convex/_generated/api";
 import { AccountBadge } from "../auth/AccountBadge";
 import { handoffReady, receiverConnection, type Connection } from "../integrationStatus";
@@ -22,19 +24,22 @@ export function ConnectionsPanel() {
   // Skipped until a session exists: `integrations.operator` requires one,
   // and asking early throws into the app's error boundary.
   const { isAuthenticated } = useConvex();
-  // Worker liveness is judged against this clock: convex/integrations.ts's
-  // `operator` takes `now` as a required arg (never reads the wall clock
-  // itself — a query re-runs when a document changes, never because time
-  // passed) and `handoffReady` below re-derives `handoffState.lastSeenAt`
-  // against this same ticking clock, so the reading keeps decaying between
-  // query re-runs instead of freezing at the last write. `useLiveNow`, not
-  // the bucketed dashboard clock — see its comment in src/library/clock.ts
-  // for why a rounded `now` cannot feed this 45s liveness window safely.
+  // Worker liveness is judged against this clock, locally: `handoffReady`
+  // below re-derives `handoffState.lastSeenAt` against a ticking clock so
+  // the reading keeps decaying after the read. The read itself happens once
+  // on opening, and again only from the header's Refresh (src/data/
+  // publicRefresh.ts) — never because the clock ticked. `useLiveNow`, not
+  // the bucketed dashboard clock — see src/library/clock.ts for why a
+  // rounded `now` cannot feed this 45s liveness window safely.
   const now = useLiveNow();
 
-  const config = useQuery(api.integrations.operator, () =>
-    isAuthenticated() ? { now: now() } : "skip",
+  const snapshot = useSnapshot(
+    api.integrations.operator,
+    () => (isAuthenticated() ? { now: Date.now() } : "skip"),
+    publicRefresh.version,
   );
+
+  const config = snapshot.data;
 
   const connections = (): Connection[] => [
     {

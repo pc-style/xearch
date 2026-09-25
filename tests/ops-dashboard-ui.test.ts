@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { settle, stripMarkers } from "./solid";
 import {
   account,
@@ -61,7 +61,8 @@ describe("ops shell", () => {
     ]);
     expect(ops.find(".opsnav a.on").textContent).toBe("Jobs");
     expect(ops.find(".opsnav a.on").getAttribute("aria-current")).toBe("page");
-    expect(text(ops)).toContain("auto-refresh 30 s");
+    expect(text(ops)).toMatch(/Updated \d\d:\d\d/);
+    expect(text(ops)).not.toContain("auto-refresh");
     expect(ops.find(".pgd").textContent).toContain("Queued, running, stalled and failed work");
   });
 
@@ -71,36 +72,164 @@ describe("ops shell", () => {
     ops.click(".who button", "Search posts");
     expect(ops.openSearch).toEqual([""]);
   });
+});
 
-  it("Reload re-reads every clock-bound query with a new clock", async () => {
-    const ops = await open("overview");
+/** The finite reads made so far, by function name, in order. */
+const names = (ops: MountedOps) => ops.reads.map((r) => r.name);
 
-    const clocks = () => {
-      ops.html();
-
-      return ops.reads.filter((r) => r.name === "summary:summary").map((r) => Number(r.args.now));
-    };
-
-    // Without a first read, Math.max() of nothing is -Infinity and any
-    // later read would pass the comparison below.
-    expect(clocks().length).toBeGreaterThan(0);
-    expect(clocks().every(Number.isFinite)).toBe(true);
-    const before = Math.max(...clocks());
-
-    ops.click("button[aria-label='Reload data']");
-    await vi.waitFor(() => expect(Math.max(...clocks())).toBeGreaterThan(before));
-
-    const reloaded = Math.max(...clocks());
-
-    ops.click("button[aria-label='Reload data']");
-    await vi.waitFor(() => expect(Math.max(...clocks())).toBeGreaterThan(reloaded));
-    expect(ops.find(".toast").textContent).toContain("Reloaded");
+describe("reading by hand", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "Date"] });
   });
 
-  it("keeps the attention cards and pipeline stages in place across a re-read", async () => {
-    // Every query update rebuilds the lists behind these cards. Recreating
-    // their DOM on each one replays the entry animation, which on a busy
-    // worker looks like the dashboard flashing every second.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads only what the open tab shows, once, and subscribes to nothing but identity", async () => {
+    const ops = await open("jobs");
+
+    expect(names(ops).sort()).toEqual(["jobs:list", "queue:timelineSnapshot"]);
+    expect(ops.subscribed).toEqual(["auth:me"]);
+
+    // Time passing, the page being hidden and shown again, a re-render:
+    // none of it reads anything.
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    await ops.settle();
+    ops.html();
+
+    expect(names(ops)).toHaveLength(2);
+    expect(ops.subscribed).toEqual(["auth:me"]);
+  });
+
+  it("passes the instant of the read as now, not a ticking clock", async () => {
+    const ops = await open("jobs");
+    const read = ops.reads.find((r) => r.name === "queue:timelineSnapshot")!;
+
+    expect(read.args.now).toBe(Date.now());
+    await vi.advanceTimersByTimeAsync(2 * MINUTE);
+    await ops.settle();
+    expect(ops.reads.filter((r) => r.name === "queue:timelineSnapshot")).toHaveLength(1);
+  });
+
+  it("a new tab reads only what it lacks; a tab seen before reads nothing", async () => {
+    const ops = await open("accounts");
+
+    expect(names(ops).sort()).toEqual(["ops:accountsSnapshot", "summary:summarySnapshot"]);
+
+    await ops.show("overview");
+    expect(names(ops).slice(2).sort()).toEqual([
+      "integrations:operator",
+      "jobs:list",
+      "limits:current",
+      "summary:healthSnapshot",
+    ]);
+
+    await ops.show("accounts");
+    await ops.show("overview");
+    expect(names(ops)).toHaveLength(6);
+  });
+
+  it("Refresh re-reads the current tab only, then waits 30 seconds", async () => {
+    const ops = await open("accounts");
+    const before = names(ops).length;
+
+    // Arriving started the tab's cooldown: the button is not yet usable.
+    ops.click("button[aria-label='Refresh Accounts']");
+    await ops.settle();
+    expect(names(ops)).toHaveLength(before);
+    expect(ops.find(".toast").textContent).toMatch(/Refresh Accounts again in \d+ s/);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    ops.click("button[aria-label='Refresh Accounts']");
+    await ops.settle();
+    expect(names(ops).slice(before).sort()).toEqual([
+      "ops:accountsSnapshot",
+      "summary:summarySnapshot",
+    ]);
+
+    // A second click straight after is blocked; the reads stay as they were.
+    ops.click("button[aria-label='Refresh Accounts']");
+    await ops.settle();
+    expect(names(ops)).toHaveLength(before + 2);
+  });
+
+  it("Refresh all re-reads every tab and waits five minutes, starting each tab's own wait", async () => {
+    const ops = await open("provider");
+    const before = names(ops).length;
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    ops.click("button[aria-label='More refresh options']");
+    ops.click(".opsnav .menu button", "Refresh all");
+    await ops.settle();
+
+    expect(names(ops).slice(before).sort()).toEqual([
+      "integrations:operator",
+      "jobs:list",
+      "limits:current",
+      "ops:accountsSnapshot",
+      "ops:activitySnapshot",
+      "queue:timelineSnapshot",
+      "summary:healthSnapshot",
+      "summary:summarySnapshot",
+    ]);
+
+    // Every tab is now loaded, so moving around reads nothing …
+    await ops.show("overview");
+    await ops.show("jobs");
+    expect(names(ops)).toHaveLength(before + 8);
+
+    // … and each tab's own 30-second wait was started by Refresh all.
+    ops.click("button[aria-label='Refresh Jobs']");
+    await ops.settle();
+    expect(names(ops)).toHaveLength(before + 8);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    ops.click("button[aria-label='Refresh Jobs']");
+    await ops.settle();
+    expect(names(ops)).toHaveLength(before + 10);
+
+    // Refresh all itself waits five minutes.
+    ops.click("button[aria-label='More refresh options']");
+    ops.click(".opsnav .menu button", "Refresh all");
+    await ops.settle();
+    expect(names(ops)).toHaveLength(before + 10);
+    expect(ops.find(".toast").textContent).toMatch(/Refresh all again in \d+ s/);
+  });
+
+  it("keeps the last data and says what failed when a refresh fails", async () => {
+    let fail = false;
+
+    const ops = await open(
+      "accounts",
+      { accounts: [account(1, { handle: "bob", name: "Bob" })] },
+      {
+        fetch: (name) =>
+          fail && name === "ops:accountsSnapshot"
+            ? Promise.reject(new Error("Too many bytes read"))
+            : undefined,
+      },
+    );
+
+    expect(ops.find("tr[data-account=bob]")).toBeTruthy();
+    fail = true;
+    await vi.advanceTimersByTimeAsync(31_000);
+    ops.click("button[aria-label='Refresh Accounts']");
+    await ops.settle();
+
+    expect(ops.find("tr[data-account=bob]")).toBeTruthy();
+    expect(ops.find(".ops-error").textContent).toContain("Too many bytes read");
+    expect(ops.find(".toast").textContent).toContain("Too many bytes read");
+  });
+
+  it("keeps the attention cards and pipeline stages in place across a refresh", async () => {
+    // A refresh rebuilds the lists behind these cards. Recreating their DOM
+    // replays the entry animation, which looks like the dashboard flashing.
     const ops = await open("overview", {
       jobs: [job(1, { input: "bob", status: "failed", error: "x.md 502 Bad Gateway" })],
       accounts: [account(1, { handle: "bob", name: "Bob" })],
@@ -108,17 +237,12 @@ describe("ops shell", () => {
 
     const card = ops.find(".ai", "Import of @bob failed");
     const stage = ops.find(".st", "Queued");
+    const before = names(ops).length;
 
-    const reads = () => {
-      ops.html();
-
-      return ops.reads.filter((r) => r.name === "summary:summary").length;
-    };
-
-    const before = reads();
-
-    ops.click("button[aria-label='Reload data']");
-    await vi.waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await vi.advanceTimersByTimeAsync(31_000);
+    ops.click("button[aria-label='Refresh Overview']");
+    await ops.settle();
+    expect(names(ops).length).toBeGreaterThan(before);
 
     expect(ops.find(".ai", "Import of @bob failed")).toBe(card);
     expect(ops.find(".st", "Queued")).toBe(stage);
@@ -523,6 +647,70 @@ describe("jobs", () => {
       { name: "jobs:dismiss", args: { jobId: jobId(1) } },
       { name: "jobs:dismiss", args: { jobId: jobId(2) } },
     ]);
+  });
+});
+
+describe("rows after an action, without a re-read", () => {
+  it("a retried job shows as queued and a cancelled one as cancelled", async () => {
+    const now = Date.now();
+
+    const ops = await open("jobs", {
+      jobs: [
+        job(1, { status: "failed", error: "boom" }),
+        job(2, { status: "running", updatedAt: now - MINUTE, postsReceived: 5 }),
+      ],
+    });
+
+    const before = ops.reads.length;
+    ops.click(`tr[data-job=${jobId(1)}] button`, "Retry");
+    await ops.settle();
+    expect(ops.find(`tr[data-job=${jobId(1)}]`).textContent).toContain("Waiting");
+    expect(ops.find(`tr[data-job=${jobId(1)}]`).textContent).not.toContain("boom");
+
+    ops.click(`tr[data-job=${jobId(2)}] button`, "Cancel");
+    ops.click(".md button", "Cancel job");
+    await ops.settle();
+    ops.click(".seg button", "History");
+    expect(ops.find(`tr[data-job=${jobId(2)}]`).textContent).toContain("Cancelled");
+    expect(ops.reads).toHaveLength(before);
+  });
+
+  it("dismissing failed jobs removes each confirmed row, and stops at the first failure", async () => {
+    const ops = await open(
+      "jobs",
+      {
+        jobs: [
+          job(1, { status: "failed", error: "a" }),
+          job(2, { status: "failed", error: "b" }),
+          job(3, { status: "failed", error: "c" }),
+        ],
+      },
+      {
+        mutation: (name, args) =>
+          name === "jobs:dismiss" && args.jobId === jobId(2)
+            ? Promise.reject(new Error("Stop this run before dismissing it."))
+            : Promise.resolve(null),
+      },
+    );
+
+    const before = ops.reads.length;
+    ops.click(".sh button", "Dismiss failed");
+    ops.click(".md button", "Dismiss failed");
+    await ops.settle();
+
+    const rows = () => {
+      ops.html();
+
+      return [...ops.container.querySelectorAll("tr[data-job]")].map((r) =>
+        r.getAttribute("data-job"),
+      );
+    };
+
+    // Job 1 was dismissed and is gone; 2 failed so it and 3 stay, in order.
+    expect(rows()).toEqual([jobId(2), jobId(3)]);
+    expect(ops.calls.map((c) => c.args.jobId)).toEqual([jobId(1), jobId(2)]);
+    expect(ops.find(".toast").textContent).toContain("Stop this run before dismissing it.");
+    expect(ops.reads).toHaveLength(before);
   });
 });
 

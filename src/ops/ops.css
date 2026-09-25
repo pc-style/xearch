@@ -94,6 +94,63 @@
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* Refresh: the current tab, and a menu with Refresh all. */
+.opsnav .rf {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-right: -8px;
+}
+.opsnav .rf > .b.s {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 0;
+}
+.opsnav .rf > .b.s.dd {
+  padding: 6px 4px;
+  margin-left: -4px;
+}
+.opsnav .rf > .b[aria-disabled="true"] {
+  opacity: 0.45;
+}
+.opsnav .rf .menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+  padding: 4px;
+  z-index: 20;
+}
+.opsnav .rf .menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.opsnav .rf .menu button:hover {
+  background: var(--hover);
+}
+.opsnav .rf .menu button[aria-disabled="true"] {
+  opacity: 0.6;
+}
+.opsnav .rf .menu small {
+  color: var(--muted);
+  font-size: 12px;
+}
 
 /* health strip */
 .ops .health {
@@ -1265,8 +1322,11 @@
   .opsnav .now {
     display: none;
   }
-  .opsnav > .b.s {
+  .opsnav .rf {
     flex: none;
+  }
+  .opsnav .rf .lbl {
+    display: none;
   }
   .ops .flowrow {
     grid-template-columns: repeat(2, minmax(0, 1fr));

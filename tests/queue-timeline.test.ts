@@ -14,12 +14,12 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // (see their own test files' header comments); `anyApi` resolves to the
 // exact same function reference at runtime as the generated `api` object
 // would once codegen has run.
-// SAFETY: `anyApi.queue.timeline` is `FunctionReference<any, any>` only
+// SAFETY: `anyApi.queue.timelineSnapshot` is `FunctionReference<any, any>` only
 // because codegen hasn't caught up (see above); convex-test rejects the
 // reference outright if `convex/queue.ts` did not actually register a
 // `timeline` query, so this narrowing to its real, frozen signature is
 // checked at every test run, not merely asserted away.
-const timeline = anyApi.queue.timeline as FunctionReference<
+const timeline = anyApi.queue.timelineSnapshot as FunctionReference<
   "query",
   "public",
   { now: number; operatorToken?: string },

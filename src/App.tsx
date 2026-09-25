@@ -12,6 +12,9 @@ import {
 } from "solid-js";
 import * as Effect from "effect/Effect";
 import { useAction, useConvex, useMutation, useQuery } from "./data/convex";
+import { useSnapshot } from "./data/snapshot";
+import { useLiveNow } from "./library/clock";
+import { publicRefresh } from "./data/publicRefresh";
 import { fromStore } from "./data/external";
 import { ResultsHead, ResultsSection } from "./ResultsSection";
 import { Wall, type Account } from "./Wall";
@@ -19,9 +22,7 @@ import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
-import { useLiveNow } from "./library/clock";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
-import { useStableQuery } from "./library/stableQuery";
 import { capture, captureError, identifyUser, redactEmail, resetUser } from "./posthog";
 import { operatorArgs } from "./operatorToken";
 import { describeError } from "./errors";
@@ -327,13 +328,23 @@ export default function App() {
 
   // Decoration: a failing wall read leaves the posts column out, nothing more.
   const wallPosts = useQuery(api.wall.posts, () => ({}), { soft: true });
-  // `configured.indexing` decays with real time (worker liveness), so it is
-  // asked with a live, unbucketed clock — see src/library/clock.ts.
+
+  // Read once, and again only from the header's Refresh (src/data/
+  // publicRefresh.ts). `configured.indexing` is decided against the instant
+  // of the read: it used to be asked every 5 s with a ticking clock, which
+  // kept every open page re-running it. What the answer means is "as of the
+  // last refresh", and the page says when that was.
+  const bootstrap = useSnapshot(
+    api.integrations.configured,
+    () => ({ now: Date.now() }),
+    publicRefresh.version,
+  );
+
+  const configured = bootstrap.data;
+
+  onSettled(() => publicRefresh.began(Date.now()));
+  // A local clock for ages on screen (job rows); it never reaches a query.
   const now = useLiveNow();
-  // Stable: `now` ticks every 5s, and a plain query reads `undefined` on
-  // every argument change until the new result lands, which put the whole
-  // page back into "Loading the search library…" on each tick.
-  const configured = useStableQuery(api.integrations.configured, () => ({ now: now() }));
   const libraryLoading = () => accountResults() === undefined || configured() === undefined;
   // The caller's own identity. `verifiedEmail` is the one address
   // `email.send` will ever accept, so there is nothing to type at send time.
@@ -938,6 +949,24 @@ export default function App() {
                   <span class="lbl">Dashboard</span>
                 </button>
               </Show>
+              <button
+                type="button"
+                class="nav"
+                aria-label="Refresh"
+                title={
+                  bootstrap.fetchedAt()
+                    ? `Re-read this page's status · last read ${new Date(bootstrap.fetchedAt()!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                    : "Re-read this page's status"
+                }
+                onClick={() => {
+                  const message = publicRefresh.request(Date.now());
+
+                  if (message) setNotice(message);
+                }}
+              >
+                <Icon name="refresh-cw" />
+                <span class="lbl">Refresh</span>
+              </button>
               <div class="menu">
                 <button
                   type="button"

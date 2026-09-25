@@ -457,22 +457,20 @@ async function computeQueue(
   };
 }
 
-export const summary = query({
+// `summarySnapshot`/`healthSnapshot` replaced `summary`/`health` when the
+// dashboard moved to explicit, finite reads (src/ops/refresh.ts). The old
+// names are retired on purpose: a dashboard build still open from before
+// the change must not keep a live subscription to these reads.
+export const summarySnapshot = query({
   // `now` is REQUIRED, not defaulted with `?? Date.now()`. convex/
   // _generated/ai/guidelines.md "Do not read the wall clock inside a query":
   // a query is only re-run when its args or a watched document change, so a
   // bare Date.now() (or a fallback to one when the caller omits an optional
   // arg) freezes at whatever wall-clock instant last triggered a recompute
-  // instead of tracking real time. The caller must pass the current time —
-  // and refresh it periodically (e.g. on an interval) if it wants
-  // `observedAt` to visibly advance — the same pattern the guideline itself
-  // names ("pass the current time in as an argument and let the client
-  // refresh it").
-  //
-  // src/library/summaryApi.tsx types `summaryQuery`'s args as `{ now: number }`
-  // (not `Record<string, never>`) and src/library/Library.tsx calls it as
-  // `useQuery(summaryQuery, isAuthenticated ? { now } : "skip")`, refreshing
-  // `now` on a `setInterval` — done together with making this arg required.
+  // instead of tracking real time. The caller must pass the current time,
+  // the same pattern the guideline itself names ("pass the current time in
+  // as an argument"). The dashboard (src/ops/refresh.ts) passes the instant
+  // of each explicit fetch; nothing refreshes it on a timer any more.
   args: { now: v.number() },
   returns: dashboardSummaryValidator,
   handler: async (ctx, args): Promise<DashboardSummary> => {
@@ -575,7 +573,7 @@ const serviceStatusValidator = v.union(
 
 export type ServiceStatus = Infer<typeof serviceStatusValidator>;
 
-export const health = query({
+export const healthSnapshot = query({
   // REQUIRED, not optional-with-a-Date.now()-fallback. An optional `now`
   // that defaults to `Date.now()` inside the handler is the exact anti-
   // pattern convex/_generated/ai/guidelines.md "Do not read the wall clock
@@ -583,9 +581,8 @@ export const health = query({
   // watched document change, not merely because time passed, so `stale`
   // would freeze at whatever was true at the last recompute instead of
   // tracking real time. Making the arg required forces every caller to
-  // decide how it refreshes `now` — see `summary` above for the identical
-  // fix: src/library/summaryApi.tsx and src/library/Library.tsx pass and
-  // refresh `now` for both queries the same way.
+  // decide what `now` it passes — see `summarySnapshot` above; the
+  // dashboard (src/ops/refresh.ts) passes the instant of each explicit fetch.
   args: { now: v.number() },
   returns: v.array(serviceStatusValidator),
   handler: async (ctx, args): Promise<ServiceStatus[]> => {
