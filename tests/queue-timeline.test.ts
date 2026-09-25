@@ -55,6 +55,7 @@ async function withNonOperator(t: ReturnType<typeof setup>) {
 }
 
 type JobOverrides = Partial<{
+  origin: "manual" | "history" | "discovered";
   kind: "bulk" | "live" | "post" | "profile" | "following" | "followers" | "archive";
   input: string;
   status: "queued" | "running" | "complete" | "partial" | "failed" | "cancelled";
@@ -83,6 +84,7 @@ async function seedJob(
       owner,
       kind: overrides.kind ?? "bulk",
       input: overrides.input ?? "someone",
+      origin: overrides.origin,
       refresh: false,
       status: overrides.status ?? "queued",
       count: overrides.count ?? 0,
@@ -104,6 +106,26 @@ async function seedJob(
 }
 
 describe("convex/queue.ts timeline (operator Queue page)", () => {
+  it("shows manual jobs ahead of older history windows in claim order", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const history = await seedJob(t, userId, {
+      input: "from:older",
+      kind: "live",
+      origin: "history",
+    });
+
+    const manual = await seedJob(t, userId, { input: "fresh", origin: "manual" });
+
+    const result = await a.query(timeline, { now });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([manual, history]);
+    expect(result.entries[0]?.waitReason).toEqual({ kind: "ready" });
+    expect(result.entries[1]?.waitReason).toEqual({ kind: "behind", aheadCount: 1 });
+  });
+
   it("requires a signed-in caller", async () => {
     const t = setup();
     await expect(t.query(timeline, { now: Date.now() })).rejects.toThrow(

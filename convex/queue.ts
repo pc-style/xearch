@@ -21,15 +21,8 @@ import { activeThrottleUntil, loadProviderLimit } from "./limits";
  *
  * Ordering mirrors `worker.claimNext`: at most one job is ever "running" (the
  * worker refuses to claim a second job while one is running), and among
- * queued jobs the worker claims whichever is both due (`readyAt <= now`) and
- * earliest — so sorting the queued set by its EFFECTIVE readyAt ascending
- * (an unset readyAt reads as 0, i.e. immediately due, exactly like
- * `worker.claimNext`'s `job.readyAt ?? 0`) already puts every ready job
- * ahead of every not-yet-ready one, without a separate "ready first" pass.
- * `claimNext` itself only scans its next 20 queued-by-creation-time
- * candidates rather than sorting the whole table by readyAt; this timeline
- * is an honest approximation of that intent (readyAt-ascending order) for
- * display, not a byte-for-byte replay of the scan cap.
+ * queued jobs the worker claims due manual jobs first, then history windows,
+ * then discovered jobs, FIFO within each group. Not-yet-due jobs follow.
  *
  * Terminal-but-retryable jobs (failed/partial/cancelled, still eligible for
  * `jobs.retry`) are not queued at all — nothing will touch them until a
@@ -341,9 +334,24 @@ export const timelineSnapshot = query({
 
     const running = jobs.filter((j) => j.status === "running");
 
+    const priority = (job: Doc<"jobs">) => {
+      if (job.origin === "history") return 1;
+
+      if (job.origin === "discovered") return 2;
+
+      return 0;
+    };
+
     const queued = jobs
       .filter((j) => j.status === "queued")
-      .sort((a, b) => (a.readyAt ?? 0) - (b.readyAt ?? 0));
+      .sort((a, b) => {
+        const aDue = (a.readyAt ?? 0) <= now;
+        const bDue = (b.readyAt ?? 0) <= now;
+
+        if (aDue !== bDue) return aDue ? -1 : 1;
+
+        return priority(a) - priority(b) || a._creationTime - b._creationTime;
+      });
 
     const terminalRetryable = jobs
       .filter((j) => j.status === "failed" || j.status === "partial" || j.status === "cancelled")
@@ -351,9 +359,7 @@ export const timelineSnapshot = query({
 
     // The exact order the worker will take them: running first (there is
     // never more than one in practice — worker.claimNext refuses a second
-    // claim while one is running), then queued by effective readyAt
-    // ascending (which already puts every due job ahead of every not-yet-due
-    // one). Terminal-but-retryable jobs are not queued at all; they are
+    // claim while one is running), then queued in claim priority. Terminal-but-retryable jobs are not queued at all; they are
     // appended after, since nothing acts on them without a person clicking
     // Retry first.
     const ordered = [...running, ...queued, ...terminalRetryable];
