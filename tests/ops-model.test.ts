@@ -222,6 +222,11 @@ describe("jobs", () => {
 
     expect(queueInfo(guessed).get(jobId(1))).toEqual({ position: 1, finish: undefined });
     expect(queueInfo(measured).get(jobId(1))).toEqual({ position: 1, finish: now + HOUR });
+    expect(queueInfo({ ...measured, truncated: true }).get(jobId(1))).toEqual({
+      position: 1,
+      finish: now + HOUR,
+    });
+    expect(queueInfo({ ...measured, queueTruncated: true }).size).toBe(0);
   });
 });
 

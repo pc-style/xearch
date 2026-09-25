@@ -55,6 +55,7 @@ async function withNonOperator(t: ReturnType<typeof setup>) {
 }
 
 type JobOverrides = Partial<{
+  origin: "manual" | "history" | "discovered";
   kind: "bulk" | "live" | "post" | "profile" | "following" | "followers" | "archive";
   input: string;
   status: "queued" | "running" | "complete" | "partial" | "failed" | "cancelled";
@@ -83,6 +84,7 @@ async function seedJob(
       owner,
       kind: overrides.kind ?? "bulk",
       input: overrides.input ?? "someone",
+      origin: overrides.origin,
       refresh: false,
       status: overrides.status ?? "queued",
       count: overrides.count ?? 0,
@@ -104,6 +106,107 @@ async function seedJob(
 }
 
 describe("convex/queue.ts timeline (operator Queue page)", () => {
+  it("orders due manual jobs by eligibility time", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const delayed = await seedJob(t, userId, {
+      input: "delayed",
+      origin: "manual",
+      readyAt: now + 5_000,
+    });
+
+    const immediate = await seedJob(t, userId, { input: "immediate", origin: "manual" });
+    const result = await a.query(timeline, { now: now + 10_000 });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([immediate, delayed]);
+  });
+
+  it("shows manual jobs ahead of older history windows in claim order", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const history = await seedJob(t, userId, {
+      input: "from:older",
+      kind: "live",
+      origin: "history",
+    });
+
+    const manual = await seedJob(t, userId, { input: "fresh", origin: "manual" });
+
+    const result = await a.query(timeline, { now });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([manual, history]);
+    expect(result.entries[0]?.waitReason).toEqual({ kind: "ready" });
+    expect(result.entries[1]?.waitReason).toEqual({ kind: "behind", aheadCount: 1 });
+  });
+
+  it("shows future ready times before origin priority", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    const laterManual = await seedJob(t, userId, {
+      origin: "manual",
+      readyAt: now + 60_000,
+    });
+
+    const soonerHistory = await seedJob(t, userId, {
+      origin: "history",
+      readyAt: now + 10_000,
+    });
+
+    const sameTimeDiscovered = await seedJob(t, userId, {
+      origin: "discovered",
+      readyAt: now + 10_000,
+    });
+
+    const result = await a.query(timeline, { now });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([
+      soonerHistory,
+      sameTimeDiscovered,
+      laterManual,
+    ]);
+  });
+
+  it("rechecks a manual job's ready time after the running job's projected finish", async () => {
+    const t = setup();
+    const { a, userId } = await withOperator(t);
+    const now = Date.now();
+
+    for (let i = 0; i < 5; i++)
+      await seedJob(t, userId, {
+        kind: "live",
+        input: `sample-${i}`,
+        status: "complete",
+        pages: 1,
+        attemptStartedAt: now - 20_000,
+        updatedAt: now,
+      });
+
+    const running = await seedJob(t, userId, { kind: "live", status: "running" });
+
+    const history = await seedJob(t, userId, {
+      kind: "live",
+      origin: "history",
+      status: "queued",
+    });
+
+    const manual = await seedJob(t, userId, {
+      kind: "live",
+      origin: "manual",
+      status: "queued",
+      readyAt: now + 5_000,
+    });
+
+    const result = await a.query(timeline, { now });
+
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([running, manual, history]);
+  });
+
   it("requires a signed-in caller", async () => {
     const t = setup();
     await expect(t.query(timeline, { now: Date.now() })).rejects.toThrow(
@@ -125,7 +228,7 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     );
   });
 
-  it("orders running first, then queued by readyAt ascending, then terminal-retryable last", async () => {
+  it("orders running first, due jobs by priority and FIFO, future jobs by ready time, then retryable jobs", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
     const now = Date.now();
@@ -198,11 +301,9 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
 
     const result = await a.query(timeline, { now });
     const byInput = new Map(result.entries.map((e) => [e.input, e]));
-    // No job is running, so the head of the ready line is what the worker
-    // claims on its very next poll.
-    expect(byInput.get("next")?.waitReason).toEqual({ kind: "ready" });
-    // "after" is due too, but "next" is ahead of it in claim order.
-    expect(byInput.get("after")?.waitReason).toEqual({ kind: "behind", aheadCount: 1 });
+    // "after" became eligible first, even though it was inserted later.
+    expect(byInput.get("after")?.waitReason).toEqual({ kind: "ready" });
+    expect(byInput.get("next")?.waitReason).toEqual({ kind: "behind", aheadCount: 1 });
   });
 
   it("classifies a queued job behind a running one, and one with a future readyAt as backoff", async () => {
@@ -753,15 +854,16 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     expect(entry?.until).toBe("2025-12-01");
   });
 
-  it("sets truncated when the whole-table scan hits its bound", async () => {
+  it("keeps an old queued manual job visible behind more than 2,000 completed jobs", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
     const now = Date.now();
 
-    // Insert more (non-candidate) jobs than QUEUE_SCAN_CAP so the scan
-    // exhausts its bound before reaching the one queued job seeded first
-    // (oldest -> scanned last, since the scan orders newest-first).
-    const queuedId = await seedJob(t, userId, { input: "old-queued", status: "queued" });
+    const queuedId = await seedJob(t, userId, {
+      input: "old-queued",
+      status: "queued",
+      origin: "manual",
+    });
 
     await t.run(async (ctx) => {
       for (let i = 0; i < 2_001; i++) {
@@ -779,8 +881,15 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
       }
     });
 
+    const historyId = await seedJob(t, userId, {
+      input: "history",
+      status: "queued",
+      origin: "history",
+    });
+
     const result = await a.query(timeline, { now });
-    expect(result.truncated).toBe(true);
-    expect(result.entries.some((e) => e.jobId === queuedId)).toBe(false);
+
+    expect(result.truncated).toBe(false);
+    expect(result.entries.map((entry) => entry.jobId)).toEqual([queuedId, historyId]);
   });
 });
