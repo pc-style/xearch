@@ -1046,7 +1046,10 @@ export function AccountsPage(props: Props) {
                         <td class={stale() ? "warn" : "muted"}>
                           {run()?.status === "failed" || run()?.status === "partial" ? (
                             <>
-                              <span class="err">failed {ago(ops.now() - run()!.updatedAt)}</span>
+                              <span class="err">
+                                {run()!.status === "partial" ? "partial import" : "failed"}{" "}
+                                {ago(ops.now() - run()!.updatedAt)}
+                              </span>
                               {" · last good "}
                               {refreshed() ? ago(ops.now() - refreshed()!) : "never"}
                               {" · see jobs"}

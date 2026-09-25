@@ -486,6 +486,30 @@ describe("accounts", () => {
     expect(row.textContent).not.toContain("39 h ago · failed");
   });
 
+  it("calls a partial import partial in the refresh cell", async () => {
+    const now = Date.now();
+
+    const ops = await open("accounts", {
+      accounts: [
+        account(1, {
+          handle: "partial-account",
+          lastCompletedAt: now - 39 * HOUR,
+          latestRun: {
+            jobId: jobId(6),
+            status: "partial",
+            createdAt: now - 9 * HOUR,
+            updatedAt: now - 8 * HOUR,
+            refresh: true,
+          },
+        }),
+      ],
+    });
+
+    expect(ops.find("tr[data-account='partial-account']").textContent).toContain(
+      "partial import 8 h ago · last good 39 h ago",
+    );
+  });
+
   it("says unknown, not 0, for a count the indexer has not reported in any state", async () => {
     const indexing = account(5, {
       handle: "indexing",
