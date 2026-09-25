@@ -111,7 +111,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     const row = await renderPage("accounts", { jobs, accounts }, "tr[data-account=bob]");
 
     expect(row).toContain("Last import failed");
-    expect(row).toContain("failed · see jobs");
+    expect(row).toContain("failed just now</span> · last good never · see jobs");
 
     const jobRow = await renderPage("jobs", { jobs, accounts }, `tr[data-job="${jobId}"]`);
 

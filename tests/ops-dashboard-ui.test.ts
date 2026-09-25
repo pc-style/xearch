@@ -462,6 +462,30 @@ describe("accounts", () => {
     }),
   ];
 
+  it("times a failed refresh separately from the last good import", async () => {
+    const now = Date.now();
+
+    const ops = await open("accounts", {
+      accounts: [
+        account(1, {
+          handle: "stale-failure",
+          lastCompletedAt: now - 39 * HOUR,
+          latestRun: {
+            jobId: jobId(5),
+            status: "failed",
+            createdAt: now - 9 * HOUR,
+            updatedAt: now - 8 * HOUR,
+            refresh: true,
+          },
+        }),
+      ],
+    });
+
+    const row = ops.find("tr[data-account='stale-failure']");
+    expect(row.textContent).toContain("failed 8 h ago · last good 39 h ago · see jobs");
+    expect(row.textContent).not.toContain("39 h ago · failed");
+  });
+
   it("says unknown, not 0, for a count the indexer has not reported in any state", async () => {
     const indexing = account(5, {
       handle: "indexing",
