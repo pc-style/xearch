@@ -26,7 +26,23 @@ export function initPostHog(): void {
   if (!import.meta.env.PROD || !key || !host) return;
 
   pending = [];
+  afterLoad(() => loadPostHog(key, host));
+}
 
+/** Run `fn` once the page has loaded and the main thread is idle, so a
+ * third-party script never competes with the app's own first load for the
+ * network or the CPU. Early calls are queued meanwhile (`pending`). */
+function afterLoad(fn: () => void): void {
+  const idle = () =>
+    "requestIdleCallback" in window
+      ? requestIdleCallback(fn, { timeout: 4000 })
+      : setTimeout(fn, 1);
+
+  if (document.readyState === "complete") idle();
+  else window.addEventListener("load", idle, { once: true });
+}
+
+function loadPostHog(key: string, host: string): void {
   void import("posthog-js").then(
     ({ default: posthog }) => {
       posthog.init(key, {

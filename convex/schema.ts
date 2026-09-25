@@ -499,7 +499,13 @@ export default defineSchema({
     warnings: v.array(v.string()),
     stats: v.optional(v.object(searchStatsFields)),
     error: v.optional(v.string()),
-  }).index("by_owner", ["owner"]),
+    // A key the client picks before calling `search.start`, so it can
+    // subscribe to `search.resultsByKey` while the mutation is still in
+    // flight instead of waiting for the session id to come back first.
+    clientKey: v.optional(v.string()),
+  })
+    .index("by_owner", ["owner"])
+    .index("by_owner_and_clientKey", ["owner", "clientKey"]),
   saved: defineTable({
     owner: v.id("users"),
     query: v.string(),

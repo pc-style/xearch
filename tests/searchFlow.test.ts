@@ -1,4 +1,3 @@
-import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   mergeSearchPages,
@@ -36,7 +35,7 @@ describe("searchFlow", () => {
       },
     };
 
-    await expect(Effect.runPromise(searchFlow(dependencies, request))).resolves.toBe(sessionId);
+    await expect(searchFlow(dependencies, request)).resolves.toBe(sessionId);
     expect(events).toEqual(["ensureSession", "startSearch"]);
   });
 
@@ -54,7 +53,7 @@ describe("searchFlow", () => {
 
     const wider = { ...request, attemptId: 7, trigger: "submit" };
 
-    await Effect.runPromise(searchFlow(dependencies, wider));
+    await searchFlow(dependencies, wider);
     expect(received).not.toHaveProperty("attemptId");
     expect(received).not.toHaveProperty("trigger");
   });
@@ -72,7 +71,7 @@ describe("searchFlow", () => {
       },
     };
 
-    await expect(Effect.runPromise(searchFlow(dependencies, request))).rejects.toBe(failure);
+    await expect(searchFlow(dependencies, request)).rejects.toBe(failure);
     expect(startCalls).toBe(0);
   });
 
@@ -90,7 +89,7 @@ describe("searchFlow", () => {
       },
     };
 
-    await expect(Effect.runPromise(searchFlow(dependencies, request))).rejects.toBe(failure);
+    await expect(searchFlow(dependencies, request)).rejects.toBe(failure);
     expect(events).toEqual(["ensureSession", "startSearch"]);
   });
 
@@ -102,7 +101,7 @@ describe("searchFlow", () => {
       startSearch: () => Promise.reject<SearchSessionId>(failure),
     };
 
-    await expect(Effect.runPromise(searchFlow(dependencies, request))).rejects.toBe(failure);
+    await expect(searchFlow(dependencies, request)).rejects.toBe(failure);
   });
 });
 

@@ -25,15 +25,30 @@ type Configured = FunctionReturnType<typeof api.integrations.configured>;
 /** Characters shown before "Read full post". */
 const PREVIEW_CHARS = 700;
 
-/** Split `text` around the query's words so each match can be marked. */
-export function highlightParts(text: string, query: string) {
+// The last query's highlight pattern. Every text segment of every row asks
+// for the same query's pattern, so it is compiled once rather than per call.
+let highlightCache: { query: string; pattern: RegExp | null } | null = null;
+
+function highlightPattern(query: string): RegExp | null {
+  if (highlightCache?.query === query) return highlightCache.pattern;
+
   const words = query
     .split(/\s+/)
     .filter((w) => w.length > 2 && !w.startsWith("@"))
     .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
-  if (!words.length) return [{ text, mark: false }];
-  const pattern = new RegExp(`(${words.join("|")})`, "gi");
+  // `matchAll` copies the pattern, so sharing one `g` regex is safe.
+  const pattern = words.length ? new RegExp(`(${words.join("|")})`, "gi") : null;
+  highlightCache = { query, pattern };
+
+  return pattern;
+}
+
+/** Split `text` around the query's words so each match can be marked. */
+export function highlightParts(text: string, query: string) {
+  const pattern = highlightPattern(query);
+
+  if (!pattern) return [{ text, mark: false }];
   const parts: { text: string; mark: boolean }[] = [];
   let cursor = 0;
 
@@ -469,7 +484,9 @@ export function ResultsSection(props: ResultsSectionProps) {
             </button>
           </div>
         </Match>
-        <Match when={searchView() && !complete()}>
+        {/* Only while nothing is loaded: "Load more" keeps the rows it
+            already has on screen while its page is found. */}
+        <Match when={searchView() && !complete() && !props.visible.length}>
           <div class="rcount" role="status">
             Finding matching posts…
           </div>
@@ -552,6 +569,11 @@ export function ResultsSection(props: ResultsSectionProps) {
               />
             )}
           </For>
+          <Show when={searchView() && !complete()}>
+            <div class="rcount" role="status">
+              Finding more posts…
+            </div>
+          </Show>
           <Show when={searchView() && props.result?.nextCursor}>
             <button
               type="button"

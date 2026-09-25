@@ -1,3 +1,29 @@
+/* DM Sans, self-hosted (SIL OFL 1.1, from Google Fonts v17): one variable
+   file per subset, its weight axis cut to the 400-600 this app uses. The
+   latin file is preloaded from index.html; latin-ext only downloads if a
+   page actually contains one of its characters. */
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/dm-sans-v17-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/dm-sans-v17-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
   color-scheme: dark;
   --bg: #080808;
@@ -223,7 +249,7 @@ code {
   padding: 6px;
   box-shadow: 0 12px 32px #0009;
   transform-origin: top right;
-  animation: pop-in 200ms var(--ease);
+  animation: pop-in 160ms var(--ease);
 }
 @keyframes pop-in {
   from {
@@ -910,8 +936,8 @@ select.sort {
   gap: 14px;
   padding: 18px 0;
   border-bottom: 1px solid var(--line);
-  animation: rin 300ms var(--ease) both;
-  animation-delay: calc(var(--n) * 40ms + 100ms);
+  animation: rin 220ms var(--ease) both;
+  animation-delay: calc(var(--n) * 24ms);
 }
 @keyframes rin {
   from {
@@ -1187,7 +1213,7 @@ select.sort {
   padding: 8px 8px 8px 14px;
   font-size: 13.5px;
   max-width: calc(100vw - 32px);
-  animation: toast-in 300ms ease;
+  animation: toast-in 220ms ease;
 }
 .toast .ib {
   width: 28px;
@@ -1389,17 +1415,17 @@ dialog::backdrop {
 
 /* ---------- view transition ---------- */
 ::view-transition-old(root) {
-  animation: 0.16s ease-out both vt-out;
+  animation: 0.12s ease-out both vt-out;
 }
 ::view-transition-new(root) {
-  animation: 0.26s ease-out both vt-in;
+  animation: 0.2s ease-out both vt-in;
 }
 ::view-transition-group(search-controls) {
-  animation-duration: 0.42s;
+  animation-duration: 0.32s;
   animation-timing-function: var(--ease);
 }
 ::view-transition-group(identity) {
-  animation-duration: 0.5s;
+  animation-duration: 0.36s;
   animation-timing-function: var(--ease);
 }
 ::view-transition-old(search-controls),

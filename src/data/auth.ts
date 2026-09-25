@@ -1,7 +1,5 @@
 import { createSignal, onSettled } from "solid-js";
-import { ConvexHttpClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
-import type { Value } from "convex/values";
+import { ConvexError, convexToJson, jsonToConvex, type Value } from "convex/values";
 import type { AuthActions, AuthSource, SyncClient } from "./convex";
 
 /**
@@ -35,10 +33,44 @@ interface SignInArgs {
   params: Record<string, Value>;
 }
 
-// @convex-dev/auth's own action, called by name as its client does.
-const signInAction = makeFunctionReference<"action", Record<string, Value>, SignInResult>(
-  "auth:signIn",
-);
+// What Convex's HTTP API answers when the function itself threw.
+const STATUS_UDF_FAILED = 560;
+
+/**
+ * `auth:signIn` over Convex's HTTP API — the request `ConvexHttpClient.action`
+ * makes, without pulling that client into the bundle for this one call.
+ */
+async function signInOverHttp(address: string, args: Record<string, Value>): Promise<SignInResult> {
+  const response = await fetch(`${address}/api/action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      path: "auth:signIn",
+      format: "convex_encoded_json",
+      args: [convexToJson(args)],
+    }),
+  });
+
+  if (!response.ok && response.status !== STATUS_UDF_FAILED) throw new Error(await response.text());
+
+  const body: { status: string; value?: unknown; errorMessage?: string; errorData?: unknown } =
+    await response.json();
+
+  if (body.status === "success") {
+    // SAFETY: `auth:signIn`'s return, decoded exactly as ConvexHttpClient does.
+    return jsonToConvex(body.value as Parameters<typeof jsonToConvex>[0]) as SignInResult;
+  }
+
+  if (body.status === "error") {
+    if (body.errorData === undefined) throw new Error(body.errorMessage);
+    const error = new ConvexError<Value>(body.errorMessage ?? "");
+    // SAFETY: as above — Convex-encoded JSON from the same API.
+    error.data = jsonToConvex(body.errorData as Parameters<typeof jsonToConvex>[0]);
+    throw error;
+  }
+
+  throw new Error(`Invalid response: ${JSON.stringify(body)}`);
+}
 
 export interface AuthClientOptions {
   readonly address: string;
@@ -94,7 +126,7 @@ export function createAuthClient({
 
     for (let attempt = 0; ; attempt++) {
       try {
-        return await new ConvexHttpClient(address).action(signInAction, args);
+        return await signInOverHttp(address, args);
       } catch (error) {
         lastError = error;
 

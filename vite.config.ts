@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import solid from "@solidjs/vite-plugin";
 import posthog from "@posthog/rollup-plugin";
 
@@ -25,9 +25,47 @@ export function relativeModule(name: string): RegExp {
   return new RegExp(`^(\\.\\.?/)+${name}$`);
 }
 
+/**
+ * First paint for index.html. The public build inlines its stylesheet, so
+ * the static home-page shell in index.html paints from the HTML response
+ * alone — a separate CSS request is a whole extra round trip on static
+ * hosting, where every file costs a few hundred ms before its first byte.
+ * The operator build opens on the dashboard, so it drops the shell (and
+ * the home page's early reads) instead.
+ */
+function firstPaint(): Plugin {
+  return {
+    name: "xearch-first-paint",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler(html, { bundle }) {
+        if (operator)
+          return html
+            .replace(/<!--shell-->[^]*?<!--\/shell-->/, "")
+            .replace(/<!--prefetch-->[^]*?<!--\/prefetch-->/, "");
+
+        let inlined = html;
+
+        for (const [fileName, chunk] of Object.entries(bundle ?? {})) {
+          if (chunk.type !== "asset" || !fileName.endsWith(".css")) continue;
+          const link = new RegExp(`<link rel="stylesheet"[^>]*href="/${fileName}"[^>]*>`);
+
+          if (!link.test(inlined)) continue;
+          inlined = inlined.replace(link, () => `<style>${String(chunk.source)}</style>`);
+          delete bundle?.[fileName];
+        }
+
+        return inlined;
+      },
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     solid(),
+    firstPaint(),
     ...(process.env.POSTHOG_CLI_API_KEY &&
     process.env.POSTHOG_CLI_PROJECT_ID &&
     process.env.POSTHOG_CLI_HOST

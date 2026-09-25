@@ -23,6 +23,19 @@ initPostHog();
 
 const url = import.meta.env.VITE_CONVEX_URL;
 
+const root = document.getElementById("root")!;
+
+// index.html paints a static copy of the home page before this script runs.
+// Swap it for the live app in the same task (no frame in between), keeping
+// anything typed into the copy's search box meanwhile.
+const shellQuery = root.querySelector<HTMLInputElement>("#query");
+
+const typed = shellQuery?.value ?? "";
+
+const focused = shellQuery !== null && document.activeElement === shellQuery;
+
+root.textContent = "";
+
 render(
   () =>
     url ? (
@@ -59,5 +72,14 @@ render(
         </p>
       </main>
     ),
-  document.getElementById("root")!,
+  root,
 );
+
+const query = document.querySelector<HTMLInputElement>("#query");
+
+if (query && typed) {
+  query.value = typed;
+  query.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+if (query && focused) query.focus();

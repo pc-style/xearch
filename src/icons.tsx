@@ -41,6 +41,23 @@ const PATHS = {
 
 export type IconName = keyof typeof PATHS;
 
+// Each glyph's markup is parsed once, then cloned: a result list draws a
+// handful of icons per row, and setting `innerHTML` on every one of them
+// re-ran the HTML parser each time.
+const parsed = new Map<IconName, SVGSVGElement>();
+
+function glyph(name: IconName): Node[] {
+  let template = parsed.get(name);
+
+  if (!template) {
+    template = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    template.innerHTML = PATHS[name];
+    parsed.set(name, template);
+  }
+
+  return Array.from(template.childNodes, (node) => node.cloneNode(true));
+}
+
 export function Icon(props: { name: IconName; size?: number; class?: string }) {
   return (
     <svg
@@ -54,7 +71,8 @@ export function Icon(props: { name: IconName; size?: number; class?: string }) {
       stroke-linecap="round"
       stroke-linejoin="round"
       aria-hidden="true"
-      innerHTML={PATHS[props.name]}
-    />
+    >
+      {glyph(props.name)}
+    </svg>
   );
 }
