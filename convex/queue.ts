@@ -274,7 +274,10 @@ async function loadCandidateJobs(
   return { jobs, truncated };
 }
 
-export const timeline = query({
+// `timelineSnapshot` replaced `timeline` when the dashboard moved to
+// explicit, finite reads (src/ops/refresh.ts); the old name is retired so an
+// already-open older build cannot resubscribe without reloading.
+export const timelineSnapshot = query({
   // Operator-only, like every other paid-action-adjacent view (convex/
   // access.ts): this returns shared queue telemetry — job input, phase,
   // error text, and account identity — for every in-flight and stopped

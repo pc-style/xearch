@@ -4,6 +4,7 @@ import { BaseConvexClient } from "convex/browser";
 import App from "./App";
 import { ConvexContext, createConvexApp } from "./data/convex";
 import { createAuthClient } from "./data/auth";
+import { createHttpQueryFetcher } from "./data/httpQuery";
 import { describeError } from "./errors";
 import { captureError, initPostHog } from "./posthog";
 import "./style.css";
@@ -11,9 +12,12 @@ import "./style.css";
 function Connected(props: { url: string }) {
   const sync = new BaseConvexClient(props.url, () => {});
   const auth = createAuthClient({ address: props.url, sync });
+  // Explicit, finite reads (the dashboard, the public bootstrap) go over
+  // HTTP with the same session; only live data uses the socket.
+  const fetcher = createHttpQueryFetcher(props.url, auth);
 
   return (
-    <ConvexContext value={createConvexApp(sync, auth, auth)}>
+    <ConvexContext value={createConvexApp(sync, auth, auth, fetcher)}>
       <App />
     </ConvexContext>
   );
