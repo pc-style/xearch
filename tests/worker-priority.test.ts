@@ -10,7 +10,11 @@ describe("worker job priority", () => {
     const t = convexTest(schema, modules);
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
 
-    const insert = (input: string, origin: "manual" | "history" | "discovered", readyAt?: number) =>
+    const insert = (
+      input: string,
+      origin?: "manual" | "history" | "discovered",
+      readyAt?: number,
+    ) =>
       t.run((ctx) =>
         ctx.db.insert("jobs", {
           owner,
@@ -28,11 +32,20 @@ describe("worker job priority", () => {
       );
 
     const history = await insert("history", "history");
-    const discovered = await insert("discovered", "discovered");
+
+    for (let i = 0; i < 22; i++) await insert(`history-${i}`, "history");
+    await insert("discovered", "discovered");
+    const legacyManual = await insert("legacy-manual");
+    await insert("legacy-not-due", undefined, Date.now() + 60_000);
     const firstManual = await insert("manual-one", "manual");
-    await insert("not-due", "manual", Date.now() + 60_000);
+
+    for (let i = 0; i < 101; i++) await insert(`not-due-${i}`, "manual", Date.now() + 60_000);
     const secondManual = await insert("manual-two", "manual");
 
+    expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(legacyManual);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(legacyManual, { status: "complete" });
+    });
     expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(firstManual);
     await t.run(async (ctx) => {
       await ctx.db.patch(firstManual, { status: "complete" });
@@ -45,6 +58,6 @@ describe("worker job priority", () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(history, { status: "complete" });
     });
-    expect((await t.mutation(anyApi.worker.claimNext, {}))?._id).toBe(discovered);
+    expect((await t.mutation(anyApi.worker.claimNext, {}))?.origin).toBe("history");
   });
 });

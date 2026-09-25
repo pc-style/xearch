@@ -147,7 +147,7 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     );
   });
 
-  it("orders running first, then queued by readyAt ascending, then terminal-retryable last", async () => {
+  it("orders running first, then due queued jobs before future jobs in FIFO order, then terminal-retryable last", async () => {
     const t = setup();
     const { a, userId } = await withOperator(t);
     const now = Date.now();
@@ -203,8 +203,8 @@ describe("convex/queue.ts timeline (operator Queue page)", () => {
     expect(result.entries.map((e) => e.jobId)).toEqual([
       running,
       readyNow,
-      soonerQueued,
       laterQueued,
+      soonerQueued,
       retryable,
       cancelled,
     ]);

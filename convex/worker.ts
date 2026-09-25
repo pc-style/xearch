@@ -77,24 +77,26 @@ export const claimNext = internalMutation({
     )
       return null;
 
-    const jobs = await ctx.db
-      .query("jobs")
-      .withIndex("by_status", (q) => q.eq("status", "queued"))
-      .take(2_000);
+    const now = Date.now();
 
-    const due = jobs.filter((j) => (j.readyAt ?? 0) <= Date.now());
-
-    const priority = (job: Doc<"jobs">) => {
-      if (job.origin === "history") return 1;
-
-      if (job.origin === "discovered") return 2;
-
-      return 0;
+    // Old jobs have no origin and are manual. Read each priority lane through
+    // its index rather than scanning every queued history window on each poll.
+    const firstDue = async (origin: Doc<"jobs">["origin"]) => {
+      return ctx.db
+        .query("jobs")
+        .withIndex("by_status_and_origin", (q) => q.eq("status", "queued").eq("origin", origin))
+        .filter((q) => q.or(q.eq(q.field("readyAt"), undefined), q.lte(q.field("readyAt"), now)))
+        .first();
     };
 
-    const job = due.sort(
-      (a, b) => priority(a) - priority(b) || a._creationTime - b._creationTime,
-    )[0];
+    const [legacyManual, manual] = await Promise.all([firstDue(undefined), firstDue("manual")]);
+
+    const job =
+      [legacyManual, manual]
+        .filter((row) => row !== null)
+        .sort((a, b) => a._creationTime - b._creationTime)[0] ??
+      (await firstDue("history")) ??
+      (await firstDue("discovered"));
 
     if (!job) return null;
     const attempt = job.attempt + 1;
