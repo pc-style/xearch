@@ -187,10 +187,12 @@ jobs:
           for _ in 1 2 3; do
             git fetch --quiet origin main
             git reset --quiet --hard origin/main
+            git clean --quiet --force -- perf
             node scripts/bench/compare.mjs --update-baseline perf/baseline.json \
               --head "$RUNNER_TEMP/perf/head.json"
             if [ -z "$(git status --porcelain -- perf/baseline.json)" ]; then exit 0; fi
-            git commit --quiet -m "Update performance baseline [skip ci]" -- perf/baseline.json
+            git add perf/baseline.json
+            git commit --quiet -m "Update performance baseline [skip ci]"
             if git push origin HEAD:main; then exit 0; fi
             sleep 5
           done
