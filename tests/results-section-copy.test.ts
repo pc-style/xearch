@@ -117,3 +117,16 @@ describe("item 14: bookmarks view has correct grammar and its own explanation", 
     expect(html).not.toContain("Save search");
   });
 });
+
+describe("the reply label", () => {
+  it("names another account, ignoring handle case for the author's own thread", () => {
+    const reply = (replyTo: string) =>
+      render({
+        result: session({ raw: "hello", rows: [post({ replyTo })] }),
+        visible: [post({ replyTo })],
+      });
+
+    expect(reply("someone")).toContain("Replying to @someone");
+    expect(reply("AnthropicAI")).not.toContain("Replying to");
+  });
+});

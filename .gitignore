@@ -25,3 +25,4 @@ backups/
 raw/
 quarantine/
 dist-operator
+perf/results/
