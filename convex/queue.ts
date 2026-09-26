@@ -21,15 +21,8 @@ import { activeThrottleUntil, loadProviderLimit } from "./limits";
  *
  * Ordering mirrors `worker.claimNext`: at most one job is ever "running" (the
  * worker refuses to claim a second job while one is running), and among
- * queued jobs the worker claims whichever is both due (`readyAt <= now`) and
- * earliest — so sorting the queued set by its EFFECTIVE readyAt ascending
- * (an unset readyAt reads as 0, i.e. immediately due, exactly like
- * `worker.claimNext`'s `job.readyAt ?? 0`) already puts every ready job
- * ahead of every not-yet-ready one, without a separate "ready first" pass.
- * `claimNext` itself only scans its next 20 queued-by-creation-time
- * candidates rather than sorting the whole table by readyAt; this timeline
- * is an honest approximation of that intent (readyAt-ascending order) for
- * display, not a byte-for-byte replay of the scan cap.
+ * queued jobs the worker claims due manual jobs first, then history windows,
+ * then discovered jobs, FIFO within each group. Not-yet-due jobs follow.
  *
  * Terminal-but-retryable jobs (failed/partial/cancelled, still eligible for
  * `jobs.retry`) are not queued at all — nothing will touch them until a
@@ -39,29 +32,27 @@ import { activeThrottleUntil, loadProviderLimit } from "./limits";
  * someone retries them right now.
  */
 
-// Bounded read (convex/_generated/ai/guidelines.md "never an unbounded
-// scan"). Queued/running/terminal-retryable jobs are always a small,
-// currently-relevant subset of the table, and this table's default order is
-// `_creationTime` descending — recent-first — so a generous cap over the
-// newest rows catches the entire live queue in ordinary operation; `truncated`
-// admits when it might not have.
+// Bounded read; queued jobs are read by the same indexed priority lanes used
+// by the worker, so old manual jobs cannot vanish behind completed rows.
 const QUEUE_SCAN_CAP = 2_000;
 
-// How many recently-completed bulk jobs feed the seconds-per-page / pages-
-// per-account medians. "The last ~30 completed bulk jobs" per the spec.
+// How many recent clean completions of each kind feed its duration and page medians.
 const ESTIMATE_SAMPLE_SIZE = 30;
 
-// How far the completed-bulk-job scan is allowed to look for that sample —
-// generous relative to ESTIMATE_SAMPLE_SIZE since not every bulk job in
-// creation-time order is a completed one.
+const MIN_ESTIMATE_SAMPLE_SIZE = 5;
+
+// Bound each kind's completed-job scan, including excluded completions.
 const ESTIMATE_SCAN_CAP = 400;
 
-// Assumed seconds/page when no completed-import sample exists yet to derive
-// one from. Never presented as a real observation — `estimateInputs.
-// secondsPerPage` stays `undefined` whenever this fallback is the one
-// actually used, so the UI can say "no estimate history yet" honestly
-// instead of implying this number came from real imports.
-const DEFAULT_SECONDS_PER_PAGE = 45;
+const ESTIMATE_KINDS = [
+  "bulk",
+  "live",
+  "post",
+  "profile",
+  "following",
+  "followers",
+  "archive",
+] as const satisfies readonly Doc<"jobs">["kind"][];
 
 export const waitReasonValidator = v.union(
   v.object({ kind: v.literal("running") }),
@@ -100,6 +91,7 @@ const timelineAccountValidator = v.object({
 const timelineEstimateValidator = v.object({
   start: v.number(),
   finish: v.number(),
+  measured: v.boolean(),
   // The same account's overall finish time — the moment its LAST job in the
   // current timeline is expected to be done — repeated on every one of that
   // account's entries so the UI can show "starts/done" per row and one
@@ -161,6 +153,8 @@ const timelineValidator = v.object({
   // True when the QUEUE_SCAN_CAP whole-table scan hit its bound before
   // finishing — the entries above may be missing older queued/terminal jobs.
   truncated: v.boolean(),
+  // Positions depend only on complete running and queued reads.
+  queueTruncated: v.boolean(),
 });
 
 export type Timeline = Infer<typeof timelineValidator>;
@@ -174,25 +168,49 @@ function median(values: number[]): number | undefined {
 }
 
 /**
- * The last ~ESTIMATE_SAMPLE_SIZE *completed* bulk jobs with at least one
- * downloaded page, newest first. Bounded by ESTIMATE_SCAN_CAP over
- * `by_kind` (already the index convex/lib/accounts.ts uses for the exact
- * same "every bulk job" scan) rather than scanning the whole `jobs` table.
+ * Up to ESTIMATE_SAMPLE_SIZE clean completed jobs per kind, most recently
+ * finished first, within a bounded completed-job scan. Durations without a claim timestamp or
+ * with an observed provider wait cannot calibrate active download speed.
  */
-async function loadEstimateSample(ctx: QueryCtx): Promise<Doc<"jobs">[]> {
-  const sample: Doc<"jobs">[] = [];
-  let scanned = 0;
+async function loadEstimateSample(ctx: QueryCtx): Promise<Map<Doc<"jobs">["kind"], Doc<"jobs">[]>> {
+  const samples = await Promise.all(
+    ESTIMATE_KINDS.map(async (kind) => {
+      const sample: Doc<"jobs">[] = [];
+      let scanned = 0;
 
-  for await (const job of ctx.db
-    .query("jobs")
-    .withIndex("by_kind", (q) => q.eq("kind", ACCOUNT_JOB_KIND))
-    .order("desc")) {
-    if (++scanned > ESTIMATE_SCAN_CAP || sample.length >= ESTIMATE_SAMPLE_SIZE) break;
+      for await (const job of ctx.db
+        .query("jobs")
+        .withIndex("by_status_and_kind_and_updated_at", (q) =>
+          q.eq("status", "complete").eq("kind", kind),
+        )
+        .order("desc")) {
+        if (++scanned > ESTIMATE_SCAN_CAP || sample.length >= ESTIMATE_SAMPLE_SIZE) break;
 
-    if (job.status === "complete" && (job.pages ?? 0) > 0) sample.push(job);
-  }
+        if (
+          (job.pages ?? 0) <= 0 ||
+          job.attemptStartedAt === undefined ||
+          job.updatedAt <= job.attemptStartedAt ||
+          job.error?.includes("provider_timeout")
+        )
+          continue;
 
-  return sample;
+        // A provider wait can consume most of a run's wall time. Its
+        // observation is retained even if the job later completes.
+        const throttle = await ctx.db
+          .query("providerThrottleEvents")
+          .withIndex("by_job", (q) => q.eq("jobId", job._id))
+          .first();
+
+        if (throttle) continue;
+
+        sample.push(job);
+      }
+
+      return [kind, sample] as const;
+    }),
+  );
+
+  return new Map(samples);
 }
 
 function computeEstimateInputs(sample: Doc<"jobs">[]): EstimateInputs {
@@ -204,18 +222,17 @@ function computeEstimateInputs(sample: Doc<"jobs">[]): EstimateInputs {
 
     if (pages <= 0) continue;
     pagesSamples.push(pages);
-    // Wall time from creation to completion, across every requeue this job
-    // went through — an approximation (it includes backoff/queue waiting
-    // time, not pure download time), but the only duration this schema
-    // actually has recorded per job.
-    const durationSeconds = (job.updatedAt - job._creationTime) / 1000;
+    // The last attempt starts at claim, excluding time spent queued and
+    // between earlier attempts. It is the measured duration of the final page.
+    const durationSeconds = (job.updatedAt - job.attemptStartedAt!) / 1000;
 
-    if (durationSeconds > 0) secondsPerPageSamples.push(durationSeconds / pages);
+    if (durationSeconds > 0) secondsPerPageSamples.push(durationSeconds);
   }
 
   return {
-    secondsPerPage: median(secondsPerPageSamples),
-    medianPages: median(pagesSamples),
+    secondsPerPage:
+      sample.length >= MIN_ESTIMATE_SAMPLE_SIZE ? median(secondsPerPageSamples) : undefined,
+    medianPages: sample.length >= MIN_ESTIMATE_SAMPLE_SIZE ? median(pagesSamples) : undefined,
     sampleSize: sample.length,
   };
 }
@@ -246,35 +263,67 @@ function remainingPages(job: Doc<"jobs">, medianPages: number | undefined): numb
 /** Every job the worker will act on next, or that a person could retry. */
 async function loadCandidateJobs(
   ctx: QueryCtx,
-): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean }> {
+): Promise<{ jobs: Doc<"jobs">[]; truncated: boolean; queueTruncated: boolean }> {
   const jobs: Doc<"jobs">[] = [];
-  let scanned = 0;
   let truncated = false;
+  let queueTruncated = false;
 
-  for await (const job of ctx.db.query("jobs").order("desc")) {
-    if (++scanned > QUEUE_SCAN_CAP) {
+  jobs.push(
+    ...(await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", "running"))
+      .take(2)),
+  );
+
+  for (const origin of [undefined, "manual", "history", "discovered"] as const) {
+    const remaining = QUEUE_SCAN_CAP - jobs.length;
+
+    if (remaining <= 0) {
       truncated = true;
+      queueTruncated = true;
       break;
     }
 
-    if (job.dismissedAt !== undefined) continue;
+    const lane = await ctx.db
+      .query("jobs")
+      .withIndex("by_status_and_origin_and_ready_at", (q) =>
+        q.eq("status", "queued").eq("origin", origin),
+      )
+      .take(remaining + 1);
 
-    // Mirrors convex/jobs.ts `retry`'s own eligibility exactly: "cancelled"
-    // is always retryable (a person's own choice to stop, not a failure),
-    // and "failed"/"partial" are retryable unless the provider said the
-    // failure is permanent (`retryable === false` — see that field's
-    // comment on the `jobs` table in convex/schema.ts).
-    const terminalRetryable =
-      job.status === "cancelled" ||
-      ((job.status === "failed" || job.status === "partial") && job.retryable !== false);
+    if (lane.length > remaining) {
+      truncated = true;
+      queueTruncated = true;
+    }
 
-    if (job.status === "queued" || job.status === "running" || terminalRetryable) jobs.push(job);
+    jobs.push(...lane.slice(0, remaining));
   }
 
-  return { jobs, truncated };
+  // Mirrors jobs.retry: cancelled is always retryable, while failed/partial
+  // jobs are retryable unless the provider marked their error permanent.
+  for (const status of ["cancelled", "failed", "partial"] as const) {
+    const stopped = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", status))
+      .order("desc")
+      .take(QUEUE_SCAN_CAP);
+
+    if (stopped.length === QUEUE_SCAN_CAP) truncated = true;
+    jobs.push(
+      ...stopped.filter(
+        (job) =>
+          job.dismissedAt === undefined && (status === "cancelled" || job.retryable !== false),
+      ),
+    );
+  }
+
+  return { jobs, truncated, queueTruncated };
 }
 
-export const timeline = query({
+// `timelineSnapshot` replaced `timeline` when the dashboard moved to
+// explicit, finite reads (src/ops/refresh.ts); the old name is retired so an
+// already-open older build cannot resubscribe without reloading.
+export const timelineSnapshot = query({
   // Operator-only, like every other paid-action-adjacent view (convex/
   // access.ts): this returns shared queue telemetry — job input, phase,
   // error text, and account identity — for every in-flight and stopped
@@ -296,7 +345,7 @@ export const timeline = query({
     // x.md (convex/lib/xmd.ts), so that is the one provider whose throttle
     // state matters here — "receiver"/"search" are about this app's own
     // services, not a job's own calls.
-    const [{ jobs, truncated }, sample, xmdLimit] = await Promise.all([
+    const [{ jobs, truncated, queueTruncated }, sample, xmdLimit] = await Promise.all([
       loadCandidateJobs(ctx),
       loadEstimateSample(ctx),
       loadProviderLimit(ctx, "xmd"),
@@ -304,13 +353,56 @@ export const timeline = query({
 
     const xmdThrottleUntil = activeThrottleUntil(xmdLimit, now);
 
-    const estimateInputs = computeEstimateInputs(sample);
+    const estimates = new Map(
+      [...sample].map(([kind, jobs]) => [kind, computeEstimateInputs(jobs)]),
+    );
+
+    const estimateInputs = estimates.get(ACCOUNT_JOB_KIND) ?? computeEstimateInputs([]);
 
     const running = jobs.filter((j) => j.status === "running");
 
-    const queued = jobs
-      .filter((j) => j.status === "queued")
-      .sort((a, b) => (a.readyAt ?? 0) - (b.readyAt ?? 0));
+    const priority = (job: Doc<"jobs">) => {
+      if (job.origin === "history") return 1;
+
+      if (job.origin === "discovered") return 2;
+
+      return 0;
+    };
+
+    const pending = jobs.filter((j) => j.status === "queued");
+    const queued: Doc<"jobs">[] = [];
+
+    const projectedDuration = (job: Doc<"jobs">) => {
+      const estimate = estimates.get(job.kind);
+
+      return remainingPages(job, estimate?.medianPages) * (estimate?.secondsPerPage ?? 0) * 1000;
+    };
+
+    let projectedAt = Math.max(now, xmdThrottleUntil ?? now);
+
+    for (const job of running) projectedAt += projectedDuration(job);
+
+    while (pending.length > 0) {
+      pending.sort((a, b) => {
+        const aDue = (a.readyAt ?? 0) <= projectedAt;
+        const bDue = (b.readyAt ?? 0) <= projectedAt;
+
+        if (aDue !== bDue) return aDue ? -1 : 1;
+
+        if (!aDue) return (a.readyAt ?? 0) - (b.readyAt ?? 0);
+
+        return (
+          priority(a) - priority(b) ||
+          (a.readyAt ?? a._creationTime) - (b.readyAt ?? b._creationTime) ||
+          a._creationTime - b._creationTime
+        );
+      });
+
+      const next = pending.shift()!;
+
+      queued.push(next);
+      projectedAt = Math.max(projectedAt, next.readyAt ?? 0) + projectedDuration(next);
+    }
 
     const terminalRetryable = jobs
       .filter((j) => j.status === "failed" || j.status === "partial" || j.status === "cancelled")
@@ -318,9 +410,7 @@ export const timeline = query({
 
     // The exact order the worker will take them: running first (there is
     // never more than one in practice — worker.claimNext refuses a second
-    // claim while one is running), then queued by effective readyAt
-    // ascending (which already puts every due job ahead of every not-yet-due
-    // one). Terminal-but-retryable jobs are not queued at all; they are
+    // claim while one is running), then queued in claim priority. Terminal-but-retryable jobs are not queued at all; they are
     // appended after, since nothing acts on them without a person clicking
     // Retry first.
     const ordered = [...running, ...queued, ...terminalRetryable];
@@ -333,6 +423,7 @@ export const timeline = query({
     let aheadCount = 0;
     let sawUnready = false; // once true, everything after is "behind" too
     let cursor = now; // the running chain of "nothing starts before this"
+    let chainMeasured = true;
     const entries: TimelineEntry[] = [];
     const accountFinish = new Map<Id<"accounts">, number>();
 
@@ -385,11 +476,13 @@ export const timeline = query({
           : now,
       );
 
-      const remaining = remainingPages(job, estimateInputs.medianPages);
-      const secondsPerPage = estimateInputs.secondsPerPage ?? DEFAULT_SECONDS_PER_PAGE;
-      const finish = start + remaining * secondsPerPage * 1000;
+      const kindEstimate = estimates.get(job.kind);
+      const measured: boolean = chainMeasured && kindEstimate?.secondsPerPage !== undefined;
+      const remaining = remainingPages(job, kindEstimate?.medianPages);
+      const finish = start + remaining * (kindEstimate?.secondsPerPage ?? 0) * 1000;
 
       cursor = finish;
+      chainMeasured = measured;
       aheadCount += 1;
 
       if (account) accountFinish.set(account._id, finish);
@@ -418,7 +511,7 @@ export const timeline = query({
         until: job.until,
         createdAt: job._creationTime,
         waitReason,
-        estimate: { start, finish, accountFinish: undefined },
+        estimate: { start, finish, measured, accountFinish: undefined },
       });
     }
 
@@ -440,6 +533,7 @@ export const timeline = query({
       estimateInputs,
       workerBusy: running.length > 0,
       truncated,
+      queueTruncated,
     };
   },
 });

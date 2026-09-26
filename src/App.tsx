@@ -12,6 +12,9 @@ import {
   untrack,
 } from "solid-js";
 import { useAction, useConvex, useMutation, useQuery } from "./data/convex";
+import { useSnapshot } from "./data/snapshot";
+import { useLiveNow } from "./library/clock";
+import { publicRefresh } from "./data/publicRefresh";
 import { fromStore } from "./data/external";
 import { ResultsHead, ResultsSection } from "./ResultsSection";
 import { Wall, type Account } from "./Wall";
@@ -19,9 +22,7 @@ import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
-import { useLiveNow } from "./library/clock";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
-import { useStableQuery } from "./library/stableQuery";
 import { prefetched } from "./prefetch";
 import { capture, captureError, identifyUser, redactEmail, resetUser } from "./posthog";
 import { operatorArgs } from "./operatorToken";
@@ -354,14 +355,36 @@ export default function App() {
   // Decoration: a failing wall read leaves the posts column out, nothing more.
   const wallPosts = useQuery(api.wall.posts, () => ({}), { soft: true });
   const earlyWallPosts = prefetched<NonNullable<ReturnType<typeof wallPosts>>>("wall:posts");
-  // `configured.indexing` decays with real time (worker liveness), so it is
-  // asked with a live, unbucketed clock — see src/library/clock.ts.
+
+  // Read once, and again only from the header's Refresh (src/data/
+  // publicRefresh.ts). `configured.indexing` is decided against the instant
+  // of the read: it used to be asked every 5 s with a ticking clock, which
+  // kept every open page re-running it. What the answer means is "as of the
+  // last refresh", and the page says when that was.
+  const bootstrap = useSnapshot(
+    api.integrations.configured,
+    () => ({ now: Date.now() }),
+    publicRefresh.version,
+  );
+
+  const configured = bootstrap.data;
+
+  onSettled(() => publicRefresh.began(Date.now()));
+  // A local clock for ages on screen (job rows); it never reaches a query.
   const now = useLiveNow();
-  // Stable: `now` ticks every 5s, and a plain query reads `undefined` on
-  // every argument change until the new result lands, which put the whole
-  // page back into "Loading the search library…" on each tick.
-  const configured = useStableQuery(api.integrations.configured, () => ({ now: now() }));
-  const libraryLoading = () => accountResults() === undefined || configured() === undefined;
+
+  // A failed bootstrap read ends the loading state too; the notice below
+  // says what went wrong.
+  const libraryLoading = () =>
+    accountResults() === undefined ||
+    (configured() === undefined && bootstrap.error() === undefined);
+
+  // A failed bootstrap read used to reach the error boundary through the
+  // live query; a finite read reports it here instead of sitting on
+  // "Loading" forever.
+  createEffect(bootstrap.error, (cause) => {
+    if (cause !== undefined) setNotice(describeError(cause));
+  });
   // The caller's own identity. `verifiedEmail` is the one address
   // `email.send` will ever accept, so there is nothing to type at send time.
   const me = useQuery(api.auth.me, () => ({}));
@@ -418,10 +441,13 @@ export default function App() {
     return clientKey && isAuthenticated() ? { clientKey } : "skip";
   });
 
+  // Only the session this search started: the key changes before a delayed
+  // view update changes `raw`, so matching the query alone could briefly
+  // accept the previous search's session.
   const result = () => {
     const s = snapshot();
 
-    return s && s.raw === raw() && s.sort === sort() ? s : undefined;
+    return s && s.clientKey === searchKey() && s.raw === raw() && s.sort === sort() ? s : undefined;
   };
 
   const sessionId = () => result()?._id ?? null;
@@ -674,6 +700,10 @@ export default function App() {
       window.scrollTo(0, 0);
     });
 
+    // Not inside the transition: a browser may delay that callback past a
+    // fast search's first page. `runSearch` clears the previous search
+    // itself, synchronously, and the callback leaves a real search alone,
+    // so a late view update cannot wipe the new results.
     if (trimmed && runSearch(request)) kickedAttempt = request.attemptId;
   };
 
@@ -851,8 +881,8 @@ export default function App() {
     pushHref(OPS_PATH);
   };
 
-  // The dashboard's way back to the search app ("Public site", and "Search
-  // posts" on an account). `?search=1` keeps the operator build on search
+  // The dashboard and account rows both open the operator build's search view.
+  // `?search=1` keeps the operator build on search
   // with an empty query; a query goes through the URL like a shared link.
   const openSearch = (query?: string) => {
     pushHref(query ? `/?search=1&q=${encodeURIComponent(query)}` : "/?search=1");
@@ -977,6 +1007,24 @@ export default function App() {
                   <span class="lbl">Dashboard</span>
                 </button>
               </Show>
+              <button
+                type="button"
+                class="nav"
+                aria-label="Refresh"
+                title={
+                  bootstrap.fetchedAt()
+                    ? `Re-read this page's status · last read ${new Date(bootstrap.fetchedAt()!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                    : "Re-read this page's status"
+                }
+                onClick={() => {
+                  const message = publicRefresh.request(Date.now());
+
+                  setNotice(message ?? "");
+                }}
+              >
+                <Icon name="refresh-cw" />
+                <span class="lbl">Refresh</span>
+              </button>
               <div class="menu">
                 <button
                   type="button"

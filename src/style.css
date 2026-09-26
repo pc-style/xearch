@@ -397,6 +397,8 @@ h1 em {
 
 /* the form, shared by both views */
 #form {
+  position: relative;
+  z-index: 1;
   view-transition-name: search-controls;
 }
 .row {

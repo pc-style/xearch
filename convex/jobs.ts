@@ -1,3 +1,4 @@
+import { paginationOptsValidator } from "convex/server";
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -156,6 +157,47 @@ export const list = query({
     }
 
     return { jobs: out, truncated };
+  },
+});
+
+// Read failed runs on demand for "Retry all failed". A cursor keeps the
+// action complete even when the normal Jobs feed has reached its 100-row cap.
+export const failedForRetry = query({
+  args: {
+    status: v.union(v.literal("failed"), v.literal("partial")),
+    paginationOpts: paginationOptsValidator,
+    operatorToken: v.optional(v.string()),
+  },
+  returns: v.object({
+    jobIds: v.array(v.id("jobs")),
+    cursor: v.string(),
+    done: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    await requireOperator(ctx, args.operatorToken);
+
+    const page = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", args.status))
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    return {
+      jobIds: page.page
+        .filter(
+          (job) =>
+            job.dismissedAt === undefined &&
+            job.origin !== "history" &&
+            (job.retryable !== false ||
+              (job.kind === "bulk" &&
+                job.expectedUserId !== undefined &&
+                (/\b404\b/.test(job.error ?? "") ||
+                  /x\.md stopped before completing the import/.test(job.error ?? "")))),
+        )
+        .map((job) => job._id),
+      cursor: page.continueCursor,
+      done: page.isDone,
+    };
   },
 });
 
@@ -661,7 +703,17 @@ export const retry = mutation({
     // way on every attempt — src/JobRow.tsx already hides the Retry button
     // for these, but this is the actual boundary: a repeat request against a
     // permanent failure spends another provider call to learn nothing new.
-    if ((job.status === "failed" || job.status === "partial") && job.retryable === false)
+    const legacyAccountFailure =
+      job.kind === "bulk" &&
+      job.expectedUserId !== undefined &&
+      (/\b404\b/.test(job.error ?? "") ||
+        /x\.md stopped before completing the import/.test(job.error ?? ""));
+
+    if (
+      (job.status === "failed" || job.status === "partial") &&
+      job.retryable === false &&
+      !legacyAccountFailure
+    )
       throw new ConvexError("x.md can't fetch this. Retrying will not change the result.");
 
     for (const status of ["queued", "running"] as const) {
@@ -686,7 +738,7 @@ export const retry = mutation({
     // self-imposed cap.
     const now = Date.now();
     const throttledUntil = activeThrottleUntil(await loadProviderLimit(ctx, "xmd"), now);
-    const readyAt = throttledUntil ?? 0;
+    const readyAt = throttledUntil ?? now;
 
     await ctx.db.patch(jobId, {
       status: "queued",
@@ -704,6 +756,11 @@ export const retry = mutation({
     // provider's own reset/retry-after time would just fail the same way
     // again, so there is nothing to gain from firing this any sooner.
     await ctx.scheduler.runAfter(Math.max(0, readyAt - now), internal.importer.run, { jobId });
+    await capturePostHog(ctx, {
+      distinctId: job.owner,
+      event: "job_retried",
+      properties: { job_id: jobId, kind: job.kind, origin: job.origin ?? "manual" },
+    });
 
     return null;
   },
@@ -945,6 +1002,7 @@ export const ack = internalMutation({
     captureId: v.string(),
     receiptId: v.string(),
     count: v.number(),
+    posts: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
@@ -963,11 +1021,41 @@ export const ack = internalMutation({
       captureId: args.captureId,
       receiptId: args.receiptId,
       records: args.count,
+      posts: args.posts,
     });
     await ctx.db.patch(job._id, {
       count: job.count + args.count,
       updatedAt: Date.now(),
     });
+  },
+});
+
+// One-time correction for legacy profile-only captures verified against their
+// retained raw JSON. Existing receipts recorded envelope count, not post count.
+export const confirmVerifiedEmptyReceipt = internalMutation({
+  args: { jobId: v.id("jobs"), captureId: v.string() },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+
+    const receipt = await ctx.db
+      .query("receipts")
+      .withIndex("by_capture", (q) => q.eq("jobId", args.jobId).eq("captureId", args.captureId))
+      .unique();
+
+    if (
+      !job ||
+      (job.status !== "partial" && job.status !== "failed") ||
+      job.postsReceived !== 0 ||
+      !receipt ||
+      receipt.records !== 1
+    )
+      throw new Error("Receipt does not match a stopped zero-post legacy job.");
+
+    if (receipt.posts === 0) return;
+
+    if (receipt.posts !== undefined) throw new Error("Receipt already has a post count.");
+
+    await ctx.db.patch(receipt._id, { posts: 0 });
   },
 });
 

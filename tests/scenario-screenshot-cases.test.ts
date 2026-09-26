@@ -32,9 +32,9 @@ const modules = import.meta.glob("../convex/**/*.ts");
 
 const libraryRows = anyApi.library.rows;
 
-const summaryQ = anyApi.summary.summary;
+const summaryQ = anyApi.summary.summarySnapshot;
 
-const healthQ = anyApi.summary.health;
+const healthQ = anyApi.summary.healthSnapshot;
 
 /** One dashboard page, fed only real query results, as markup. */
 async function renderPage(tab: OpsTab, fixtures: OpsFixtures, selector: string): Promise<string> {
@@ -91,7 +91,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(rows[0].nextAction).toEqual({ kind: "retry", jobId });
 
     const jobs = (await session.query(api.jobs.list, {})).jobs;
-    const accounts = (await session.query(api.ops.accounts, {})).rows;
+    const accounts = (await session.query(api.ops.accountsSnapshot, {})).rows;
     const html = await renderPage("overview", { jobs, accounts }, ".att");
 
     console.log(
@@ -111,7 +111,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     const row = await renderPage("accounts", { jobs, accounts }, "tr[data-account=bob]");
 
     expect(row).toContain("Last import failed");
-    expect(row).toContain("failed · see jobs");
+    expect(row).toContain("failed just now</span> · last good never · see jobs");
 
     const jobRow = await renderPage("jobs", { jobs, accounts }, `tr[data-job="${jobId}"]`);
 
@@ -162,7 +162,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(rows[0].latestJob?.jobId).toBe(jobId);
     expect(rows[0].nextAction).toEqual({ kind: "none" });
 
-    const accounts = (await session.query(api.ops.accounts, {})).rows;
+    const accounts = (await session.query(api.ops.accountsSnapshot, {})).rows;
     const html = await renderPage("accounts", { accounts }, "tr[data-account=carol]");
 
     console.log("CASE2 UI says up to date:", html.includes("Up to date"));
@@ -248,7 +248,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     expect(rows[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 950 });
     expect(rows[0].lastError?.message).toBe("indexer rejected generation 2: schema mismatch");
 
-    const accounts = (await session.query(api.ops.accounts, {})).rows;
+    const accounts = (await session.query(api.ops.accountsSnapshot, {})).rows;
     const html = await renderPage("accounts", { accounts }, "tr[data-account=dana]");
 
     console.log(
@@ -299,7 +299,7 @@ describe("scenario: screenshot cases render an explicit, correct, non-contradict
     // "search" has no serviceHealth row at all — genuinely unknown.
 
     const now = Date.now(); // far enough past observedAt to cross SERVICE_STALE_AFTER_MS (5 min)
-    // SAFETY: `healthQ` is `anyApi.summary.health`, an untyped reference, so
+    // SAFETY: `healthQ` is `anyApi.summary.healthSnapshot`, an untyped reference, so
     // convex-test's result is typed `any`; convex/summary.ts's `health` query
     // always returns a `ServiceStatus[]` — see its own return type.
     const health = (await session.query(healthQ, { now })) as ServiceStatus[];

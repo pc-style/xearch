@@ -389,7 +389,13 @@ fn capture_identity(file: &Path) -> CaptureIdentity {
             .get("request")
             .and_then(|request| request.get("input"))
             .and_then(serde_json::Value::as_str)
-            .and_then(|input| search_query::normalize_author(input).ok());
+            .and_then(|input| {
+                let handle = input
+                    .strip_prefix("from:")
+                    .and_then(|query| query.split_whitespace().next())
+                    .unwrap_or(input);
+                search_query::normalize_author(handle).ok()
+            });
     }
     identity
 }
@@ -731,9 +737,19 @@ async fn terminated() {
     std::future::pending::<()>().await;
 }
 
+/// [`run_pass`] on Tokio's blocking pool. A pass reads files, writes the
+/// index and waits for its merges when the writer is dropped; on this
+/// runtime's two workers that would stall every other task until it ends.
+async fn pass(config: &Config) -> Result<Registry> {
+    let config = config.clone();
+    tokio::task::spawn_blocking(move || run_pass(&config))
+        .await
+        .map_err(|error| Error::Storage(format!("indexer pass did not finish: {error}")))?
+}
+
 async fn watch_loop(config: &Config) -> Result<()> {
     // Immediate first pass so restarts pick up waiting dumps at once.
-    if let Err(error) = run_pass(config) {
+    if let Err(error) = pass(config).await {
         eprintln!(
             "indexer pass failed (index open errors repeating usually mean a corrupt \
              index directory: rebuild it from the archive; see docs/search-indexer.md): {error}"
@@ -751,7 +767,9 @@ async fn watch_loop(config: &Config) -> Result<()> {
                 return Ok(());
             }
             () = tokio::time::sleep(config.poll_interval) => {
-                if let Err(error) = run_pass(config) {
+                // A stop signal waits for this pass to finish, so an import
+                // is never cut off halfway.
+                if let Err(error) = pass(config).await {
                     eprintln!("indexer pass failed: {error}");
                 }
             }
