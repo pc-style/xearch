@@ -498,3 +498,50 @@ describe("search.complete's rows cap (defense in depth on top of the search API'
     expect(session?.error).toContain("more than 20 results");
   });
 });
+
+describe("search.resultsByKey (subscribe before search.start replies)", () => {
+  const key = "0123456789abcdef0123456789abcdef";
+
+  it("reads null until the session exists, then the session started with that key", async () => {
+    const { a } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+
+    expect(await a.query(api.search.resultsByKey, { clientKey: key })).toBeNull();
+
+    const sessionId = await a.mutation(api.search.start, {
+      raw: "local first",
+      sort: "relevance",
+      clientKey: key,
+    });
+
+    expect(await a.query(api.search.resultsByKey, { clientKey: key })).toMatchObject({
+      _id: sessionId,
+      raw: "local first",
+      status: "queued",
+    });
+  });
+
+  it("never shows another user's session under the same key", async () => {
+    const { t, a } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+    await a.mutation(api.search.start, { raw: "local first", sort: "relevance", clientKey: key });
+
+    const mallory = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const m = t.withIdentity({ subject: `${mallory}|session` });
+
+    expect(await m.query(api.search.resultsByKey, { clientKey: key })).toBeNull();
+  });
+
+  it("rejects a malformed or reused key", async () => {
+    const { a } = await setup();
+    vi.stubEnv("SEARCH_API_URL", "https://search.example/query");
+
+    await expect(
+      a.mutation(api.search.start, { raw: "x y", sort: "relevance", clientKey: "not hex!" }),
+    ).rejects.toThrow("Invalid search key.");
+    await a.mutation(api.search.start, { raw: "x y", sort: "relevance", clientKey: key });
+    await expect(
+      a.mutation(api.search.start, { raw: "x y", sort: "relevance", clientKey: key }),
+    ).rejects.toThrow("Invalid search key.");
+  });
+});

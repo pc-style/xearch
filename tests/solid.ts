@@ -39,10 +39,14 @@ export function fakeConvex(options: FakeConvexOptions = {}): ConvexApp & {
   readonly subscribed: string[];
   /** Every finite read, with its arguments, in order. */
   readonly fetched: { name: string; args: Record<string, Value> }[];
+  /** Tell live subscribers to `name` that its answer changed, as the server
+   * does when a mutation writes what a query reads. */
+  readonly changed: (name: string) => void;
 } {
   const results = new Map(options.results?.map(([ref, value]) => [getFunctionName(ref), value]));
   const subscribed: string[] = [];
   const fetched: { name: string; args: Record<string, Value> }[] = [];
+  const listeners = new Map<string, Set<() => void>>();
 
   const answer = (name: string, args: Record<string, Value>) =>
     options.query ? options.query(name, args) : results.get(name);
@@ -72,8 +76,17 @@ export function fakeConvex(options: FakeConvexOptions = {}): ConvexApp & {
   return {
     subscribed,
     fetched,
+    changed: (name) => {
+      for (const fn of listeners.get(name) ?? []) fn();
+    },
     sync,
-    listen: () => () => {},
+    listen: (token, fn) => {
+      const set = listeners.get(token) ?? new Set();
+      set.add(fn);
+      listeners.set(token, set);
+
+      return () => set.delete(fn);
+    },
     query: (ref, args) => {
       const name = getFunctionName(ref);
       // SAFETY: a query's declared args are a plain object of Convex values

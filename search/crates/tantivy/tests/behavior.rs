@@ -260,3 +260,64 @@ fn pagination_window_capping_and_warning() {
     // Crucially: no false warning that window was capped when results simply ended.
     assert_eq!(resp.warnings.len(), 0);
 }
+
+fn segments(engine: &search_tantivy::Engine) -> search_model::Result<u64> {
+    let mut stats = request("hello");
+    stats.include_stats = true;
+    let expr = search_query::parse(&stats.query, None)?;
+    let response = engine.search(&expr, &stats, 1_800_000_000_000)?;
+    response
+        .stats
+        .map(|stats| stats.backend.segments)
+        .ok_or_else(|| Error::Invalid("stats requested but missing".into()))
+}
+
+#[test]
+fn one_writer_per_import_still_lets_segments_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(dir.path(), true).unwrap();
+    // The indexer's shape: a fresh writer per import, dropped right after
+    // its commit. Without waiting for merges this left 40 segments.
+    for id in 1..=40 {
+        let mut writer = engine.writer().unwrap();
+        writer.upsert(&post(id, "hello")).unwrap();
+        writer.commit().unwrap();
+    }
+    assert!(segments(&engine).unwrap() < 20, "segments never merged");
+    assert_eq!(all(&engine, request("hello")).unwrap().len(), 40);
+}
+
+#[test]
+fn compact_merges_to_one_segment_and_keeps_every_post() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(dir.path(), true).unwrap();
+    for id in 1..=5 {
+        let mut writer = engine.writer().unwrap();
+        writer.upsert(&post(id, "hello")).unwrap();
+        writer.commit().unwrap();
+    }
+    assert!(engine.compact().unwrap() >= 1);
+    assert_eq!(segments(&engine).unwrap(), 1);
+    assert_eq!(all(&engine, request("hello")).unwrap().len(), 5);
+}
+
+#[test]
+fn a_search_sees_a_commit_made_after_the_previous_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(dir.path(), true).unwrap();
+    {
+        let mut writer = engine.writer().unwrap();
+        writer.upsert(&post(1, "hello")).unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(all(&engine, request("hello")).unwrap().len(), 1);
+    // A second process (the indexer) commits; `serve` must pick it up
+    // without reloading on every search.
+    let other = search_tantivy::open(dir.path(), false).unwrap();
+    {
+        let mut writer = other.writer().unwrap();
+        writer.upsert(&post(2, "hello")).unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(all(&engine, request("hello")).unwrap().len(), 2);
+}

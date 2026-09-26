@@ -28,7 +28,7 @@ export type SearchRequestBody = {
 };
 
 // The search API's own page size (`limit: 20` below, in `execute`) and
-// `lib/results.ts`'s decode-time `Schema.isMaxLength(20)` both already
+// `lib/results.ts`'s decode-time `z.maxLength(20)` both already
 // bound a normal response to this. `complete` enforces it again because it
 // is an internalMutation, not the only caller of which is `execute` — a
 // future caller that skips the decode step must not be able to write an
@@ -36,6 +36,10 @@ export type SearchRequestBody = {
 // guidelines.md "Do not store unbounded lists...", and the sessions.rows
 // schema comment).
 const MAX_SEARCH_ROWS = 20;
+
+// What `search.start` accepts as a client key: the hex the client generates
+// (src/App.tsx `newClientKey`), bounded so it can't bloat the index.
+const CLIENT_KEY = /^[0-9a-f]{16,64}$/;
 
 const accountSummaryValidator = v.object({
   _id: v.id("accounts"),
@@ -74,6 +78,8 @@ export const start = mutation({
     // rather than silently downgraded.
     scope: v.optional(summaryScopeValidator),
     includeStats: v.optional(v.boolean()),
+    // See `resultsByKey`. Optional so older clients keep working.
+    clientKey: v.optional(v.string()),
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
@@ -93,6 +99,20 @@ export const start = mutation({
     if ((cursor?.length ?? 0) > 4000) throw new ConvexError("Invalid cursor.");
     assertAuthorizedScope(args.scope);
 
+    if (args.clientKey !== undefined) {
+      if (!CLIENT_KEY.test(args.clientKey)) throw new ConvexError("Invalid search key.");
+
+      // A key names one session: `resultsByKey` answers with the first match.
+      const taken = await ctx.db
+        .query("sessions")
+        .withIndex("by_owner_and_clientKey", (q) =>
+          q.eq("owner", owner).eq("clientKey", args.clientKey),
+        )
+        .first();
+
+      if (taken) throw new ConvexError("Invalid search key.");
+    }
+
     const id = await ctx.db.insert("sessions", {
       owner,
       raw: args.raw,
@@ -102,6 +122,7 @@ export const start = mutation({
       status: "queued",
       rows: [],
       warnings: [],
+      clientKey: args.clientKey,
     });
 
     await ctx.scheduler.runAfter(0, internal.search.execute, { sessionId: id });
@@ -123,6 +144,27 @@ export const results = query({
     if (!session || session.owner !== owner) throw new ConvexError("Search session not found.");
 
     return session;
+  },
+});
+
+/**
+ * The caller's session started with `clientKey`, or null until `start` has
+ * committed it. The client subscribes to this before it sends `start`, so
+ * the new session reaches it together with the mutation's reply rather
+ * than one round trip later (subscribing by id has to wait for the id).
+ */
+export const resultsByKey = query({
+  args: { clientKey: v.string() },
+  returns: v.union(v.null(), schema.doc("sessions")),
+  handler: async (ctx, { clientKey }) => {
+    const owner = await user(ctx);
+
+    return await ctx.db
+      .query("sessions")
+      .withIndex("by_owner_and_clientKey", (q) => q.eq("owner", owner).eq("clientKey", clientKey))
+      // Not `.unique()`: the index enforces nothing, and `start` already
+      // refuses a taken key, so a stray duplicate must not break the read.
+      .first();
   },
 });
 

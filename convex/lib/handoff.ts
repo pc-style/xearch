@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/mini";
 import { ProviderError, readThrottle, retryDelay, type RawObject, type JsonValue } from "./xmd";
 
 /** Acquisition output only. The receiving service owns raw retention and normalization. */
@@ -54,7 +54,7 @@ export const jsonBytes = (value: JsonValue): number => utf8Bytes(JSON.stringify(
 const receiptSchema = z.object({
   captureId: z.string(),
   durable: z.literal(true),
-  receiptId: z.string().min(1).max(200),
+  receiptId: z.string().check(z.minLength(1), z.maxLength(200)),
 });
 
 export type Receipt = z.infer<typeof receiptSchema>;

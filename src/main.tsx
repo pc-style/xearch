@@ -7,6 +7,7 @@ import { createAuthClient } from "./data/auth";
 import { createHttpQueryFetcher } from "./data/httpQuery";
 import { describeError } from "./errors";
 import { captureError, initPostHog } from "./posthog";
+import { captureShell, replayShell } from "./shellHandoff";
 import "./style.css";
 
 function Connected(props: { url: string }) {
@@ -26,6 +27,15 @@ function Connected(props: { url: string }) {
 initPostHog();
 
 const url = import.meta.env.VITE_CONVEX_URL;
+
+const root = document.getElementById("root")!;
+
+// index.html paints a static copy of the home page before this script runs.
+// Swap it for the live app in the same task (no frame in between), keeping
+// anything typed (or submitted) in the copy's search box meanwhile.
+const shell = captureShell(root);
+
+root.textContent = "";
 
 render(
   () =>
@@ -63,5 +73,7 @@ render(
         </p>
       </main>
     ),
-  document.getElementById("root")!,
+  root,
 );
+
+replayShell(shell, root);

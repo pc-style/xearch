@@ -27,7 +27,9 @@ describe("search view transitions", () => {
 
         if (name === "search:accounts") return [];
 
-        if (name === "search:results") return sessions.get(String(args.sessionId));
+        // The app subscribes by the key it sends with `search.start`, so the
+        // results can arrive before the mutation's reply.
+        if (name === "search:resultsByKey") return sessions.get(String(args.clientKey)) ?? null;
 
         return undefined;
       },
@@ -36,17 +38,20 @@ describe("search view transitions", () => {
         const id = `session-${started.length + 1}`;
         const raw = String(args.raw);
         started.push(raw);
-        sessions.set(id, {
+        sessions.set(String(args.clientKey), {
           _id: id,
           _creationTime: Date.now(),
           owner: "user-1",
           raw,
+          clientKey: args.clientKey,
           sort: args.sort,
           includeStats: false,
           status: "complete",
           rows: [],
           warnings: [],
         });
+        // The app subscribed before starting; the server would push this.
+        queueMicrotask(() => convex.changed("search:resultsByKey"));
 
         return id;
       },
@@ -77,11 +82,14 @@ describe("search view transitions", () => {
     mounted.container.querySelector<HTMLFormElement>("#form")!.requestSubmit();
     await settle();
 
+    // The search starts without waiting for the view update, and its
+    // results may land before it; the late update must not wipe them.
     expect(update).toBeDefined();
-    expect(started).toEqual(["@cohere"]);
+    expect(started).toEqual(["@cohere", "local-first software"]);
     update!();
     await settle();
 
+    // One start per submit, and the completed search is still shown.
     expect(started).toEqual(["@cohere", "local-first software"]);
     expect(mounted.html()).toContain("No matches in the indexed accounts yet.");
     expect(mounted.html()).not.toContain("Finding matching posts…");

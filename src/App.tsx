@@ -2,6 +2,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  flush,
   For,
   Loading,
   Match,
@@ -10,7 +11,6 @@ import {
   Switch,
   untrack,
 } from "solid-js";
-import * as Effect from "effect/Effect";
 import { useAction, useConvex, useMutation, useQuery } from "./data/convex";
 import { useSnapshot } from "./data/snapshot";
 import { useLiveNow } from "./library/clock";
@@ -23,6 +23,7 @@ import { Icon } from "./icons";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
 import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
+import { prefetched } from "./prefetch";
 import { capture, captureError, identifyUser, redactEmail, resetUser } from "./posthog";
 import { operatorArgs } from "./operatorToken";
 import { describeError } from "./errors";
@@ -83,6 +84,15 @@ function connectionObservation(connection: {
     hasEverConnected: connection.hasEverConnected,
     connectionCount: connection.hasEverConnected ? 1 : 0,
   };
+}
+
+/** A fresh key for `search.start`/`search.resultsByKey`. `getRandomValues`,
+ * not `randomUUID`: the latter only exists on secure origins, and the dev
+ * server is also opened over plain http on the LAN. */
+function newClientKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** What a query is scoped to, or null when it doesn't parse. */
@@ -203,7 +213,10 @@ export default function App() {
       : null,
   );
 
-  const [sessionId, setSessionId] = createSignal<Id<"sessions"> | null>(null);
+  // The key the current search's session is started with (see
+  // convex/search.ts `resultsByKey`). The results subscription follows the
+  // key, not the session id, so it is live before `search.start` replies.
+  const [searchKey, setSearchKey] = createSignal<string | null>(null);
   // Rows accumulated across pages of the current search. A Convex session
   // only ever holds one page; this is what lets "Load more" grow the list
   // instead of swapping it. A fresh search resets it.
@@ -242,6 +255,16 @@ export default function App() {
 
   const [proposal, setProposal] = createSignal<{ query: string; explanation: string } | null>(null);
 
+  // The first connection says nothing unless it is slow: a banner that
+  // appears for a moment on every load shifts the whole page down and back.
+  const [slowToConnect, setSlowToConnect] = createSignal(false);
+
+  onSettled(() => {
+    const timer = setTimeout(() => setSlowToConnect(true), 1500);
+
+    return () => clearTimeout(timer);
+  });
+
   const [copied, setCopied] = createSignal(false);
   const [justSaved, setJustSaved] = createSignal(false);
 
@@ -279,7 +302,7 @@ export default function App() {
       setDraft(next.raw);
       setSort(next.sort);
       setStatsForNerds(next.includeStats);
-      setSessionId(null);
+      setSearchKey(null);
       setRows([]);
       setSearchRequest(
         next.raw.trim()
@@ -311,7 +334,10 @@ export default function App() {
 
   // --- Data -----------------------------------------------------------------
   const accountResults = useQuery(api.search.accounts, () => ({}));
-  const accounts = () => accountResults() ?? [];
+  // Read over HTTP while the bundle loaded (src/prefetch.ts), shown until
+  // the live subscription answers.
+  const earlyAccounts = prefetched<Account[]>("search:accounts");
+  const accounts = () => accountResults() ?? earlyAccounts() ?? [];
 
   const accountSuggestions = createMemo(() => {
     const value = draft().trim().toLowerCase();
@@ -328,6 +354,7 @@ export default function App() {
 
   // Decoration: a failing wall read leaves the posts column out, nothing more.
   const wallPosts = useQuery(api.wall.posts, () => ({}), { soft: true });
+  const earlyWallPosts = prefetched<NonNullable<ReturnType<typeof wallPosts>>>("wall:posts");
 
   // Read once, and again only from the header's Refresh (src/data/
   // publicRefresh.ts). `configured.indexing` is decided against the instant
@@ -408,17 +435,22 @@ export default function App() {
     }
   };
 
-  const snapshot = useQuery(api.search.results, () => {
-    const id = sessionId();
+  const snapshot = useQuery(api.search.resultsByKey, () => {
+    const clientKey = searchKey();
 
-    return id && isAuthenticated() ? { sessionId: id } : "skip";
+    return clientKey && isAuthenticated() ? { clientKey } : "skip";
   });
 
+  // Only the session this search started: the key changes before a delayed
+  // view update changes `raw`, so matching the query alone could briefly
+  // accept the previous search's session.
   const result = () => {
     const s = snapshot();
 
-    return s?._id === sessionId() && s?.raw === raw() && s?.sort === sort() ? s : undefined;
+    return s && s.clientKey === searchKey() && s.raw === raw() && s.sort === sort() ? s : undefined;
   };
+
+  const sessionId = () => result()?._id ?? null;
 
   const jobFeed = useQuery(api.jobs.list, () => (isAuthenticated() ? {} : "skip"));
   const jobs = () => jobFeed()?.jobs ?? [];
@@ -463,9 +495,8 @@ export default function App() {
   // continuations: plain variables, not signals.
   let latestAttempt: number | null = null;
   let kickedAttempt: number | null = null;
-  // Which attempt's session is confirmed. "Load more" starts a new attempt
-  // but leaves the old session on screen until the new page resolves; this
-  // keeps telemetry from reading that old page as the new attempt's.
+  // Which attempt's session is confirmed, by the mutation's reply or by the
+  // session itself arriving on the key subscription, whichever is first.
   let sessionAttempt: number | null = null;
   // For analytics: when each attempt started, and which already reported
   // their outcome (a session keeps updating after it completes).
@@ -484,24 +515,33 @@ export default function App() {
     if (!untrack(configured)?.search || !parsed(request.raw)) return false;
     searchStartedAt.set(request.attemptId, performance.now());
     latestAttempt = request.attemptId;
+    appendMode = request.cursor !== undefined;
+    const clientKey = newClientKey();
+
+    // Reset here, synchronously, not in `search`'s view transition: that
+    // callback waits for a frame, and on a slow frame this search's first
+    // page can land before it — the reset would then wipe it.
+    if (!appendMode) setRows([]);
+    setSearchKey(clientKey);
     setBusy(true);
     setNotice("");
-    void Effect.runPromise(
-      searchFlow(
-        {
-          ensureSession,
-          beforeStart: () => telemetry.markMutationStarted(request.attemptId),
-          startSearch,
+    void searchFlow(
+      {
+        ensureSession,
+        beforeStart: () => {
+          telemetry.markMutationStarted(request.attemptId);
+          // Make sure the key subscription is sent before the mutation.
+          flush();
         },
-        request,
-      ),
+        startSearch,
+      },
+      { ...request, clientKey },
     ).then(
       (id) => {
         if (latestAttempt !== request.attemptId) return;
 
         if (telemetry.markSession(request.attemptId, id, connectionSnapshot()))
           sessionAttempt = request.attemptId;
-        setSessionId(id);
         setBusy(false);
       },
       (cause: unknown) => {
@@ -536,12 +576,7 @@ export default function App() {
   let mergeStartedAt: number | null = null;
 
   createEffect(result, (current) => {
-    if (
-      current &&
-      current._id === untrack(sessionId) &&
-      current.status === "complete" &&
-      mergedSession !== current._id
-    ) {
+    if (current && current.status === "complete" && mergedSession !== current._id) {
       mergedSession = current._id;
       mergeStartedAt = performance.now();
 
@@ -554,7 +589,15 @@ export default function App() {
 
     const request = untrack(searchRequest);
 
-    if (!current || !request || sessionAttempt !== request.attemptId) return;
+    if (!current || !request || latestAttempt !== request.attemptId) return;
+
+    if (
+      sessionAttempt !== request.attemptId &&
+      telemetry.markSession(request.attemptId, current._id, connectionSnapshot())
+    )
+      sessionAttempt = request.attemptId;
+
+    if (sessionAttempt !== request.attemptId) return;
 
     if (current.status === "complete" || current.status === "failed") {
       if (!capturedResults.has(request.attemptId)) {
@@ -618,7 +661,6 @@ export default function App() {
   const search = (query: string, nextSort?: Sort) => {
     const trimmed = query.trim();
     const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort());
-    appendMode = false;
     const attemptId = allocateAttempt();
 
     const request: SearchRequest = {
@@ -630,13 +672,18 @@ export default function App() {
     };
 
     setSavedOpen(false);
+    setSearchRequest(trimmed ? request : null);
     withViewTransition(() => {
       setRaw(trimmed);
       setDraft(trimmed);
       setSort(effectiveSort);
-      setSessionId(null);
-      setRows([]);
-      setSearchRequest(trimmed ? request : null);
+
+      // A real search resets these itself in `runSearch`.
+      if (!trimmed) {
+        setSearchKey(null);
+        setRows([]);
+      }
+
       setView(ViewMode.Search);
       setProposal(null);
 
@@ -651,11 +698,13 @@ export default function App() {
       });
       markRouteApplied();
       window.scrollTo(0, 0);
-
-      // A browser may delay this callback until after a fast mutation resolves.
-      // Start only after the new view has cleared the previous session.
-      if (trimmed && runSearch(request)) kickedAttempt = request.attemptId;
     });
+
+    // Not inside the transition: a browser may delay that callback past a
+    // fast search's first page. `runSearch` clears the previous search
+    // itself, synchronously, and the callback leaves a real search alone,
+    // so a late view update cannot wipe the new results.
+    if (trimmed && runSearch(request)) kickedAttempt = request.attemptId;
   };
 
   const goHome = () => {
@@ -672,9 +721,6 @@ export default function App() {
       trigger: SearchTrigger.Retry,
     };
 
-    appendMode = false;
-    setSessionId(null);
-    setRows([]);
     setSearchRequest(request);
 
     if (runSearch(request)) kickedAttempt = request.attemptId;
@@ -684,11 +730,11 @@ export default function App() {
     const cursor = result()?.nextCursor;
 
     if (!cursor) return;
-    appendMode = true;
 
     // Its own telemetry attempt, so the stats panel times this page rather
-    // than freezing on the first one. `sessionId` stays put until the new
-    // page resolves, so the list doesn't blink to a loading state.
+    // than freezing on the first one. The loaded rows stay on screen until
+    // the new page resolves (ResultsSection only shows its loading state
+    // while nothing is loaded).
     const request: SearchRequest = {
       raw: raw(),
       sort: sort(),
@@ -1054,7 +1100,12 @@ export default function App() {
               </button>
             </nav>
           </header>
-          <Show when={!connection().isWebSocketConnected}>
+          <Show
+            when={
+              !connection().isWebSocketConnected &&
+              (connection().hasEverConnected || slowToConnect())
+            }
+          >
             <p class="connection" role="status">
               <span class="connection-dot" />
               {connection().hasEverConnected
@@ -1329,7 +1380,7 @@ export default function App() {
             <Show when={home()}>
               <Wall
                 accounts={accounts()}
-                posts={wallPosts() ?? []}
+                posts={wallPosts() ?? earlyWallPosts() ?? []}
                 loading={libraryLoading()}
                 onAccount={(handle) => search(`@${handle}`)}
               />

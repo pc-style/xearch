@@ -33,6 +33,7 @@ use sha2::Digest;
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 use users::{Registry, registry_path};
@@ -718,10 +719,10 @@ fn run_user(
 /// Returns validation errors or a lock conflict before the first pass.
 pub async fn watch(config: Config) -> Result<()> {
     config.validate()?;
-    let _guard = acquire_exclusive(&config.state_dir, "watch")?;
+    let lock = Arc::new(acquire_exclusive(&config.state_dir, "watch")?);
     sweep_temp_files(&config.archive);
     sweep_temp_files(&config.state_dir);
-    watch_loop(&config).await
+    watch_loop(&config, &lock).await
 }
 
 /// Resolves on SIGTERM so `systemctl --user stop` releases the lock.
@@ -737,9 +738,25 @@ async fn terminated() {
     std::future::pending::<()>().await;
 }
 
-async fn watch_loop(config: &Config) -> Result<()> {
+/// [`run_pass`] on Tokio's blocking pool. A pass reads files, writes the
+/// index and waits for its merges when the writer is dropped; on this
+/// runtime's two workers that would stall every other task until it ends.
+/// The pass holds its own share of the lock: a blocking task outlives a
+/// dropped future, and the lock must not be released while it still writes.
+async fn pass(config: &Config, lock: &Arc<LockGuard>) -> Result<Registry> {
+    let config = config.clone();
+    let lock = Arc::clone(lock);
+    tokio::task::spawn_blocking(move || {
+        let _lock = lock;
+        run_pass(&config)
+    })
+    .await
+    .map_err(|error| Error::Storage(format!("indexer pass did not finish: {error}")))?
+}
+
+async fn watch_loop(config: &Config, lock: &Arc<LockGuard>) -> Result<()> {
     // Immediate first pass so restarts pick up waiting dumps at once.
-    if let Err(error) = run_pass(config) {
+    if let Err(error) = pass(config, lock).await {
         eprintln!(
             "indexer pass failed (index open errors repeating usually mean a corrupt \
              index directory: rebuild it from the archive; see docs/search-indexer.md): {error}"
@@ -757,7 +774,9 @@ async fn watch_loop(config: &Config) -> Result<()> {
                 return Ok(());
             }
             () = tokio::time::sleep(config.poll_interval) => {
-                if let Err(error) = run_pass(config) {
+                // A stop signal waits for this pass to finish, so an import
+                // is never cut off halfway.
+                if let Err(error) = pass(config, lock).await {
                     eprintln!("indexer pass failed: {error}");
                 }
             }

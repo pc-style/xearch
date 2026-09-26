@@ -1,4 +1,3 @@
-import { Match } from "effect";
 import { paginationOptsValidator } from "convex/server";
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
@@ -251,6 +250,18 @@ function canonicalLiveQuery(raw: string): string {
   }
 }
 
+/** The canonical form of what a job of this kind was asked to read. */
+function jobInput(kind: Doc<"jobs">["kind"], raw: string): string {
+  switch (kind) {
+    case "live":
+      return canonicalLiveQuery(raw);
+    case "post":
+      return statusUrl(raw);
+    default:
+      return handle(raw);
+  }
+}
+
 /**
  * How long an identical request is answered with the run that was already
  * made rather than a new one. Long enough to absorb a double-click and a
@@ -311,11 +322,7 @@ export const start = mutation({
         "Connect x.md and the raw-capture receiver before starting an indexing job.",
       );
 
-    const input = Match.value(args.kind).pipe(
-      Match.when("live", () => canonicalLiveQuery(args.input)),
-      Match.when("post", () => statusUrl(args.input)),
-      Match.orElse(() => handle(args.input)),
-    );
+    const input = jobInput(args.kind, args.input);
 
     if (!input || input.length > 300) throw new ConvexError("Enter a search under 300 characters.");
 

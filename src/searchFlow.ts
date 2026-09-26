@@ -1,4 +1,3 @@
-import { Effect } from "effect";
 import type { Id } from "../convex/_generated/dataModel";
 import type { Sort } from "../convex/lib/search";
 
@@ -10,6 +9,7 @@ export interface SearchRequest {
   readonly sort: Sort;
   readonly cursor?: string;
   readonly includeStats?: boolean;
+  readonly clientKey?: string;
 }
 
 export interface SearchFlowDependencies {
@@ -18,27 +18,24 @@ export interface SearchFlowDependencies {
   readonly startSearch: (request: SearchRequest) => Promise<SearchSessionId>;
 }
 
-export const searchFlow = Effect.fn("searchFlow")(function* (
+/**
+ * Ensure a session, then start the search. A plain async function rather
+ * than an Effect: this is the only Effect the browser ran, and it pulled
+ * ~35 kB of the Effect runtime into the page for two awaits. Failures reach
+ * the caller exactly as they were thrown (describeError handles non-Errors).
+ */
+export async function searchFlow(
   dependencies: SearchFlowDependencies,
   request: SearchRequest,
-): Effect.fn.Return<SearchSessionId, unknown> {
-  yield* Effect.tryPromise({
-    try: () => dependencies.ensureSession(),
-    catch: (cause: unknown) => cause,
-  });
-
-  if (dependencies.beforeStart) yield* Effect.sync(dependencies.beforeStart);
+): Promise<SearchSessionId> {
+  await dependencies.ensureSession();
+  dependencies.beforeStart?.();
   // Callers pass a wider request (attemptId, trigger for telemetry). Convex
   // rejects unknown fields, so send only the mutation's own arguments.
-  const { raw, sort, cursor, includeStats } = request;
+  const { raw, sort, cursor, includeStats, clientKey } = request;
 
-  return yield* Effect.tryPromise({
-    try: () => dependencies.startSearch({ raw, sort, cursor, includeStats }),
-    catch: (cause: unknown) => cause,
-  });
-});
-
-export const runSearchFlow = searchFlow;
+  return dependencies.startSearch({ raw, sort, cursor, includeStats, clientKey });
+}
 
 /**
  * Combine one page of search rows with whatever is already on screen.
@@ -66,10 +63,4 @@ export function mergeSearchPages<T extends { tweetId: string }>(
   }
 
   return merged;
-}
-
-export function makeSearchFlow(
-  dependencies: SearchFlowDependencies,
-): (request: SearchRequest) => Effect.Effect<SearchSessionId, unknown> {
-  return (request) => searchFlow(dependencies, request);
 }

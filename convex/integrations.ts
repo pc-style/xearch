@@ -5,7 +5,7 @@ import { v, ConvexError } from "convex/values";
 import { FirecrawlClient } from "@firecrawl/firecrawl-convex";
 import { user, requireOperator } from "./access";
 import { publicUrl, record, string, XmdClient } from "./lib/xmd";
-import { z } from "zod";
+import * as z from "zod/mini";
 import { deliverCapture } from "./lib/handoff";
 import { serviceToken } from "./lib/serviceAuth";
 import { parseQuery } from "./lib/search";
@@ -358,9 +358,9 @@ export const account = action({
 });
 
 const interpreted = z.object({
-  text: z.string().max(200),
-  author: z.string().regex(/^[A-Za-z0-9_]{0,15}$/),
-  explanation: z.string().max(500),
+  text: z.string().check(z.maxLength(200)),
+  author: z.string().check(z.regex(/^[A-Za-z0-9_]{0,15}$/)),
+  explanation: z.string().check(z.maxLength(500)),
 });
 
 export const interpret = action({

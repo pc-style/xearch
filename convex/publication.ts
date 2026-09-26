@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/mini";
 import { v } from "convex/values";
 import { anyApi } from "convex/server";
 import { httpAction, internalMutation } from "./_generated/server";
@@ -136,34 +136,32 @@ function materialDigest(args: {
 
 // A count of things is a non-negative integer. Applies to uniquePostCount and
 // pendingWork.count only; generation and timestamps stay finite-number checks.
-const countSchema = z.number().int().min(0);
+const countSchema = z.int().check(z.gte(0));
 
-const publicationUpdateEnvelopeSchema = z
-  .object({
-    version: z.literal(1),
-    providerAccountId: z.string().optional(),
-    handle: z.string().min(1),
-    runId: z.string().optional(),
-    captureIds: z.array(z.string()),
-    generation: z.number().finite(),
-    reportedState: z.enum(["indexing", "searchable", "failed"]),
-    uniquePostCount: countSchema.optional(),
-    uniquePostCountAsOf: z.number().optional(),
-    pendingWork: z
-      .strictObject({
-        unit: z.enum(["jobs", "captures", "posts"]),
-        count: countSchema,
-      })
-      .optional(),
-    error: z
-      .strictObject({
-        message: z.string(),
-        code: z.string().optional(),
-      })
-      .optional(),
-    observedAt: z.number().finite(),
-  })
-  .strict();
+const publicationUpdateEnvelopeSchema = z.strictObject({
+  version: z.literal(1),
+  providerAccountId: z.optional(z.string()),
+  handle: z.string().check(z.minLength(1)),
+  runId: z.optional(z.string()),
+  captureIds: z.array(z.string()),
+  generation: z.number(),
+  reportedState: z.enum(["indexing", "searchable", "failed"]),
+  uniquePostCount: z.optional(countSchema),
+  uniquePostCountAsOf: z.optional(z.number()),
+  pendingWork: z.optional(
+    z.strictObject({
+      unit: z.enum(["jobs", "captures", "posts"]),
+      count: countSchema,
+    }),
+  ),
+  error: z.optional(
+    z.strictObject({
+      message: z.string(),
+      code: z.optional(z.string()),
+    }),
+  ),
+  observedAt: z.number(),
+});
 
 // --- HTTP entry point -----------------------------------------------------
 
