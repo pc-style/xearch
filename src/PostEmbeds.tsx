@@ -1,12 +1,15 @@
 import { For, Match, Show, Switch } from "solid-js";
 import type { ResultPost } from "../convex/lib/results";
-import { postDate } from "./format";
+import { Avatar } from "./Avatar";
+import { compact, postDate } from "./format";
 
 type Media = NonNullable<ResultPost["media"]>[number];
 
 type Card = NonNullable<ResultPost["card"]>;
 
 type Quote = NonNullable<ResultPost["quote"]>;
+
+type Quoting = NonNullable<ResultPost["quotedBy"]>[number];
 
 /**
  * X's media hosts refuse requests that carry another site's Referer (the
@@ -199,5 +202,46 @@ export function PostEmbeds(props: { post: ResultPost }) {
       <Show when={!media().length && props.post.card}>{(card) => <CardEmbed card={card()} />}</Show>
       <Show when={props.post.quote}>{(quote) => <QuoteEmbed quote={quote()} />}</Show>
     </>
+  );
+}
+
+function QuotingPost(props: { quote: Quoting }) {
+  const date = () => postDate(props.quote.createdAt);
+
+  return (
+    <a class="qb-item" href={props.quote.url} target="_blank" rel="noopener noreferrer">
+      <Avatar name={props.quote.author} url={props.quote.avatar} class="qb-av" />
+      <span class="qb-body">
+        <span class="em-quote-by">
+          <b>{props.quote.displayName ?? props.quote.author}</b> @{props.quote.author}
+          <Show when={date()}>{(d) => <> · {d()}</>}</Show>
+          <Show when={props.quote.likes}>{(likes) => <> · {compact(likes())} likes</>}</Show>
+        </span>
+        <span class="qb-text">{props.quote.text}</span>
+      </span>
+    </a>
+  );
+}
+
+/**
+ * The best posts in the index quoting this one: what people said about it,
+ * the way a search engine shows what links to a page. The rest are on X.
+ */
+export function QuotedBy(props: { post: ResultPost }) {
+  return (
+    <Show when={props.post.quotedBy?.length}>
+      <section class="qb" aria-label="Quoted by">
+        <h3>Quoted by</h3>
+        <For each={props.post.quotedBy}>{(quote) => <QuotingPost quote={quote} />}</For>
+        <a
+          class="qb-all"
+          href={`${props.post.url}/quotes`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          All quotes on X
+        </a>
+      </section>
+    </Show>
   );
 }

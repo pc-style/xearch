@@ -128,7 +128,7 @@ fn run_query(
     sort: &str,
     include_stats: bool,
 ) -> color_eyre::Result<()> {
-    let engine = search_tantivy::open(index, false)?;
+    let engine = search_tantivy::open_for_search(index, false)?;
     let sort: Sort = serde_json::from_value(serde_json::Value::String(sort.to_owned()))?;
     let expression = search_query::parse(query, None)?;
     let request = SearchRequest {

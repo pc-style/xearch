@@ -444,3 +444,167 @@ fn a_serving_engine_picks_up_commits_in_the_background() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
+
+fn by(id: u32, author: &str, text: &str, likes: u32) -> Post {
+    let mut post = post(id, text);
+    post.author = author.into();
+    post.url = format!("https://x.com/{author}/status/{id}");
+    post.likes = Some(likes);
+    post
+}
+
+fn ids(posts: &[Post]) -> Vec<u64> {
+    posts.iter().map(|post| post.tweet_id.0).collect()
+}
+
+#[test]
+fn cited_authors_rank_first_among_equal_posts() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open_for_search(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    // Everyone mentions "cited"; nobody mentions "plain".
+    let mut posts = vec![
+        by(1, "plain", "rust compile times are fine now", 50),
+        by(2, "cited", "rust compile times are fine now", 50),
+    ];
+    for (offset, fan) in ["a", "b", "c", "d"].into_iter().enumerate() {
+        let id = 10 + u32::try_from(offset).unwrap();
+        posts.push(by(id, fan, "thanks @cited for the help today", 5));
+    }
+    for post in &posts {
+        writer.upsert(post).unwrap();
+    }
+    writer.commit().unwrap();
+    assert_eq!(ids(&all(&engine, request("rust")).unwrap()), [2, 1]);
+    // Without the corpus-wide signals the tie falls to the tweet id.
+    let plain = search_tantivy::open(directory.path(), false).unwrap();
+    assert_eq!(ids(&all(&plain, request("rust")).unwrap()), [1, 2]);
+}
+
+#[test]
+fn diversity_makes_room_for_others_but_not_for_quiet_posts_or_repeats() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open_for_search(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    for post in [
+        by(1, "prolific", "rust tip one about borrowing", 1000),
+        by(2, "prolific", "rust tip two about lifetimes", 990),
+        by(3, "prolific", "rust tip three about traits", 980),
+        by(4, "prolific", "rust tip four about macros", 970),
+        by(5, "other", "rust tip from someone else entirely", 900),
+        by(6, "quiet", "rust tip nobody has seen yet", 0),
+        by(7, "copier", "Rust tip one about borrowing!", 995),
+    ] {
+        writer.upsert(&post).unwrap();
+    }
+    writer.commit().unwrap();
+    let order = ids(&all(&engine, request("rust tip")).unwrap());
+    let position = |id: u64| order.iter().position(|&seen| seen == id).unwrap();
+    // The other author's post moves up past prolific's later ones.
+    assert!(position(5) < position(4), "{order:?}");
+    // The word-for-word copy sinks below the original it repeats.
+    assert!(position(7) > position(1), "{order:?}");
+    // The quiet post rises past nothing.
+    assert_eq!(order.last(), Some(&6), "{order:?}");
+    assert_eq!(order.len(), 7);
+}
+
+#[test]
+fn one_authors_results_keep_their_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open_for_search(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    for id in 1..=12 {
+        writer
+            .upsert(&by(id, "solo", "rust notes for the week", id * 10))
+            .unwrap();
+    }
+    writer.commit().unwrap();
+    let plain = search_tantivy::open(directory.path(), false).unwrap();
+    assert_eq!(
+        ids(&all(&engine, request("rust")).unwrap()),
+        ids(&all(&plain, request("rust")).unwrap())
+    );
+}
+
+#[test]
+fn pages_cut_one_order_across_the_diversity_window() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open_for_search(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    let authors = ["a", "b", "c"];
+    for id in 1..=150_u32 {
+        let author = authors[usize::try_from(id).unwrap() % 3];
+        let text = format!("rust post number {id}");
+        writer.upsert(&by(id, author, &text, id % 40)).unwrap();
+    }
+    writer.commit().unwrap();
+    for limit in [7, 20] {
+        let mut paged = request("rust");
+        paged.limit = limit;
+        let order = ids(&all(&engine, paged).unwrap());
+        assert_eq!(order.len(), 150, "limit {limit}");
+        assert_eq!(
+            order.iter().collect::<BTreeSet<_>>().len(),
+            150,
+            "limit {limit}"
+        );
+    }
+    let mut small = request("rust");
+    small.limit = 7;
+    let mut large = request("rust");
+    large.limit = 20;
+    assert_eq!(
+        ids(&all(&engine, small).unwrap()),
+        ids(&all(&engine, large).unwrap())
+    );
+}
+
+#[test]
+fn results_show_the_best_posts_quoting_them() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open_for_search(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    let original = by(1, "theo", "the ssd speeds are wild", 500);
+    let quote = |id: u32, author: &str, text: &str, likes: u32| {
+        let mut post = by(id, author, text, likes);
+        post.quote = Some(search_model::Quote {
+            url: "https://x.com/theo/status/1".into(),
+            author: "theo".into(),
+            display_name: None,
+            text: "the ssd speeds are wild".into(),
+            created_at: None,
+            image: None,
+        });
+        post
+    };
+    for post in [
+        original,
+        quote(2, "fan", "agreed, benchmarks inside", 3),
+        quote(3, "critic", "these numbers are misleading", 400),
+        quote(4, "lurker", "same thoughts here honestly", 40),
+    ] {
+        writer.upsert(&post).unwrap();
+    }
+    writer.commit().unwrap();
+    let rows = all(&engine, request("ssd")).unwrap();
+    let theo = rows.iter().find(|post| post.tweet_id.0 == 1).unwrap();
+    let quoted: Vec<&str> = theo.quoted_by.iter().map(|q| q.author.as_str()).collect();
+    assert_eq!(quoted, ["critic", "lurker"]);
+    assert_eq!(theo.quoted_by[0].url, "https://x.com/critic/status/3");
+    // A quote is shown under what it quotes, not under itself.
+    let critic = all(&engine, request("misleading")).unwrap();
+    assert!(critic[0].quoted_by.is_empty());
+    // Editing a quote into a plain post removes it after the next commit.
+    writer
+        .upsert(&by(3, "critic", "edited: no longer a quote", 400))
+        .unwrap();
+    writer.commit().unwrap();
+    let rows = all(&engine, request("ssd")).unwrap();
+    let quoted: Vec<&str> = rows[0]
+        .quoted_by
+        .iter()
+        .map(|q| q.author.as_str())
+        .collect();
+    assert_eq!(quoted, ["lurker", "fan"]);
+}

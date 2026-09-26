@@ -56,6 +56,19 @@ export const postFields = {
       image: v.optional(v.string()),
     }),
   ),
+  quotedBy: v.optional(
+    v.array(
+      v.object({
+        url: v.string(),
+        author: v.string(),
+        displayName: v.optional(v.string()),
+        avatar: v.optional(v.string()),
+        text: v.string(),
+        likes: v.optional(v.number()),
+        createdAt: v.optional(v.number()),
+      }),
+    ),
+  ),
 };
 
 export const backendStatsFields = {
