@@ -213,6 +213,11 @@
       // The shell is only the home page's first frame.
       if (location.pathname !== "/" || /[?&](q|view)=/.test(location.search))
         document.getElementById("root").textContent = "";
+      // Its form cannot search yet; remember an early Enter so src/main.tsx
+      // can replay it once the app is live.
+      document.getElementById("form")?.addEventListener("submit", (event) => {
+        event.currentTarget.dataset.submitted = "1";
+      });
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

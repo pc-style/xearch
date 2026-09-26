@@ -102,7 +102,7 @@ export const start = mutation({
     if (args.clientKey !== undefined) {
       if (!CLIENT_KEY.test(args.clientKey)) throw new ConvexError("Invalid search key.");
 
-      // `resultsByKey` reads with `.unique()`, so a key is only ever used once.
+      // A key names one session: `resultsByKey` answers with the first match.
       const taken = await ctx.db
         .query("sessions")
         .withIndex("by_owner_and_clientKey", (q) =>
@@ -162,7 +162,9 @@ export const resultsByKey = query({
     return await ctx.db
       .query("sessions")
       .withIndex("by_owner_and_clientKey", (q) => q.eq("owner", owner).eq("clientKey", clientKey))
-      .unique();
+      // Not `.unique()`: the index enforces nothing, and `start` already
+      // refuses a taken key, so a stray duplicate must not break the read.
+      .first();
   },
 });
 
