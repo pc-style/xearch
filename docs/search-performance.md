@@ -90,3 +90,31 @@ The Tantivy schema is unchanged by the compact Rust model and field-handle
 cache. Existing indexes do not require a rebuild for this change. The
 `includeStats` request member defaults false, and old opaque cursors continue
 to use the same JSON shape.
+
+## Segments and reloads
+
+Search and reload time both grow with the number of index segments, and the
+production index had 4,186 segments for 186k posts (September 26, 2026)
+because the `main` indexer dropped its writer after each import before
+Tantivy could merge. Measured locally with `serve` on a copy of production
+from a day earlier (2,297 segments), then after one import had merged it:
+
+| Stage (median)                | 2,297 segments | 1 segment |
+| ----------------------------- | -------------: | --------: |
+| Reload after a commit         |          61 ms |    0.5 ms |
+| Retrieve (match, rank, count) |          29 ms |    1.1 ms |
+| Whole request, service side   |          30 ms |    1.8 ms |
+
+- Writers wait for their merges when dropped (`impl Drop for Writer`). The
+  merge policy looks at every segment, so the first import after deploying
+  that change merged the 2,297-segment copy into one in 4.6 seconds; no
+  manual `compact` is needed. The log merge policy then keeps the count at
+  around ten.
+- `serve` opens the index with `open_for_serving`: Tantivy polls
+  `meta.json` every 500 ms and reloads on a background thread. A search
+  never reloads, and never waits behind another search's reload holding the
+  lock, which it did before. A commit shows up within about half a second.
+- The slowest remaining queries are very common words ("this is" matches
+  10k posts: about 8 ms, half of it the side-by-side phrase bonus reading
+  positions). Every match is scored, because the ranking mixes in
+  engagement and freshness, so Tantivy cannot skip low-scoring blocks.

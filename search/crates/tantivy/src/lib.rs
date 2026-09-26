@@ -122,9 +122,30 @@ fn analyzer() -> TextAnalyzer {
 
 /// Open a disk index. Creation is explicit; readers never silently create an empty corpus.
 ///
+/// Searches see every commit made before they start: each one checks
+/// `meta.json` and reloads first if it changed. Right for the CLI, the
+/// indexer and tests; a long-running server wants [`open_for_serving`].
+///
 /// # Errors
 /// Returns filesystem, incompatible schema or index errors.
 pub fn open(path: &Path, create: bool) -> Result<Engine> {
+    open_with(path, create, ReloadPolicy::Manual)
+}
+
+/// Open an existing index for a long-running server.
+///
+/// Tantivy watches `meta.json` on a background thread (polling every
+/// 500 ms) and reloads there, so no search pays for a reload or waits
+/// behind one; a commit from the indexer shows up within about half a
+/// second.
+///
+/// # Errors
+/// Returns filesystem, incompatible schema or index errors.
+pub fn open_for_serving(path: &Path) -> Result<Engine> {
+    open_with(path, false, ReloadPolicy::OnCommitWithDelay)
+}
+
+fn open_with(path: &Path, create: bool, policy: ReloadPolicy) -> Result<Engine> {
     let expected = schema();
     let fields = Fields::from_schema(&expected)?;
     let index = if create {
@@ -145,7 +166,7 @@ pub fn open(path: &Path, create: bool) -> Result<Engine> {
     index.tokenizers().register("words", analyzer());
     let reader = index
         .reader_builder()
-        .reload_policy(ReloadPolicy::Manual)
+        .reload_policy(policy)
         .doc_store_cache_num_blocks(8)
         .try_into()
         .map_err(storage)?;
@@ -155,6 +176,7 @@ pub fn open(path: &Path, create: bool) -> Result<Engine> {
         fields,
         meta: path.join("meta.json"),
         loaded: Mutex::new(None),
+        watched: matches!(policy, ReloadPolicy::OnCommitWithDelay),
     })
 }
 
@@ -223,6 +245,8 @@ pub struct Engine {
     /// The `meta.json` the reader last reloaded, so a search only pays for
     /// `reload()` — which reopens every segment — after a commit.
     loaded: Mutex<Option<MetaStamp>>,
+    /// Tantivy reloads in the background (see [`open_for_serving`]).
+    watched: bool,
 }
 
 impl Engine {
@@ -267,6 +291,9 @@ impl Engine {
     /// Reload the reader if the index has been committed to since the last
     /// reload. A `stat` per search instead of reopening every segment.
     fn refresh(&self) -> Result<()> {
+        if self.watched {
+            return Ok(());
+        }
         let stamp = MetaStamp::read(&self.meta);
         let mut loaded = self
             .loaded
