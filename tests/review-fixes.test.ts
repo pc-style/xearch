@@ -14,7 +14,7 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // single assertion to the concrete signature below is a narrowing
 // TypeScript already allows structurally; convex-test rejects the reference
 // outright at call time if the module/function name does not actually exist.
-const summaryQuery = anyApi.summary.summary as FunctionReference<
+const summaryQuery = anyApi.summary.summarySnapshot as FunctionReference<
   "query",
   "public",
   { now: number },

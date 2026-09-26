@@ -147,6 +147,21 @@ describe("JobRow (src/JobRow.tsx) rendered output", () => {
     permanent.unmount();
   });
 
+  it("offers Retry for a legacy 404 on a known account", () => {
+    const failure = job({
+      kind: "bulk",
+      status: "failed",
+      expectedUserId: "123",
+      error: "x.md could not finish this request (404, not_found).",
+      retryable: false,
+    });
+
+    const { html, unmount } = renderRow({ job: failure, onRetry: () => Promise.resolve() });
+
+    expect(html).toContain(">Retry<");
+    unmount();
+  });
+
   it("still offers Retry for an unclassified stopped job (no ProviderError.retryable recorded)", () => {
     // `retryable` is `undefined` for any job that predates this field, or
     // that stopped for a reason that never went through `ProviderError` —

@@ -82,6 +82,51 @@ function throttleEvent(
 }
 
 describe("jobs.retry respects an active x.md throttle", () => {
+  it("pages failed retry candidates beyond the dashboard feed limit", async () => {
+    const { t, operator } = await setup();
+    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+
+    for (let index = 0; index < 105; index++) await stoppedJob(t, owner);
+
+    const first = await operator.query(api.jobs.failedForRetry, {
+      status: "failed",
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+
+    const second = await operator.query(api.jobs.failedForRetry, {
+      status: "failed",
+      paginationOpts: { numItems: 100, cursor: first.cursor },
+    });
+
+    expect(first.jobIds.length + second.jobIds.length).toBe(105);
+    expect(first.done).toBe(false);
+    expect(second.done).toBe(true);
+  });
+
+  it("allows a legacy 404 only for a known account", async () => {
+    const { t, operator } = await setup();
+    const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
+    const known = await stoppedJob(t, owner);
+    const unknown = await stoppedJob(t, owner);
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(known, {
+        retryable: false,
+        expectedUserId: "123",
+        error: "x.md could not finish this request (404, not_found).",
+      });
+      await ctx.db.patch(unknown, {
+        retryable: false,
+        error: "x.md could not finish this request (404, not_found).",
+      });
+    });
+
+    await expect(operator.mutation(api.jobs.retry, { jobId: unknown })).rejects.toThrow(
+      "Retrying will not change the result",
+    );
+    await expect(operator.mutation(api.jobs.retry, { jobId: known })).resolves.toBeNull();
+  });
+
   // The dashboard screenshot's exact shape: allowance remains, so the far-
   // off window resetAt must be ignored in favor of the much sooner
   // provider-given retryAfterMs.
@@ -110,11 +155,14 @@ describe("jobs.retry respects an active x.md throttle", () => {
     const observedAt = Date.now();
     await throttleEvent(t, jobId, { remaining: 20, observedAt, resetAt: observedAt + 5 * 60_000 });
 
+    const retriedAt = Date.now();
+
     await operator.mutation(api.jobs.retry, { jobId });
 
     const retried = await t.run((ctx) => ctx.db.get(jobId));
 
-    expect(retried?.readyAt).toBe(0);
+    expect(retried?.readyAt).toBeGreaterThanOrEqual(retriedAt);
+    expect(retried?.readyAt).toBeLessThanOrEqual(Date.now());
     expect(retried?.phase).toBe("Retry queued");
   });
 
@@ -155,12 +203,15 @@ describe("jobs.retry respects an active x.md throttle", () => {
     const owner = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
     const jobId = await stoppedJob(t, owner);
 
+    const retriedAt = Date.now();
+
     await expect(operator.mutation(api.jobs.retry, { jobId })).resolves.toBeNull();
 
     const retried = await t.run((ctx) => ctx.db.get(jobId));
 
     expect(retried?.status).toBe("queued");
-    expect(retried?.readyAt).toBe(0);
+    expect(retried?.readyAt).toBeGreaterThanOrEqual(retriedAt);
+    expect(retried?.readyAt).toBeLessThanOrEqual(Date.now());
     expect(retried?.phase).toBe("Retry queued");
   });
 
@@ -171,11 +222,14 @@ describe("jobs.retry respects an active x.md throttle", () => {
     const observedAt = Date.now() - 60 * 60_000;
     await throttleEvent(t, jobId, { remaining: 0, observedAt, resetAt: observedAt + 60_000 });
 
+    const retriedAt = Date.now();
+
     await operator.mutation(api.jobs.retry, { jobId });
 
     const retried = await t.run((ctx) => ctx.db.get(jobId));
 
-    expect(retried?.readyAt).toBe(0);
+    expect(retried?.readyAt).toBeGreaterThanOrEqual(retriedAt);
+    expect(retried?.readyAt).toBeLessThanOrEqual(Date.now());
     expect(retried?.phase).toBe("Retry queued");
   });
 

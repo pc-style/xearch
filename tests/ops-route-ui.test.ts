@@ -115,10 +115,10 @@ describe("/ops routes", () => {
     expect(address()).toBe("/ops");
   });
 
-  it("Public site opens search at /?search=1, and Back returns to the dashboard", async () => {
+  it("Search posts opens search at /?search=1, and Back returns to the dashboard", async () => {
     const app = await mountAppAt("/ops/jobs");
 
-    (await rendered(app, "main.ops .who button", "Public site")).click();
+    (await rendered(app, "main.ops .who button", "Search posts")).click();
     await rendered(app, "#query");
     expect(address()).toBe("/?search=1");
     expect(app.container.querySelector("main.ops")).toBeNull();

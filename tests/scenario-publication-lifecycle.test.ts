@@ -103,7 +103,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     console.log("STEP1 library.rows:", JSON.stringify(rowsBefore));
     expect(rowsBefore).toHaveLength(1);
     expect(rowsBefore[0].publicationState).toBe("waiting_for_indexing");
-    const opsBefore = await session.query(api.ops.accounts, {});
+    const opsBefore = await session.query(api.ops.accountsSnapshot, {});
 
     expect(opsBefore.rows[0].publication).toBeNull();
     const uiBefore = await renderedRow(opsBefore.rows);
@@ -141,7 +141,7 @@ describe("scenario: downloaded -> waiting_for_indexing -> searchable, idempotenc
     console.log("STEP2 library.rows:", JSON.stringify(rowsAfter));
     expect(rowsAfter[0].publicationState).toBe("searchable");
     expect(rowsAfter[0].searchablePostCount).toEqual({ kind: "known", unit: "posts", value: 480 });
-    const opsAfter = await session.query(api.ops.accounts, {});
+    const opsAfter = await session.query(api.ops.accountsSnapshot, {});
 
     expect(opsAfter.rows[0].publication).toMatchObject({
       state: "searchable",

@@ -128,7 +128,7 @@ export async function collectXmd(
   client: XmdClient,
   request: CollectionRequest,
   sink: (capture: Capture) => Promise<Receipt>,
-  onReceipt: (receipt: Receipt, count: number) => Promise<void>,
+  onReceipt: (receipt: Receipt, count: number, posts: number) => Promise<void>,
   now = Date.now,
   onIdentity?: (id: string) => Promise<void>,
   onStage?: (phase: string) => Promise<void>,
@@ -170,7 +170,15 @@ export async function collectXmd(
       terminal,
     });
 
-    await onReceipt(receipt, pending.length);
+    const posts = pending.reduce(
+      (count, record) =>
+        count +
+        (Array.isArray(record.payload.posts) ? record.payload.posts.length : 0) +
+        (record.payload.post ? 1 : 0),
+      0,
+    );
+
+    await onReceipt(receipt, pending.length, posts);
     pending = [];
     bytes = 0;
     sequence++;
@@ -217,7 +225,20 @@ export async function collectXmd(
     if (request.kind === "bulk") {
       await onStage?.("Checking account identity");
       // Pin numeric identity before history collection, just like the old collector.
-      const response = await client.read("profile", request.input);
+      let response: RawObject;
+
+      try {
+        response = await client.read("profile", request.input);
+      } catch (error) {
+        if (error instanceof ProviderError && /\b404\b/.test(error.message) && expectedUserId) {
+          error.retryable = true;
+          error.message =
+            "x.md could not refresh this known account (404). The account may be available again; retry the import.";
+        }
+
+        throw error;
+      }
+
       descriptor.resource = "profile";
       descriptor.format = "json";
       await add(response);

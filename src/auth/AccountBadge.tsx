@@ -1,5 +1,7 @@
 import { Match, Switch } from "solid-js";
-import { useConvex, useQuery } from "../data/convex";
+import { useConvex } from "../data/convex";
+import { useSnapshot } from "../data/snapshot";
+import { publicRefresh } from "../data/publicRefresh";
 import { api } from "../../convex/_generated/api";
 
 export type AccountBadgeProps = {
@@ -16,7 +18,9 @@ export type AccountBadgeProps = {
  * Wired into the app in src/operator/Connections.tsx.
  */
 export function AccountBadge(props: AccountBadgeProps) {
-  const me = useQuery(api.auth.me, () => ({}));
+  // Read on opening and on the header's Refresh, not kept live: it sits in
+  // the Connections panel, whose reads all follow src/data/publicRefresh.ts.
+  const me = useSnapshot(api.auth.me, () => ({}), publicRefresh.version).data;
   const { actions } = useConvex();
 
   return (
