@@ -40,6 +40,8 @@ jobs:
         with:
           path: head
           fetch-depth: 2
+          # Nothing here pushes; comments go through `gh` with its own token.
+          persist-credentials: false
 
       - name: Check out the base branch
         run: |
