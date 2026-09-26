@@ -93,7 +93,13 @@ export function PostRow(props: {
             )}
           </Show>
         </div>
-        <Show when={props.post.replyTo && props.post.replyTo !== props.post.author}>
+        {/* Handles compare case-insensitively, as `Post::replies_to_other`. */}
+        <Show
+          when={
+            props.post.replyTo &&
+            props.post.replyTo.toLowerCase() !== props.post.author.toLowerCase()
+          }
+        >
           <div class="r-reply">Replying to @{props.post.replyTo}</div>
         </Show>
         <Show
