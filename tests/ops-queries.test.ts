@@ -46,8 +46,10 @@ describe("ops.accounts", () => {
     const userId = await t.run((ctx) => ctx.db.insert("users", { isAnonymous: true }));
     const guest = t.withIdentity({ subject: `${userId}|session` });
 
-    await expect(guest.query(api.ops.accounts, {})).rejects.toThrow("Sign in as an operator");
-    await expect(guest.query(api.ops.activity, { now: Date.now() })).rejects.toThrow(
+    await expect(guest.query(api.ops.accountsSnapshot, {})).rejects.toThrow(
+      "Sign in as an operator",
+    );
+    await expect(guest.query(api.ops.activitySnapshot, { now: Date.now() })).rejects.toThrow(
       "Sign in as an operator",
     );
   });
@@ -132,7 +134,7 @@ describe("ops.accounts", () => {
       ),
     );
 
-    const { rows, truncated } = await a.query(api.ops.accounts, {});
+    const { rows, truncated } = await a.query(api.ops.accountsSnapshot, {});
 
     expect(truncated).toBe(false);
     expect(rows.map((r) => r.handle).sort()).toEqual(["bob", "quiet"]);
@@ -160,7 +162,9 @@ describe("ops.accounts", () => {
     // Once that window finishes, its `since` has been walked.
     await t.run((ctx) => ctx.db.patch(windowJob, { status: "complete" }));
 
-    const after = (await a.query(api.ops.accounts, {})).rows.find((r) => r.handle === "bob")!;
+    const after = (await a.query(api.ops.accountsSnapshot, {})).rows.find(
+      (r) => r.handle === "bob",
+    )!;
 
     expect(after.oldestCollected).toBe("2018-01-01");
   });
@@ -223,7 +227,7 @@ describe("ops.activity", () => {
     });
 
     const now = Date.now() + 1000;
-    const result = await a.query(api.ops.activity, { now });
+    const result = await a.query(api.ops.activitySnapshot, { now });
 
     expect(result.downloads.hours).toHaveLength(24);
     expect(result.downloads.hours.at(-1)).toMatchObject({ posts: 50, other: 1 });
@@ -243,7 +247,7 @@ describe("ops.activity", () => {
     expect(result.throttles).toEqual({ xmd: 1, truncated: false });
 
     // A day later all of it has aged out.
-    const later = await a.query(api.ops.activity, { now: now + 25 * HOUR });
+    const later = await a.query(api.ops.activitySnapshot, { now: now + 25 * HOUR });
 
     expect(later.downloads.hours.every((h) => h.posts === 0 && h.other === 0)).toBe(true);
     expect(later.jobs.byKind).toEqual([]);

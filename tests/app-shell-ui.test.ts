@@ -34,12 +34,19 @@ async function home(): Promise<string> {
   mounted = mount(App, {}, fakeConvex({ isAuthenticated: false }));
   await settle();
 
-  return stripMarkers(mounted.html())
-    .replace(/<button type="button" class="nav" aria-label="Import dashboard">[^]*?<\/button>/, "")
-    .replace(
-      /<button type="button"><svg[^>]*width="13"[^>]*>[^]*?<\/svg>Connections<\/button>/,
-      "",
-    );
+  return (
+    stripMarkers(mounted.html())
+      .replace(
+        /<button type="button" class="nav" aria-label="Import dashboard">[^]*?<\/button>/,
+        "",
+      )
+      // The shell paints before the first status read, so it has no time yet.
+      .replace(/ · last read [^"]*"/, '"')
+      .replace(
+        /<button type="button"><svg[^>]*width="13"[^>]*>[^]*?<\/svg>Connections<\/button>/,
+        "",
+      )
+  );
 }
 
 /** `html` as a DOM tree printed without formatting whitespace — index.html

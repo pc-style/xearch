@@ -166,6 +166,18 @@ describe("exactClockTime", () => {
 });
 
 describe("isPermanentFailure", () => {
+  it("allows legacy known-account 404s but keeps unknown-account 404s permanent", () => {
+    const failure = {
+      kind: "bulk" as const,
+      status: "failed" as const,
+      retryable: false,
+      error: "x.md could not finish this request (404, not_found).",
+    };
+
+    expect(isPermanentFailure(job(failure))).toBe(true);
+    expect(isPermanentFailure(job({ ...failure, expectedUserId: "123" }))).toBe(false);
+  });
+
   it("is true only for a stopped job explicitly marked non-retryable", () => {
     expect(isPermanentFailure(job({ status: "failed", retryable: false }))).toBe(true);
     expect(isPermanentFailure(job({ status: "partial", retryable: false }))).toBe(true);

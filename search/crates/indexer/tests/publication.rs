@@ -238,6 +238,39 @@ fn write_capture_file(
     )
 }
 
+#[test]
+fn an_empty_search_capture_publishes_using_its_request_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let (url, rx) = spawn_responder(
+        "HTTP/1.1 200 OK",
+        r#"{"outcome":"applied","committedGeneration":1}"#,
+    )
+    .unwrap();
+    let config = config_in(dir.path(), Some(publishing_to(url).unwrap())).unwrap();
+    let sha = "a".repeat(64);
+    let batch = serde_json::json!({
+        "version": 1,
+        "runId": "empty-window",
+        "source": "x-md",
+        "terminal": "complete",
+        "request": {"origin": "https://mdfromx.com", "resource": "live", "input": "from:Alice since:2026-01-01 until:2026-01-02"},
+        "records": [],
+    });
+    std::fs::write(
+        config.drop_dir.join(format!("{sha}.json")),
+        serde_json::to_vec(&batch).unwrap(),
+    )
+    .unwrap();
+
+    let registry = search_indexer::run_once(&config).unwrap();
+    let body = next_body(&rx).expect("publication request");
+    assert_eq!(body["handle"], "alice");
+    assert_eq!(body["runId"], "empty-window");
+    assert_eq!(body["captureIds"], serde_json::json!([sha]));
+    assert_eq!(body["reportedState"], "searchable");
+    assert_eq!(registry.publications.get("alice").unwrap().generation, 1);
+}
+
 /// The next request body the responder captured, decoded as JSON.
 fn next_body(rx: &Receiver<CapturedRequest>) -> Option<serde_json::Value> {
     let request = rx.recv_timeout(std::time::Duration::from_secs(5)).ok()?;
