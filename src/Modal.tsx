@@ -1,4 +1,4 @@
-import { createUniqueId, onSettled, Show } from "solid-js";
+import { createUniqueId, onCleanup, onSettled, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Icon } from "./icons";
 
@@ -14,6 +14,12 @@ export function Modal(props: {
 
   onSettled(() => {
     if (!dialog.open) dialog.showModal();
+  });
+
+  // Removing an open dialog leaves focus on the page body in Chrome. Close it
+  // while its opener still exists so the native dialog restores that focus.
+  onCleanup(() => {
+    if (dialog.open) dialog.close();
   });
 
   return (

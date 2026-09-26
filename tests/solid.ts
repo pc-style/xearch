@@ -3,7 +3,7 @@
 // fake Convex app whose queries answer from fixtures keyed by function name.
 import { createComponent, flush, type Component } from "solid-js";
 import { render } from "@solidjs/web";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference, type FunctionReturnType } from "convex/server";
 import type { ConnectionState, QueryToken } from "convex/browser";
 import type { Value } from "convex/values";
 import { ConvexContext, type ConvexApp, type SyncClient } from "../src/data/convex";
@@ -29,13 +29,28 @@ export interface FakeConvexOptions {
   readonly connection?: ConnectionState;
   readonly mutation?: (name: string, args: Record<string, Value>) => Promise<Value>;
   readonly action?: (name: string, args: Record<string, Value>) => Promise<Value>;
+  /** Answer a finite read (`ConvexApp.query`). Defaults to `query`/`results`
+   * above, so one fixture serves both kinds of read; an `undefined` answer
+   * leaves the reader loading, as a missing fixture always has. */
+  readonly fetch?: (name: string, args: Record<string, Value>) => Promise<Value | undefined>;
 }
 
 export function fakeConvex(options: FakeConvexOptions = {}): ConvexApp & {
   readonly subscribed: string[];
+  /** Every finite read, with its arguments, in order. */
+  readonly fetched: { name: string; args: Record<string, Value> }[];
+  /** Tell live subscribers to `name` that its answer changed, as the server
+   * does when a mutation writes what a query reads. */
+  readonly changed: (name: string) => void;
 } {
   const results = new Map(options.results?.map(([ref, value]) => [getFunctionName(ref), value]));
   const subscribed: string[] = [];
+  const fetched: { name: string; args: Record<string, Value> }[] = [];
+  const listeners = new Map<string, Set<() => void>>();
+
+  const answer = (name: string, args: Record<string, Value>) =>
+    options.query ? options.query(name, args) : results.get(name);
+
   const connection = options.connection ?? CONNECTED;
 
   // Only the `SyncClient` members src/data/convex.ts calls, answered from the
@@ -48,8 +63,7 @@ export function fakeConvex(options: FakeConvexOptions = {}): ConvexApp & {
       // stable per-name key, not collision-proof tokens.
       return { queryToken: name as QueryToken, unsubscribe: () => {} };
     },
-    localQueryResult: (name, args) =>
-      options.query ? options.query(name, args ?? {}) : results.get(name),
+    localQueryResult: (name, args) => answer(name, args ?? {}),
     addOnTransitionHandler: () => () => true,
     mutation: (name, args) => (options.mutation ?? (() => Promise.resolve(null)))(name, args ?? {}),
     action: (name, args) => (options.action ?? (() => Promise.resolve(null)))(name, args ?? {}),
@@ -61,8 +75,33 @@ export function fakeConvex(options: FakeConvexOptions = {}): ConvexApp & {
 
   return {
     subscribed,
+    fetched,
+    changed: (name) => {
+      for (const fn of listeners.get(name) ?? []) fn();
+    },
     sync,
-    listen: () => () => {},
+    listen: (token, fn) => {
+      const set = listeners.get(token) ?? new Set();
+      set.add(fn);
+      listeners.set(token, set);
+
+      return () => set.delete(fn);
+    },
+    query: (ref, args) => {
+      const name = getFunctionName(ref);
+      // SAFETY: a query's declared args are a plain object of Convex values
+      // (src/data/convex.ts `wire`); the generic type just cannot show it.
+      const plain = args as Record<string, Value>;
+      fetched.push({ name, args: plain });
+
+      const promise = options.fetch
+        ? options.fetch(name, plain)
+        : Promise.resolve(answer(name, plain));
+
+      // SAFETY: as in src/data/convex.ts — the fixture stands in for a result
+      // the server would have validated against the query's own `returns`.
+      return promise as Promise<FunctionReturnType<typeof ref>>;
+    },
     connection: () => connection,
     isLoading: () => false,
     isAuthenticated: () => options.isAuthenticated ?? true,

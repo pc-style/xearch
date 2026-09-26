@@ -135,6 +135,27 @@ describe("x.md raw acquisition handoff", () => {
     expect(r.captures.at(-1)?.records[0].payload).toEqual(page);
   });
 
+  it("keeps an empty history window capture and reports zero posts", async () => {
+    const r = receiver();
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ posts: [] }));
+
+    const result = await collectXmd(
+      new XmdClient("test-key", fetcher),
+      { ...request, kind: "live", input: "from:theo since:2026-03-01 until:2026-03-31" },
+      r.sink,
+      r.ack,
+    );
+
+    expect(result.postsReceived).toBe(0);
+    expect(r.captures).toHaveLength(1);
+    expect(r.captures[0].records[0].payload).toEqual({ posts: [] });
+    expect(r.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: expect.any(String) }),
+      1,
+      0,
+    );
+  });
+
   it("rejects a search page without a posts array instead of counting it as empty", async () => {
     const fetcher = vi.fn<typeof fetch>(async (input) =>
       requestUrl(input).includes("/search")

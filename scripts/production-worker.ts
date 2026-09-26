@@ -142,12 +142,13 @@ for (;;) {
             expectedUserId: job.expectedUserId,
           },
           (capture) => deliverCapture("http://127.0.0.1:4319/captures", captureToken, capture),
-          async (receipt, count) => {
+          async (receipt, count, posts) => {
             await report({
               event: "receipt",
               captureId: receipt.captureId,
               receiptId: receipt.receiptId,
               count,
+              posts,
             });
           },
           Date.now,

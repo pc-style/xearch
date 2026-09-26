@@ -1,11 +1,12 @@
-import { createMemo, createSignal, Errored, For, Match, onSettled, Show, Switch } from "solid-js";
+import { createEffect, createSignal, Errored, For, Match, onSettled, Show, Switch } from "solid-js";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
 import { useConvex, useMutation, useQuery } from "../data/convex";
 import { describeError } from "../errors";
 import { Icon } from "../icons";
-import { useDashboardClock, useLiveNow } from "../library/clock";
-import { useStableQuery } from "../library/stableQuery";
+import { useLiveNow } from "../library/clock";
+import { cooldownLabel } from "../library/cooldown";
 import { OPS_TABS, opsPath, pushHref, type OpsTab } from "../locationStore";
 import type { DashboardProps } from "../operatorSurface";
 import { operatorArgs } from "../operatorToken";
@@ -18,16 +19,10 @@ import {
   PerformancePage,
   ProviderPage,
 } from "./pages";
+import { createDashboardStore, TAB_LABEL, type QueryKey } from "./refresh";
 import "./ops.css";
 
-export const TAB_LABEL: Record<OpsTab, string> = {
-  overview: "Overview",
-  accounts: "Accounts",
-  jobs: "Jobs",
-  imports: "Other imports",
-  performance: "Performance",
-  provider: "Provider",
-};
+export { TAB_LABEL };
 
 const TAB_DESCRIPTION: Record<OpsTab, string> = {
   overview: "What needs attention, and where posts are in the pipeline.",
@@ -52,72 +47,34 @@ export type Confirm = {
 /** Everything a dashboard page reads or does, built once by the shell. */
 export type OpsContext = ReturnType<typeof useOps>;
 
+/** What each dashboard read answers with (src/ops/refresh.ts `QueryKey`). */
+export type DashboardData = {
+  accounts: FunctionReturnType<typeof api.ops.accountsSnapshot>;
+  activity: FunctionReturnType<typeof api.ops.activitySnapshot>;
+  summary: FunctionReturnType<typeof api.summary.summarySnapshot>;
+  health: FunctionReturnType<typeof api.summary.healthSnapshot>;
+  limit: FunctionReturnType<typeof api.limits.current>;
+  config: FunctionReturnType<typeof api.integrations.operator>;
+  timeline: FunctionReturnType<typeof api.queue.timelineSnapshot>;
+  jobs: FunctionReturnType<typeof api.jobs.list>;
+};
+
+/** One finite read per dashboard query, keyed like `DashboardData`. */
+type Reads = { [P in QueryKey]: () => Promise<DashboardData[P]> };
+
+const AFTER_START = " · refresh Jobs to see it";
+
 function useOps(props: DashboardProps) {
-  const { isAuthenticated } = useConvex();
-  const clockNow = useDashboardClock();
-  const liveNow = useLiveNow();
-  // "Reload" nudges the query clock past its current value so every
-  // clock-bound query resubscribes; the 30-second tick carries on.
-  const [reloadedAt, setReloadedAt] = createSignal(0);
-  // Queries take the 30-second clock, so they resubscribe twice a minute,
-  // not every 5 seconds. What the page derives from them (ages, stalls,
-  // whether a rate limit has lifted) reads the exact clock: the bucketed
-  // one runs up to 30 seconds ahead.
-  const queryNow = () => Math.max(clockNow(), reloadedAt());
-  const now = () => liveNow();
-
-  // The real time the query clock last moved, for "Updated".
-  const updatedAt = createMemo(() => {
-    queryNow();
-
-    return Date.now();
-  });
-
-  const signedIn = () => isAuthenticated();
-  const operator = () => (signedIn() ? operatorArgs() : "skip");
-
-  const me = useQuery(api.auth.me, () => (signedIn() ? {} : "skip"), { soft: true });
-
-  const accounts = useStableQuery(api.ops.accounts, operator);
-
-  const activity = useStableQuery(api.ops.activity, () =>
-    signedIn() ? { now: queryNow(), ...operatorArgs() } : "skip",
-  );
-
-  const summary = useStableQuery(api.summary.summary, () =>
-    signedIn() ? { now: queryNow() } : "skip",
-  );
-
-  const health = useStableQuery(api.summary.health, () =>
-    signedIn() ? { now: queryNow() } : "skip",
-  );
-
-  const limit = useStableQuery(api.limits.current, () =>
-    signedIn() ? { provider: "xmd" as const } : "skip",
-  );
-
-  // The worker's 45-second liveness window needs the unbucketed clock
-  // (src/library/clock.ts `useLiveNow`).
-  const config = useStableQuery(api.integrations.operator, () =>
-    signedIn() ? { now: liveNow() } : "skip",
-  );
-
-  const timeline = useStableQuery(api.queue.timeline, () =>
-    signedIn() ? { now: queryNow(), ...operatorArgs() } : "skip",
-  );
-
-  const jobFeed = useStableQuery(api.jobs.list, () =>
-    signedIn() ? { limit: 100, activeFirst: true } : "skip",
-  );
-
-  const start = useMutation(api.jobs.start),
-    cancel = useMutation(api.jobs.cancel),
-    retry = useMutation(api.jobs.retry),
-    dismiss = useMutation(api.jobs.dismiss);
+  const convex = useConvex();
+  const { isAuthenticated } = convex;
+  // The exact clock, for ages and stalls on screen. It ticks locally and
+  // never reaches the server: no read here happens because time passed.
+  const now = useLiveNow();
 
   const [confirming, setConfirming] = createSignal<Confirm | null>(null);
   const [toast, setToast] = createSignal("");
   const [importKind, setImportKind] = createSignal<ImportKind>("post");
+  const [retryAllBusy, setRetryAllBusy] = createSignal(false);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   const say = (message: string) => {
@@ -126,12 +83,50 @@ function useOps(props: DashboardProps) {
     toastTimer = setTimeout(() => setToast(""), 5000);
   };
 
+  // Every dashboard read is one finite `query` (src/data/convex.ts), asked
+  // with the instant it began as `now`; see src/ops/refresh.ts for when.
+  const read = <K extends QueryKey>(key: K, at: number): Promise<DashboardData[K]> => {
+    const reads: Reads = {
+      accounts: () => convex.query(api.ops.accountsSnapshot, operatorArgs()),
+      activity: () => convex.query(api.ops.activitySnapshot, { now: at, ...operatorArgs() }),
+      summary: () => convex.query(api.summary.summarySnapshot, { now: at }),
+      health: () => convex.query(api.summary.healthSnapshot, { now: at }),
+      limit: () => convex.query(api.limits.current, { provider: "xmd" }),
+      config: () => convex.query(api.integrations.operator, { now: at }),
+      timeline: () => convex.query(api.queue.timelineSnapshot, { now: at, ...operatorArgs() }),
+      jobs: () => convex.query(api.jobs.list, { limit: 100, activeFirst: true }),
+    };
+
+    return reads[key]();
+  };
+
+  const store = createDashboardStore<DashboardData>({ read, say });
+
+  // Arriving on a tab reads what it lacks, once a session exists. A session
+  // going away forgets everything read under it.
+  createEffect(
+    () => ({ tab: props.tab, signedIn: isAuthenticated() }),
+    ({ tab, signedIn }) => {
+      if (signedIn) store.open(tab, Date.now());
+      else store.reset();
+    },
+  );
+
+  // Identity is the one live read left: it is the session itself, which the
+  // hosting app (src/App.tsx) already subscribes to, so this adds nothing.
+  const me = useQuery(api.auth.me, () => (isAuthenticated() ? {} : "skip"), { soft: true });
+
+  const start = useMutation(api.jobs.start),
+    cancel = useMutation(api.jobs.cancel),
+    retry = useMutation(api.jobs.retry),
+    dismiss = useMutation(api.jobs.dismiss);
+
   /** Run one operator action and say how it went. */
-  const perform = async (work: () => Promise<void>, success: string): Promise<boolean> => {
+  const perform = async (work: () => Promise<void>, success: () => string): Promise<boolean> => {
     try {
       await props.ensureSession();
       await work();
-      say(success);
+      say(success());
 
       return true;
     } catch (error) {
@@ -139,6 +134,25 @@ function useOps(props: DashboardProps) {
 
       return false;
     }
+  };
+
+  // After the server confirmed an action, the row on screen changes to
+  // what convex/jobs.ts wrote — no re-read. Totals wait for Refresh.
+  const patchJob = (jobId: Id<"jobs">, change: (job: Job) => Job | null) =>
+    store.update("jobs", (feed) => ({
+      ...feed,
+      jobs: feed.jobs.flatMap((job) => {
+        if (job._id !== jobId) return [job];
+        const next = change(job);
+
+        return next ? [next] : [];
+      }),
+    }));
+
+  const dismissOne = async (jobId: Id<"jobs">) => {
+    await dismiss({ jobId, ...token() });
+    // `jobs.list` leaves dismissed runs out, so the row goes.
+    patchJob(jobId, () => null);
   };
 
   const go = (tab: OpsTab) => {
@@ -150,22 +164,27 @@ function useOps(props: DashboardProps) {
 
   return {
     now,
-    queryNow,
-    updatedAt,
     tab: () => props.tab,
     go,
     me,
-    accounts: () => accounts()?.rows,
-    accountsTruncated: () => accounts()?.truncated ?? false,
-    activity,
-    summary,
-    health,
-    limit,
-    config,
-    worker: () => workerState(config(), now()),
-    timeline,
-    jobs: () => jobFeed()?.jobs,
-    jobsTruncated: () => jobFeed()?.truncated ?? false,
+    accounts: () => store.data("accounts")?.rows,
+    accountsTruncated: () => store.data("accounts")?.truncated ?? false,
+    activity: () => store.data("activity"),
+    summary: () => store.data("summary"),
+    health: () => store.data("health"),
+    limit: () => store.data("limit"),
+    config: () => store.data("config"),
+    worker: () => workerState(store.data("config"), now()),
+    timeline: () => store.data("timeline"),
+    jobs: () => store.data("jobs")?.jobs,
+    jobsTruncated: () => store.data("jobs")?.truncated ?? false,
+    updatedAt: () => store.updatedAt(props.tab),
+    loadError: () => store.error(props.tab),
+    busy: () => store.busy(props.tab),
+    tabRemaining: (at: number) => store.tabRemaining(props.tab, at),
+    allRemaining: (at: number) => store.allRemaining(at),
+    refreshTab: () => store.refreshTab(props.tab, Date.now()),
+    refreshAll: () => store.refreshAll(props.tab, Date.now()),
     confirming,
     confirm: (c: Confirm) => setConfirming(c),
     closeConfirm: () => setConfirming(null),
@@ -175,33 +194,131 @@ function useOps(props: DashboardProps) {
     importKind,
     setImportKind,
     openSearch: props.openSearch,
-    reload: () => {
-      setReloadedAt(Math.max(Date.now(), queryNow() + 1));
-      say("Reloaded");
-    },
+    retryAllBusy,
     retry: (job: Job, label: string) =>
-      perform(async () => void (await retry({ jobId: job._id, ...token() })), label),
+      perform(
+        async () => {
+          await retry({ jobId: job._id, ...token() });
+          patchJob(job._id, (j) => ({
+            ...j,
+            status: "queued",
+            error: undefined,
+            retryable: undefined,
+            phase: "Retry queued",
+            updatedAt: Date.now(),
+          }));
+        },
+        () => label,
+      ),
+    retryAll: () => {
+      if (retryAllBusy()) return Promise.resolve(false);
+
+      setRetryAllBusy(true);
+      let queued = 0;
+
+      return perform(
+        async () => {
+          let failed = 0;
+          let firstError = "";
+          const ids: Id<"jobs">[] = [];
+
+          for (const status of ["failed", "partial"] as const) {
+            let cursor: string | null = null;
+            let done = false;
+
+            while (!done) {
+              const page: FunctionReturnType<typeof api.jobs.failedForRetry> = await convex.query(
+                api.jobs.failedForRetry,
+                {
+                  status,
+                  paginationOpts: { numItems: 100, cursor },
+                  ...token(),
+                },
+              );
+
+              ids.push(...page.jobIds);
+              cursor = page.cursor;
+              done = page.done;
+            }
+          }
+
+          for (const jobId of ids) {
+            try {
+              await retry({ jobId, ...token() });
+              queued++;
+            } catch (error) {
+              failed++;
+              firstError ||= describeError(error);
+              continue;
+            }
+
+            patchJob(jobId, (j) => ({
+              ...j,
+              status: "queued",
+              error: undefined,
+              retryable: undefined,
+              phase: "Retry queued",
+              updatedAt: Date.now(),
+            }));
+          }
+
+          if (failed > 0)
+            throw new Error(`${queued} retries queued; ${failed} failed: ${firstError}`);
+        },
+        () => (queued ? `Queued ${queued} failed jobs for retry` : "No failed jobs to retry"),
+      ).finally(() => setRetryAllBusy(false));
+    },
     cancel: (jobId: Id<"jobs">, label: string) =>
-      perform(async () => void (await cancel({ jobId, ...token() })), label),
+      perform(
+        async () => {
+          await cancel({ jobId, ...token() });
+          patchJob(jobId, (j) =>
+            j.status === "queued" || j.status === "running"
+              ? {
+                  ...j,
+                  status: "cancelled",
+                  phase:
+                    "Stopped; an in-flight request may still finish. Retained captures are not deleted.",
+                  updatedAt: Date.now(),
+                }
+              : j,
+          );
+        },
+        () => label,
+      ),
     dismiss: (jobId: Id<"jobs">, label: string) =>
-      perform(async () => void (await dismiss({ jobId, ...token() })), label),
+      perform(
+        () => dismissOne(jobId),
+        () => label,
+      ),
+    // One at a time, each row leaving as its own dismissal is confirmed: a
+    // failure part-way leaves the rows already dismissed gone and the rest
+    // in place, which is exactly the server's state.
     dismissAll: (jobIds: Id<"jobs">[], label: string) =>
-      perform(async () => {
-        for (const jobId of jobIds) await dismiss({ jobId, ...token() });
-      }, label),
+      perform(
+        async () => {
+          for (const jobId of jobIds) await dismissOne(jobId);
+        },
+        () => label,
+      ),
     start: (
       args: { kind: ImportKind; input: string; since?: string; refresh?: boolean },
       label: string,
-    ) => perform(async () => void (await start({ ...args, ...token() })), label),
+    ) =>
+      perform(
+        async () => void (await start({ ...args, ...token() })),
+        () => label + AFTER_START,
+      ),
     refresh: (handles: string[]) =>
       perform(
         async () => {
           for (const input of handles)
             await start({ kind: "bulk", input, refresh: true, ...token() });
         },
-        handles.length === 1
-          ? `Queued refresh of @${handles[0]}`
-          : `Queued ${handles.length} refreshes`,
+        () =>
+          (handles.length === 1
+            ? `Queued refresh of @${handles[0]}`
+            : `Queued ${handles.length} refreshes`) + AFTER_START,
       ),
     ensureSession: props.ensureSession,
   };
@@ -227,7 +344,7 @@ function Header(props: { ops: OpsContext }) {
         </span>
         <span>{email() ? `signed in as ${email()}` : "signed in with the operator key"}</span>
         <button type="button" class="b s" onClick={() => props.ops.openSearch()}>
-          Public site ↗
+          Search posts
         </button>
       </div>
     </header>
@@ -235,6 +352,27 @@ function Header(props: { ops: OpsContext }) {
 }
 
 function Nav(props: { ops: OpsContext }) {
+  const [menu, setMenu] = createSignal(false);
+  // A one-second tick for the cooldown countdown only; nothing reads on it.
+  const [tick, setTick] = createSignal(Date.now());
+
+  onSettled(() => {
+    const id = setInterval(() => setTick(Date.now()), 1000);
+
+    return () => clearInterval(id);
+  });
+
+  const tabWait = () => props.ops.tabRemaining(tick());
+  const allWait = () => props.ops.allRemaining(tick());
+
+  const updated = () => {
+    const at = props.ops.updatedAt();
+
+    if (props.ops.busy()) return at === undefined ? "Loading…" : `Updated ${clock(at)} · reading…`;
+
+    return at === undefined ? "Not loaded yet" : `Updated ${clock(at)}`;
+  };
+
   return (
     <nav class="opsnav" aria-label="Dashboard sections">
       <For each={OPS_TABS}>
@@ -254,10 +392,66 @@ function Nav(props: { ops: OpsContext }) {
         )}
       </For>
       <span class="sp" />
-      <span class="now">Updated {clock(props.ops.updatedAt())} · auto-refresh 30 s</span>
-      <button type="button" class="b s" aria-label="Reload data" onClick={() => props.ops.reload()}>
-        ↻ Reload
-      </button>
+      <span class="now">{updated()}</span>
+      <div
+        class="rf"
+        onFocusOut={(e) => {
+          // SAFETY: a focus event's `relatedTarget` is the element gaining
+          // focus, or null when focus left the document.
+          const next = e.relatedTarget as Node | null;
+
+          if (!e.currentTarget.contains(next)) setMenu(false);
+        }}
+      >
+        <button
+          type="button"
+          class="b s"
+          aria-label={`Refresh ${TAB_LABEL[props.ops.tab()]}`}
+          aria-disabled={tabWait() > 0 ? "true" : undefined}
+          title={
+            tabWait() > 0
+              ? `Refresh again in ${cooldownLabel(tabWait())}`
+              : `Re-read what the ${TAB_LABEL[props.ops.tab()]} tab shows`
+          }
+          onClick={() => {
+            setMenu(false);
+            props.ops.refreshTab();
+          }}
+        >
+          <Icon name="refresh-cw" size={15} />
+          <span class="lbl">Refresh</span>
+        </button>
+        <button
+          type="button"
+          class="b s dd"
+          aria-label="More refresh options"
+          aria-haspopup="menu"
+          aria-expanded={menu() ? "true" : "false"}
+          onClick={() => setMenu(!menu())}
+        >
+          <Icon name="chevron-down" size={14} />
+        </button>
+        <Show when={menu()}>
+          <div class="menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              aria-disabled={allWait() > 0 ? "true" : undefined}
+              onClick={() => {
+                setMenu(false);
+                props.ops.refreshAll();
+              }}
+            >
+              <b>Refresh all</b>
+              <small>
+                {allWait() > 0
+                  ? `Available in ${cooldownLabel(allWait())}`
+                  : "Every tab, once every five minutes"}
+              </small>
+            </button>
+          </div>
+        </Show>
+      </div>
     </nav>
   );
 }
@@ -326,6 +520,14 @@ export default function Ops(props: DashboardProps) {
       <Nav ops={ops} />
       <Show when={props.tab !== "overview"}>
         <p class="pgd">{TAB_DESCRIPTION[props.tab]}</p>
+      </Show>
+      <Show when={ops.loadError()}>
+        {(message) => (
+          <div class="ops-error" role="alert">
+            <b>This page couldn't load.</b>
+            <span>{message()}</span>
+          </div>
+        )}
       </Show>
       <Errored
         fallback={(error) => (

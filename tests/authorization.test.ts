@@ -211,6 +211,21 @@ describe("the operator authorization boundary", () => {
     );
   });
 
+  it("restricts failed-job retry candidates to operators", async () => {
+    const { t, operator, guest, outsider } = await setup();
+    const jobId = await operator.mutation(api.jobs.start, { kind: "bulk", input: "theo" });
+    await t.run((ctx) => ctx.db.patch(jobId, { status: "failed", retryable: true }));
+    const args = { status: "failed" as const, paginationOpts: { numItems: 100, cursor: null } };
+
+    await expect(guest.query(api.jobs.failedForRetry, args)).rejects.toThrow(
+      "Sign in as an operator to import.",
+    );
+    await expect(outsider.query(api.jobs.failedForRetry, args)).rejects.toThrow(
+      "Sign in as an operator to import.",
+    );
+    expect((await operator.query(api.jobs.failedForRetry, args)).jobIds).toContain(jobId);
+  });
+
   it("allows an operator to cancel/dismiss/restore a job, including one a different operator started", async () => {
     const { t, operator } = await setup();
 

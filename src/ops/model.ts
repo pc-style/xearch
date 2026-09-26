@@ -362,7 +362,14 @@ export function jobTarget(job: Job): JobTarget {
 export const canRetry = (job: Job) =>
   !isHistoryWindow(job) &&
   (job.status === "cancelled" ||
-    ((job.status === "failed" || job.status === "partial") && job.retryable !== false));
+    ((job.status === "failed" || job.status === "partial") &&
+      (job.retryable !== false ||
+        (job.kind === "bulk" &&
+          job.expectedUserId !== undefined &&
+          /\b404\b/.test(job.error ?? "")) ||
+        (job.kind === "bulk" &&
+          job.expectedUserId !== undefined &&
+          /x\.md stopped before completing the import/.test(job.error ?? "")))));
 
 /** "Run again" starts the same request fresh through `jobs.start`. */
 export const canRerun = (job: Job) => job.status === "complete" && !isHistoryWindow(job);
@@ -375,8 +382,7 @@ export const shortId = (id: Id<"jobs">) => id.slice(-6);
 export function queueInfo(timeline: Timeline | undefined) {
   const info = new Map<Id<"jobs">, { position?: number; finish?: number }>();
 
-  if (!timeline) return info;
-  const measured = timeline.estimateInputs.secondsPerPage !== undefined;
+  if (!timeline || timeline.queueTruncated) return info;
   let position = 0;
 
   for (const entry of timeline.entries) {
@@ -385,7 +391,7 @@ export function queueInfo(timeline: Timeline | undefined) {
     if (entry.status !== "queued" && entry.status !== "running") continue;
     info.set(entry.jobId, {
       position: entry.status === "queued" ? position : undefined,
-      finish: measured ? entry.estimate.finish : undefined,
+      finish: entry.estimate.measured ? entry.estimate.finish : undefined,
     });
   }
 

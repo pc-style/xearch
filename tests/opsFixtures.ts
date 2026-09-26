@@ -140,4 +140,5 @@ export const emptyTimeline = (): Timeline => ({
   estimateInputs: { sampleSize: 0 },
   workerBusy: false,
   truncated: false,
+  queueTruncated: false,
 });

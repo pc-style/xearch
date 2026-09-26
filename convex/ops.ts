@@ -130,7 +130,11 @@ function earlier(a: string | undefined, b: string | undefined): string | undefin
   return a < b ? a : b;
 }
 
-export const accounts = query({
+// `accountsSnapshot`/`activitySnapshot` replaced `accounts`/`activity` when
+// the dashboard moved to explicit, finite reads (src/ops/refresh.ts): the
+// old names stay retired so a dashboard build still open from before the
+// change cannot resubscribe to these broad reads without reloading.
+export const accountsSnapshot = query({
   args: { operatorToken: v.optional(v.string()) },
   returns: v.object({
     rows: v.array(opsAccountValidator),
@@ -409,9 +413,9 @@ async function throttleActivity(ctx: QueryCtx, now: number) {
   };
 }
 
-export const activity = query({
+export const activitySnapshot = query({
   // `now` comes from the caller (guidelines: never read the wall clock in a
-  // query); the dashboard passes its 30-second bucketed clock.
+  // query); the dashboard passes the instant it asked.
   args: { now: v.number(), operatorToken: v.optional(v.string()) },
   returns: activityValidator,
   handler: async (ctx, args): Promise<OpsActivity> => {

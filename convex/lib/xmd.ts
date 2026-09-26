@@ -427,10 +427,17 @@ export function timeoutFor(operation: string): number {
   return operation === "history" || operation === "bulk" ? HISTORY_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 }
 
-function failureMessage(status: number, code: string): string {
+function failureMessage(status: number, code: string, operation: string): string {
   switch (status) {
     case 401:
       return "x.md rejected the API key. Check X_MD_API_KEY on the backend.";
+    case 404:
+      if (operation === "bulk" || operation === "history")
+        return "x.md could not fetch this account's history (404). The account may be available again; retry the import.";
+
+      return operation === "post"
+        ? "x.md could not find this post or thread (404). Retrying the same request will not help."
+        : `x.md could not finish this request (404, ${code}).`;
     case 429:
       return "x.md rate limit reached. The job will retry after the provider's delay.";
     default:
@@ -561,7 +568,7 @@ export class XmdClient {
         /* status is still actionable */
       }
 
-      const message = failureMessage(response.status, code);
+      const message = failureMessage(response.status, code, operation);
 
       return {
         ok: false,
@@ -570,7 +577,8 @@ export class XmdClient {
           code,
           message,
           retryDelay(response.headers.get("Retry-After")),
-          [408, 429, 500, 502, 503, 504].includes(response.status),
+          [408, 429, 500, 502, 503, 504].includes(response.status) ||
+            (response.status === 404 && (operation === "bulk" || operation === "history")),
           problem ? { error: problem, httpStatus: response.status } : undefined,
           readThrottle("xmd", operation, response.status, response.headers, problem),
         ),
@@ -682,14 +690,28 @@ export class XmdClient {
     const parse = (line: string) => {
       const item = record(JSON.parse(line));
 
-      if (item.error)
+      if (item.error) {
+        const issue = object.safeParse(item.error);
+
+        const reportedStatus = issue.success
+          ? z.union([z.number(), z.string()]).safeParse(issue.data.status)
+          : undefined;
+
+        const status = reportedStatus?.success ? finiteNumber(reportedStatus.data) : undefined;
+
+        const retryable =
+          status !== undefined && [404, 408, 429, 500, 502, 503, 504].includes(status);
+
         throw new ProviderError(
           "partial_import",
-          "x.md stopped before completing the import. Only acknowledged captures are retained; retry to continue.",
+          retryable
+            ? "x.md stopped before completing the account import. Only acknowledged captures are retained; retry to continue."
+            : "x.md rejected the account import. Only acknowledged captures are retained; retrying this request will not help.",
           0,
-          false,
+          retryable,
           item,
         );
+      }
 
       if (item.post) return { ...item, post: record(item.post) };
 

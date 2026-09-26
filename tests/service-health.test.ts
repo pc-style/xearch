@@ -27,12 +27,12 @@ const workerPoll = anyApi.worker.poll;
 // summary.health is the existing, already-correct READ side; it is called
 // here unmodified, to prove the rows this unit writes are what the dashboard
 // actually ends up saying.
-// SAFETY: `anyApi.summary.health` is typed as a generic `FunctionReference<
+// SAFETY: `anyApi.summary.healthSnapshot` is typed as a generic `FunctionReference<
 // any, any>` (convex/server's AnyApi), not `unknown` — this single
 // narrowing to the reference's real, hand-checked args/return shape
 // (matching convex/summary.ts's `health` query) is what lets the calls
 // below typecheck.
-const healthQuery = anyApi.summary.health as FunctionReference<
+const healthQuery = anyApi.summary.healthSnapshot as FunctionReference<
   "query",
   "public",
   { now: number },
