@@ -20,6 +20,7 @@ pub fn post(id: u32, text: &str) -> Post {
         media: Vec::new(),
         card: None,
         quote: None,
+        quoted_by: Vec::new(),
     }
 }
 

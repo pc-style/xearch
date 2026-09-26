@@ -50,6 +50,16 @@ const quote = z.object({
   image: z.optional(safeLink),
 });
 
+const quotedBy = z.object({
+  url: safeLink,
+  author: z.string().check(z.regex(/^[A-Za-z0-9_]{1,15}$/)),
+  displayName: z.optional(z.string().check(z.maxLength(100))),
+  avatar: z.optional(safeLink),
+  text: z.string().check(z.maxLength(2000)),
+  likes: z.optional(metric),
+  createdAt: z.optional(z.number()),
+});
+
 /** Wire contract for the external indexer/search service, not a corpus model. */
 export const resultPost = z.object({
   tweetId: z.string().check(z.regex(/^\d+$/)),
@@ -67,6 +77,8 @@ export const resultPost = z.object({
   media: z.optional(z.array(media).check(z.maxLength(4))),
   card: z.optional(card),
   quote: z.optional(quote),
+  /** The best posts in the index quoting this one (the search service keeps two). */
+  quotedBy: z.optional(z.array(quotedBy).check(z.maxLength(2))),
 });
 
 export type ResultPost = z.infer<typeof resultPost>;

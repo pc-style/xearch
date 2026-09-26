@@ -338,6 +338,7 @@ pub fn normalize(value: &Value) -> Result<Post> {
         media: media(value),
         card: card(value),
         quote: quote(value),
+        quoted_by: Vec::new(),
     })
 }
 

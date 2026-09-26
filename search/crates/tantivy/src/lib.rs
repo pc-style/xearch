@@ -1,5 +1,6 @@
 //! Memory-mapped Tantivy adapter. The API and ingest pipeline depend only on traits.
 mod scoring;
+mod signals;
 
 use search_backend::{IndexSink, SearchBackend};
 use search_model::{BackendStats, Error, Post, Result, SearchRequest, SearchResponse, SearchStats};
@@ -9,10 +10,10 @@ use sha2::{Digest, Sha256};
 use std::{
     ops::Bound,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime},
 };
-use tantivy::collector::{Count, TopDocs};
+use tantivy::collector::{Count, DocSetCollector, TopDocs};
 use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, Occur, PhraseQuery, Query,
     RangeQuery, TermQuery,
@@ -123,13 +124,26 @@ fn analyzer() -> TextAnalyzer {
 /// Open a disk index. Creation is explicit; readers never silently create an empty corpus.
 ///
 /// Searches see every commit made before they start: each one checks
-/// `meta.json` and reloads first if it changed. Right for the CLI, the
-/// indexer and tests; a long-running server wants [`open_for_serving`].
+/// `meta.json` and reloads first if it changed. Right for the indexer,
+/// which writes and counts; searches rank without the corpus-wide signals
+/// (see [`open_for_search`]).
 ///
 /// # Errors
 /// Returns filesystem, incompatible schema or index errors.
 pub fn open(path: &Path, create: bool) -> Result<Engine> {
-    open_with(path, create, ReloadPolicy::Manual)
+    open_with(path, create, ReloadPolicy::Manual, false)
+}
+
+/// [`open`], plus the corpus-wide ranking signals.
+///
+/// Author authority, diversity and quotes under results (see `signals.rs`),
+/// computed on each reload. Opening reads every post once, well under a
+/// second for 200,000.
+///
+/// # Errors
+/// Returns filesystem, incompatible schema or index errors.
+pub fn open_for_search(path: &Path, create: bool) -> Result<Engine> {
+    open_with(path, create, ReloadPolicy::Manual, true)
 }
 
 /// Open an existing index for a long-running server.
@@ -142,10 +156,10 @@ pub fn open(path: &Path, create: bool) -> Result<Engine> {
 /// # Errors
 /// Returns filesystem, incompatible schema or index errors.
 pub fn open_for_serving(path: &Path) -> Result<Engine> {
-    open_with(path, false, ReloadPolicy::OnCommitWithDelay)
+    open_with(path, false, ReloadPolicy::OnCommitWithDelay, true)
 }
 
-fn open_with(path: &Path, create: bool, policy: ReloadPolicy) -> Result<Engine> {
+fn open_with(path: &Path, create: bool, policy: ReloadPolicy, signals: bool) -> Result<Engine> {
     let expected = schema();
     let fields = Fields::from_schema(&expected)?;
     let index = if create {
@@ -164,12 +178,16 @@ fn open_with(path: &Path, create: bool, policy: ReloadPolicy) -> Result<Engine> 
         ));
     }
     index.tokenizers().register("words", analyzer());
-    let reader = index
+    let warmer = signals.then(|| Arc::new(signals::SignalWarmer::new(fields.post)));
+    let mut builder = index
         .reader_builder()
         .reload_policy(policy)
-        .doc_store_cache_num_blocks(8)
-        .try_into()
-        .map_err(storage)?;
+        .doc_store_cache_num_blocks(8);
+    if let Some(warmer) = &warmer {
+        let warmer: Arc<dyn tantivy::Warmer> = warmer.clone();
+        builder = builder.warmers(vec![Arc::downgrade(&warmer)]);
+    }
+    let reader = builder.try_into().map_err(storage)?;
     Ok(Engine {
         index,
         reader,
@@ -177,6 +195,7 @@ fn open_with(path: &Path, create: bool, policy: ReloadPolicy) -> Result<Engine> 
         meta: path.join("meta.json"),
         loaded: Mutex::new(None),
         watched: matches!(policy, ReloadPolicy::OnCommitWithDelay),
+        warmer,
     })
 }
 
@@ -247,6 +266,9 @@ pub struct Engine {
     loaded: Mutex<Option<MetaStamp>>,
     /// Tantivy reloads in the background (see [`open_for_serving`]).
     watched: bool,
+    /// Computes corpus-wide signals on each reload; the reader holds it
+    /// weakly, so the engine keeps it alive.
+    warmer: Option<Arc<signals::SignalWarmer>>,
 }
 
 impl Engine {
@@ -609,44 +631,150 @@ fn cursor_bounds(request: &SearchRequest, fingerprint: &str, now: i64) -> Result
     }
 }
 
+/// How many of the best results are reordered for diversity. Fixed, so
+/// every page of a search is cut from the same order: the first
+/// `DIVERSITY_WINDOW` results are these reordered, the rest follow as
+/// ranked.
+const DIVERSITY_WINDOW: usize = 100;
+
+/// One page of ranked results.
+struct Page {
+    total: Option<u64>,
+    hits: Vec<tantivy::DocAddress>,
+    more: bool,
+    candidates: usize,
+}
+
 impl Engine {
-    // Diagnostics are opt-in; keeping this path separate avoids timer branches
-    // in every default search candidate.
-    fn search_fast(
-        &self,
-        expression: &Expr,
+    /// Rank the query's matches and cut the page starting at `offset`.
+    fn page(
+        searcher: &tantivy::Searcher,
+        query: &dyn Query,
         request: &SearchRequest,
+        offset: usize,
         now: i64,
-    ) -> Result<SearchResponse> {
-        request.validate()?;
-        self.refresh()?;
-        let searcher = self.reader.searcher();
-        let fingerprint = fingerprint(&searcher, expression, request.sort, request.limit)?;
-        let (offset, now) = cursor_bounds(request, &fingerprint, now)?;
-        let query = self.compile(expression)?;
+        signals: Option<&Arc<signals::Signals>>,
+    ) -> Result<Page> {
         let page_limit = request.limit.min(MAX_WINDOW.saturating_sub(offset));
-        let collector = TopDocs::with_limit(page_limit.saturating_add(1))
-            .and_offset(offset)
-            .order_by(scoring::Ranking {
-                sort: request.sort,
-                now,
+        let ranked = matches!(
+            request.sort,
+            search_model::Sort::Relevance | search_model::Sort::Engagement
+        );
+        let diversify = ranked && signals.is_some() && offset < DIVERSITY_WINDOW;
+        let ranking = scoring::Ranking {
+            sort: request.sort,
+            now,
+            signals: signals.cloned(),
+        };
+        if !diversify {
+            let collector = TopDocs::with_limit(page_limit.saturating_add(1))
+                .and_offset(offset)
+                .order_by(ranking);
+            let (total, hits) = collect(searcher, query, collector, offset)?;
+            let candidates = hits.len();
+            let more = hits.len() > page_limit;
+            return Ok(Page {
+                total,
+                hits: hits
+                    .into_iter()
+                    .take(page_limit)
+                    .map(|(_, address)| address)
+                    .collect(),
+                more,
+                candidates,
             });
-        let (total, hits) = collect(&searcher, query.as_ref(), collector, offset)?;
-        let more = hits.len() > page_limit;
-        let rows = hits
-            .into_iter()
-            .take(page_limit)
-            .map(|(_, address)| {
-                let document = searcher.doc::<TantivyDocument>(address).map_err(storage)?;
-                let raw = document
-                    .get_first(self.fields.post)
-                    .and_then(|value| value.as_str())
-                    .ok_or_else(|| storage("Missing stored post"))?;
-                serde_json::from_str(raw).map_err(storage)
+        }
+        // Rank the whole window (and the page, if it runs past it), reorder
+        // the window, then cut the page. Counted on the first page only.
+        let want = DIVERSITY_WINDOW.max(offset.saturating_add(page_limit).saturating_add(1));
+        let collector = TopDocs::with_limit(want).order_by(ranking);
+        let (total, mut hits) = if offset == 0 {
+            collect(searcher, query, collector, 0)?
+        } else {
+            (None, searcher.search(query, &collector).map_err(storage)?)
+        };
+        let candidates = hits.len();
+        if let Some(signals) = signals {
+            let window = hits.len().min(DIVERSITY_WINDOW);
+            diversify_window(
+                searcher,
+                signals,
+                hits.get_mut(..window).unwrap_or_default(),
+            );
+        }
+        let more = hits.len() > offset.saturating_add(page_limit);
+        Ok(Page {
+            total,
+            hits: hits
+                .into_iter()
+                .skip(offset)
+                .take(page_limit)
+                .map(|(_, address)| address)
+                .collect(),
+            more,
+            candidates,
+        })
+    }
+
+    /// The stored posts for `hits`, each with the best posts quoting it.
+    fn rows(
+        &self,
+        searcher: &tantivy::Searcher,
+        hits: &[tantivy::DocAddress],
+        signals: Option<&Arc<signals::Signals>>,
+    ) -> Result<Vec<Post>> {
+        hits.iter()
+            .map(|&address| {
+                let mut post = self.stored(searcher, address)?;
+                if let Some(signals) = signals {
+                    for &quoting in signals.quoted_by(post.tweet_id.0) {
+                        if let Some(quote) = self.find(searcher, quoting)? {
+                            post.quoted_by.push(search_model::QuotedBy::of(&quote));
+                        }
+                    }
+                }
+                Ok(post)
             })
-            .collect::<Result<Vec<Post>>>()?;
+            .collect()
+    }
+
+    fn stored(&self, searcher: &tantivy::Searcher, address: tantivy::DocAddress) -> Result<Post> {
+        let document = searcher.doc::<TantivyDocument>(address).map_err(storage)?;
+        let raw = document
+            .get_first(self.fields.post)
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| storage("Missing stored post"))?;
+        serde_json::from_str(raw).map_err(storage)
+    }
+
+    /// The live post with this tweet id, if the index has it.
+    fn find(&self, searcher: &tantivy::Searcher, id: u64) -> Result<Option<Post>> {
+        let query = TermQuery::new(
+            Term::from_field_u64(self.fields.id, id),
+            IndexRecordOption::Basic,
+        );
+        let found = searcher.search(&query, &DocSetCollector).map_err(storage)?;
+        found
+            .into_iter()
+            .min()
+            .map(|address| self.stored(searcher, address))
+            .transpose()
+    }
+
+    fn signals(&self) -> Option<Arc<signals::Signals>> {
+        self.warmer.as_ref().map(|warmer| warmer.current())
+    }
+
+    fn respond(
+        page: &Page,
+        rows: Vec<Post>,
+        offset: usize,
+        fingerprint: String,
+        now: i64,
+        stats: Option<SearchStats>,
+    ) -> Result<SearchResponse> {
         let next_offset = offset.saturating_add(rows.len());
-        let next_cursor = if more && next_offset < MAX_WINDOW {
+        let next_cursor = if page.more && next_offset < MAX_WINDOW {
             Some(
                 serde_json::to_string(&Cursor {
                     fingerprint,
@@ -658,18 +786,91 @@ impl Engine {
         } else {
             None
         };
-        let warnings = if more && next_offset >= MAX_WINDOW {
+        let warnings = if page.more && next_offset >= MAX_WINDOW {
             vec!["Result window capped at 10,000. Narrow your query.".into()]
         } else {
             Vec::new()
         };
         Ok(SearchResponse {
             rows,
-            total,
+            total: page.total,
             next_cursor,
             warnings,
-            stats: None,
+            stats,
         })
+    }
+
+    // Diagnostics are opt-in; keeping this path separate avoids timer branches
+    // in every default search candidate.
+    fn search_fast(
+        &self,
+        expression: &Expr,
+        request: &SearchRequest,
+        now: i64,
+    ) -> Result<SearchResponse> {
+        request.validate()?;
+        self.refresh()?;
+        let searcher = self.reader.searcher();
+        let signals = self.signals();
+        let fingerprint = fingerprint(&searcher, expression, request.sort, request.limit)?;
+        let (offset, now) = cursor_bounds(request, &fingerprint, now)?;
+        let query = self.compile(expression)?;
+        let page = Self::page(
+            &searcher,
+            query.as_ref(),
+            request,
+            offset,
+            now,
+            signals.as_ref(),
+        )?;
+        let rows = self.rows(&searcher, &page.hits, signals.as_ref())?;
+        Self::respond(&page, rows, offset, fingerprint, now, None)
+    }
+}
+
+/// Reorder the best results so one author or one wording does not fill
+/// them (see [`search_ranking::diversity`]). A quiet post never rises past
+/// one ranked above it: diversity makes room for other voices, not for
+/// posts nobody engaged with. Stable: ties keep their rank.
+fn diversify_window(
+    searcher: &tantivy::Searcher,
+    signals: &signals::Signals,
+    hits: &mut [(scoring::Key, tantivy::DocAddress)],
+) {
+    let mut by_author: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut wordings: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut lowest = f64::INFINITY;
+    let mut adjusted: Vec<(f64, usize)> = Vec::with_capacity(hits.len());
+    for (rank, ((_, ordered, _), address)) in hits.iter().enumerate() {
+        let segment = searcher
+            .segment_readers()
+            .get(usize::try_from(address.segment_ord).unwrap_or(usize::MAX))
+            .and_then(|reader| signals.segment(reader.segment_id()));
+        let doc = usize::try_from(address.doc_id).unwrap_or(usize::MAX);
+        let author = segment
+            .and_then(|segment| segment.author.get(doc).copied())
+            .filter(|author| *author != u32::MAX);
+        let wording = segment.and_then(|segment| segment.wording.get(doc).copied().flatten());
+        let quiet = segment.is_some_and(|segment| segment.quiet.get(doc).copied().unwrap_or(false));
+        let earlier = author.map_or(0, |author| {
+            let seen = by_author.entry(author).or_default();
+            *seen = seen.saturating_add(1);
+            seen.saturating_sub(1)
+        });
+        let duplicate = wording.is_some_and(|wording| !wordings.insert(wording));
+        let mut score = scoring::score_of(*ordered) + search_ranking::diversity(earlier, duplicate);
+        if quiet {
+            score = score.min(lowest);
+        }
+        lowest = lowest.min(score);
+        adjusted.push((score, rank));
+    }
+    adjusted.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let original = hits.to_vec();
+    for (slot, (_, rank)) in hits.iter_mut().zip(adjusted) {
+        if let Some(hit) = original.get(rank) {
+            *slot = *hit;
+        }
     }
 }
 
@@ -690,6 +891,7 @@ impl SearchBackend for Engine {
         let stage = started(true);
         self.refresh()?;
         let searcher = self.reader.searcher();
+        let signals = self.signals();
         backend.reload_us = elapsed_us(stage);
         backend.index_docs = searcher.num_docs();
         backend.segments = u64::try_from(searcher.segment_readers().len()).unwrap_or(u64::MAX);
@@ -706,61 +908,32 @@ impl SearchBackend for Engine {
         let query = self.compile(expression)?;
         backend.compile_us = elapsed_us(stage);
 
-        let page_limit = request.limit.min(MAX_WINDOW.saturating_sub(offset));
-        let collector = TopDocs::with_limit(page_limit.saturating_add(1))
-            .and_offset(offset)
-            .order_by(scoring::Ranking {
-                sort: request.sort,
-                now,
-            });
         let stage = started(true);
-        let (total, hits) = collect(&searcher, query.as_ref(), collector, offset)?;
+        let page = Self::page(
+            &searcher,
+            query.as_ref(),
+            request,
+            offset,
+            now,
+            signals.as_ref(),
+        )?;
         backend.retrieve_us = elapsed_us(stage);
-        backend.candidate_hits = u64::try_from(hits.len()).unwrap_or(u64::MAX);
+        backend.candidate_hits = u64::try_from(page.candidates).unwrap_or(u64::MAX);
         backend.ranking_calls = backend.candidate_hits;
-        let more = hits.len() > page_limit;
 
         let stage = started(true);
-        let rows = hits
-            .into_iter()
-            .take(page_limit)
-            .map(|(_, address)| {
-                let document = searcher.doc::<TantivyDocument>(address).map_err(storage)?;
-                let raw = document
-                    .get_first(self.fields.post)
-                    .and_then(|value| value.as_str())
-                    .ok_or_else(|| storage("Missing stored post"))?;
-                serde_json::from_str(raw).map_err(storage)
-            })
-            .collect::<Result<Vec<Post>>>()?;
+        let rows = self.rows(&searcher, &page.hits, signals.as_ref())?;
         backend.materialize_us = elapsed_us(stage);
         backend.returned_rows = u64::try_from(rows.len()).unwrap_or(u64::MAX);
 
-        let next_offset = offset.saturating_add(rows.len());
-        let next_cursor = if more && next_offset < MAX_WINDOW {
-            Some(
-                serde_json::to_string(&Cursor {
-                    fingerprint,
-                    offset: next_offset,
-                    now,
-                })
-                .map_err(storage)?,
-            )
-        } else {
-            None
-        };
-        let warnings = if more && next_offset >= MAX_WINDOW {
-            vec!["Result window capped at 10,000. Narrow your query.".into()]
-        } else {
-            Vec::new()
-        };
         backend.total_us = elapsed_us(stats_started);
-        Ok(SearchResponse {
+        Self::respond(
+            &page,
             rows,
-            total,
-            next_cursor,
-            warnings,
-            stats: Some(SearchStats { backend, api: None }),
-        })
+            offset,
+            fingerprint,
+            now,
+            Some(SearchStats { backend, api: None }),
+        )
     }
 }

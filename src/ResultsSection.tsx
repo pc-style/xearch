@@ -14,7 +14,8 @@ import { Avatar } from "./Avatar";
 import { Icon } from "./icons";
 import { compact, postDate, safeHostname } from "./format";
 import { ringAvatarUrl } from "./avatarUrl";
-import { PostEmbeds, replyText } from "./PostEmbeds";
+import { PostEmbeds, QuotedBy, replyText } from "./PostEmbeds";
+import { highlightParts } from "./highlight";
 import type { Account } from "./Wall";
 import { parseQuery } from "../convex/lib/search";
 import { capture, redactEmail } from "./posthog";
@@ -25,46 +26,6 @@ type Configured = FunctionReturnType<typeof api.integrations.configured>;
 
 /** Characters shown before "Read full post". */
 const PREVIEW_CHARS = 700;
-
-// The last query's highlight pattern. Every text segment of every row asks
-// for the same query's pattern, so it is compiled once rather than per call.
-let highlightCache: { query: string; pattern: RegExp | null } | null = null;
-
-function highlightPattern(query: string): RegExp | null {
-  if (highlightCache?.query === query) return highlightCache.pattern;
-
-  const words = query
-    .split(/\s+/)
-    .filter((w) => w.length > 2 && !w.startsWith("@"))
-    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-
-  // `matchAll` copies the pattern, so sharing one `g` regex is safe.
-  const pattern = words.length ? new RegExp(`(${words.join("|")})`, "gi") : null;
-  highlightCache = { query, pattern };
-
-  return pattern;
-}
-
-/** Split `text` around the query's words so each match can be marked. */
-export function highlightParts(text: string, query: string) {
-  const pattern = highlightPattern(query);
-
-  if (!pattern) return [{ text, mark: false }];
-  const parts: { text: string; mark: boolean }[] = [];
-  let cursor = 0;
-
-  for (const match of text.matchAll(pattern)) {
-    const start = match.index ?? 0;
-
-    if (start > cursor) parts.push({ text: text.slice(cursor, start), mark: false });
-    parts.push({ text: match[0], mark: true });
-    cursor = start + match[0].length;
-  }
-
-  if (cursor < text.length) parts.push({ text: text.slice(cursor), mark: false });
-
-  return parts;
-}
 
 function Highlight(props: { text: string; query: string }) {
   return (
@@ -240,6 +201,7 @@ export function PostRow(props: {
             </a>
           </span>
         </div>
+        <QuotedBy post={props.post} />
         <Show when={props.threadStatus}>
           <p class="scope-note" role="status">
             {props.threadStatus}

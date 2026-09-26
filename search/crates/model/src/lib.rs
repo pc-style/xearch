@@ -90,6 +90,10 @@ pub struct Post {
     pub card: Option<Card>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quote: Option<Quote>,
+    /// The best posts in the index that quote this one, filled in when it
+    /// is returned as a result; never stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quoted_by: Vec<QuotedBy>,
 }
 
 impl Post {
@@ -120,6 +124,48 @@ impl Post {
             rest = handle.get(end..).unwrap_or_default().trim_start();
         }
         rest
+    }
+}
+
+/// A post quoting a search result, as shown under it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotedBy {
+    pub url: String,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    /// What the quoting author wrote, cut to [`QuotedBy::TEXT_CHARS`].
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub likes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+}
+
+impl QuotedBy {
+    /// Characters of the quoting post's own words kept.
+    pub const TEXT_CHARS: usize = 280;
+
+    /// How `post` appears under the post it quotes.
+    #[must_use]
+    pub fn of(post: &Post) -> Self {
+        let body = post.body();
+        let text = match body.char_indices().nth(Self::TEXT_CHARS) {
+            Some((end, _)) => format!("{}…", body.get(..end).unwrap_or(body).trim_end()),
+            None => body.to_owned(),
+        };
+        Self {
+            url: post.url.clone(),
+            author: post.author.clone(),
+            display_name: post.display_name.clone(),
+            avatar: post.avatar.clone(),
+            text,
+            likes: post.likes,
+            created_at: post.created_at,
+        }
     }
 }
 

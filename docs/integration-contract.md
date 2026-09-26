@@ -95,7 +95,7 @@ Set `SEARCH_API_URL` to the exact retrieval endpoint and `SEARCH_SERVICE_TOKEN` 
 }
 ```
 
-Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. How `relevance` and `engagement` weigh the text match against engagement and freshness is described in `search/crates/ranking/src/lib.rs`. Omitted author means all indexed accounts. The provider owns the cursor and its relationship to query and sort. `total` counts every post the query matches and is present on the first page only; `replyTo`, `media`, `card` and `quote` are absent on posts indexed before the service kept them. The Rust API returns HTTP 409 Conflict for a stale cursor; on a paginated request the app asks the user to restart the search rather than treating it as a service outage.
+Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. How `relevance` and `engagement` weigh the text match against engagement and freshness is described in `search/crates/ranking/src/lib.rs`. Omitted author means all indexed accounts. The provider owns the cursor and its relationship to query and sort. `total` counts every post the query matches and is present on the first page only; `replyTo`, `media`, `card` and `quote` are absent on posts indexed before the service kept them. `quotedBy` lists up to two posts in the index that quote the result, best first, and is absent when there are none. The Rust API returns HTTP 409 Conflict for a stale cursor; on a paginated request the app asks the user to restart the search rather than treating it as a service outage.
 
 ```json
 {
@@ -137,7 +137,18 @@ Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. How `releva
         "text": "The quoted post's text",
         "createdAt": 1789770000000,
         "image": "optional first image"
-      }
+      },
+      "quotedBy": [
+        {
+          "url": "https://x.com/fan/status/130",
+          "author": "fan",
+          "displayName": "optional",
+          "avatar": "optional https image",
+          "text": "What the quoting post says, up to 280 characters",
+          "likes": 40,
+          "createdAt": 1789780000000
+        }
+      ]
     }
   ],
   "total": 43,
