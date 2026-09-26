@@ -18,6 +18,7 @@
     "build": "tsc --noEmit && vite build && node scripts/check-public-bundle.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "bench": "node scripts/bench/measure.mjs head=. --out-dir perf/results",
     "deploy": "bunx @convex-dev/static-hosting deploy",
     "deploy:prod": "CONVEX_DEPLOYMENT=prod:utmost-kudu-321 NODE_OPTIONS=--max-old-space-size=3072 bash scripts/with-posthog-build-env.sh bunx @convex-dev/static-hosting deploy --build-command 'bun run build'",
     "build:operator": "tsc --noEmit && VITE_XEARCH_OPERATOR=1 vite build --outDir dist-operator --emptyOutDir"
@@ -45,6 +46,7 @@
     "oxfmt": "0.68.0",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
+    "playwright-core": "1.63.0",
     "typescript": "^5.9.0",
     "vite": "latest",
     "vitest": "latest"
