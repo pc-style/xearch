@@ -1,0 +1,179 @@
+{
+  "metrics": {
+    "convex.access": {
+      "value": 49049,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.auth": {
+      "value": 394168,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.auth.config": {
+      "value": 102,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.backfill": {
+      "value": 115574,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.cleanup": {
+      "value": 34771,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.crons": {
+      "value": 21011,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.email": {
+      "value": 281298,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.health": {
+      "value": 67405,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.http": {
+      "value": 440764,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.importer": {
+      "value": 62077,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.integrations": {
+      "value": 99036,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.jobs": {
+      "value": 115595,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.library": {
+      "value": 55908,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.limits": {
+      "value": 50424,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.ops": {
+      "value": 55704,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.publication": {
+      "value": 71925,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.queue": {
+      "value": 56541,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.schema": {
+      "value": 26623,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.search": {
+      "value": 114007,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.summary": {
+      "value": 55938,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.wall": {
+      "value": 116067,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "convex.worker": {
+      "value": 51897,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "load.app-ready": {
+      "value": 1184,
+      "unit": "ms",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "load.first-contentful-paint": {
+      "value": 456,
+      "unit": "ms",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "load.html-first-byte": {
+      "value": 258,
+      "unit": "ms",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "load.largest-contentful-paint": {
+      "value": 456,
+      "unit": "ms",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "load.main-thread-blocking": {
+      "value": 108,
+      "unit": "ms",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "operator.all-js": {
+      "value": 85266,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "page.all-js": {
+      "value": 62366,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "page.first-load": {
+      "value": 71039,
+      "unit": "bytes",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "search.\"to be or not to be\"": {
+      "value": 83568,
+      "unit": "ns",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "search.from:alice": {
+      "value": 149204,
+      "unit": "ns",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "search.rust disk": {
+      "value": 65599,
+      "unit": "ns",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "search.the": {
+      "value": 142591,
+      "unit": "ns",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    },
+    "search.the -rust": {
+      "value": 175639,
+      "unit": "ns",
+      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+    }
+  }
+}
