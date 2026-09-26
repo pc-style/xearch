@@ -58,10 +58,25 @@ export interface AuthActions {
   signOut(): Promise<void>;
 }
 
+/**
+ * One finite read of a query: asks once, answers once, keeps nothing open.
+ * The real one (src/main.tsx) is `ConvexHttpClient` carrying the session's
+ * JWT; tests answer from fixtures. It is deliberately NOT the sync client's
+ * `subscribe`: a subscription re-runs on every write the query touched, and
+ * that is exactly what the dashboard's broad reads must never do again
+ * (src/ops/refresh.ts).
+ */
+export type QueryFetcher = (name: string, args: Record<string, Value>) => Promise<Value>;
+
 export interface ConvexApp {
   readonly sync: SyncClient;
   /** Call `fn` whenever Convex reports a new result for `token`. */
   listen(token: QueryToken, fn: () => void): () => void;
+  /** Read `ref` once, now, with the session's auth. Never subscribes. */
+  query<Q extends FunctionReference<"query">>(
+    ref: Q,
+    args: FunctionArgs<Q>,
+  ): Promise<FunctionReturnType<Q>>;
   readonly connection: Accessor<ConnectionState>;
   /** Auth as Convex sees it: authenticated only once the backend has confirmed the token. */
   readonly isLoading: Accessor<boolean>;
@@ -71,13 +86,23 @@ export interface ConvexApp {
 
 export const ConvexContext = createContext<ConvexApp>();
 
+// SAFETY: a Convex function's declared args are, by the validator that
+// generated `FunctionArgs`, a plain object of Convex values — what the wire
+// client takes. The generic type just can't show TypeScript that.
+const wire = (args: DefaultFunctionArgs) => args as Record<string, Value>;
+
 /**
  * Wire a sync client to an auth source. The auth half is a port of
  * `convex/react`'s `ConvexProviderWithAuth`: `isLoading` stays true until the
  * backend has confirmed (or refused) the token the provider holds, so a
  * caller never mistakes "still verifying" for "signed out".
  */
-export function createConvexApp(sync: SyncClient, source: AuthSource, actions: AuthActions) {
+export function createConvexApp(
+  sync: SyncClient,
+  source: AuthSource,
+  actions: AuthActions,
+  fetcher: QueryFetcher,
+) {
   const listeners = new Map<QueryToken, Set<() => void>>();
 
   sync.addOnTransitionHandler((transition) => {
@@ -138,6 +163,10 @@ export function createConvexApp(sync: SyncClient, source: AuthSource, actions: A
   const app: ConvexApp = {
     sync,
     listen,
+    // SAFETY: the server validates the result against the same `returns`
+    // validator `FunctionReturnType` is derived from, as for `useMutation`.
+    query: (ref, args) =>
+      fetcher(getFunctionName(ref), wire(args)) as Promise<FunctionReturnType<typeof ref>>,
     connection,
     isLoading: () => confirmed() === null,
     isAuthenticated: () => source.isAuthenticated() && confirmed() === true,
@@ -150,11 +179,6 @@ export function createConvexApp(sync: SyncClient, source: AuthSource, actions: A
 export function useConvex(): ConvexApp {
   return useContext(ConvexContext);
 }
-
-// SAFETY: a Convex function's declared args are, by the validator that
-// generated `FunctionArgs`, a plain object of Convex values — what the wire
-// client takes. The generic type just can't show TypeScript that.
-const wire = (args: DefaultFunctionArgs) => args as Record<string, Value>;
 
 type Result<T> =
   | { readonly ok: true; readonly value: T }

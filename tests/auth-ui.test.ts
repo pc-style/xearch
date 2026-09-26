@@ -98,20 +98,28 @@ describe("AccountBadge (src/auth/AccountBadge.tsx)", () => {
     expect(renderHtml(AccountBadge, {}, me(null))).toBe("");
   });
 
-  it("shows guest state for an anonymous session and signed-in state for a verified one", () => {
+  // The badge reads identity once (src/data/snapshot.ts), so the markup
+  // arrives after a settle rather than on the first render.
+  const badge = async (value: FunctionReturnType<typeof api.auth.me>) => {
+    const mounted = mount(AccountBadge, {}, me(value));
+    await settle();
+    const markup = stripMarkers(mounted.html());
+    mounted.unmount();
+
+    return markup;
+  };
+
+  it("shows guest state for an anonymous session and signed-in state for a verified one", async () => {
     expect(
-      renderHtml(
-        AccountBadge,
-        {},
-        me({ id: userId, isAnonymous: true, email: null, emailVerified: false }),
-      ),
+      await badge({ id: userId, isAnonymous: true, email: null, emailVerified: false }),
     ).toContain("Guest session");
 
-    const markup = renderHtml(
-      AccountBadge,
-      {},
-      me({ id: userId, isAnonymous: false, email: "reader@example.com", emailVerified: true }),
-    );
+    const markup = await badge({
+      id: userId,
+      isAnonymous: false,
+      email: "reader@example.com",
+      emailVerified: true,
+    });
 
     expect(markup).toContain("Signed in as reader@example.com");
     expect(markup).toContain("Sign out");

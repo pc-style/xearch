@@ -389,7 +389,13 @@ fn capture_identity(file: &Path) -> CaptureIdentity {
             .get("request")
             .and_then(|request| request.get("input"))
             .and_then(serde_json::Value::as_str)
-            .and_then(|input| search_query::normalize_author(input).ok());
+            .and_then(|input| {
+                let handle = input
+                    .strip_prefix("from:")
+                    .and_then(|query| query.split_whitespace().next())
+                    .unwrap_or(input);
+                search_query::normalize_author(handle).ok()
+            });
     }
     identity
 }

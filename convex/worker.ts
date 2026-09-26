@@ -77,18 +77,55 @@ export const claimNext = internalMutation({
     )
       return null;
 
-    const jobs = await ctx.db
-      .query("jobs")
-      .withIndex("by_status", (q) => q.eq("status", "queued"))
-      .take(20);
+    const now = Date.now();
 
-    const job = jobs.find((j) => (j.readyAt ?? 0) <= Date.now());
+    // Old jobs have no origin and are manual. Missing readyAt means the job
+    // became eligible when it was created; both indexed ranges are FIFO.
+    const firstDue = async (origin: Doc<"jobs">["origin"]) => {
+      const readyNow = await ctx.db
+        .query("jobs")
+        .withIndex("by_status_and_origin_and_ready_at", (q) =>
+          q.eq("status", "queued").eq("origin", origin).eq("readyAt", undefined),
+        )
+        .first();
+
+      const afterDelay = await ctx.db
+        .query("jobs")
+        .withIndex("by_status_and_origin_and_ready_at", (q) =>
+          q
+            .eq("status", "queued")
+            .eq("origin", origin)
+            .gt("readyAt", undefined)
+            .lte("readyAt", now),
+        )
+        .first();
+
+      if (!readyNow) return afterDelay;
+
+      if (!afterDelay) return readyNow;
+
+      return readyNow._creationTime <= afterDelay.readyAt! ? readyNow : afterDelay;
+    };
+
+    const [legacyManual, manual] = await Promise.all([firstDue(undefined), firstDue("manual")]);
+
+    const job =
+      [legacyManual, manual]
+        .filter((row) => row !== null)
+        .sort(
+          (a, b) =>
+            (a.readyAt ?? a._creationTime) - (b.readyAt ?? b._creationTime) ||
+            a._creationTime - b._creationTime,
+        )[0] ??
+      (await firstDue("history")) ??
+      (await firstDue("discovered"));
 
     if (!job) return null;
     const attempt = job.attempt + 1;
     await ctx.db.patch(job._id, {
       status: "running",
       attempt,
+      attemptStartedAt: Date.now(),
       pageAttempt: (job.pageAttempt ?? 0) + 1,
       phase: "Starting download",
       updatedAt: Date.now(),
@@ -177,6 +214,7 @@ export const report = action({
     captureId: v.optional(v.string()),
     receiptId: v.optional(v.string()),
     count: v.optional(v.number()),
+    posts: v.optional(v.number()),
     warnings: v.optional(v.array(v.string())),
     error: v.optional(v.string()),
     retryAfter: v.optional(v.number()),
@@ -261,6 +299,7 @@ export const report = action({
         captureId: args.captureId!,
         receiptId: args.receiptId!,
         count: args.count!,
+        posts: args.posts,
       });
     else
       await ctx.runMutation(internal.jobs.finish, {

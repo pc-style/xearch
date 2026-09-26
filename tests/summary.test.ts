@@ -21,13 +21,13 @@ const modules = import.meta.glob("../convex/**/*.ts");
 // builds the query's args, is exactly the sanctioned pattern ("pass the
 // current time in as an argument") — it is not a wall-clock read inside a
 // query handler.
-// SAFETY: `anyApi.summary.summary` is typed as `FunctionReference<any, any, any, any>`
+// SAFETY: `anyApi.summary.summarySnapshot` is typed as `FunctionReference<any, any, any, any>`
 // (convex/server's untyped API-builder), so every field it carries is `any`
 // and a single assertion to the concrete signature below is a narrowing
 // TypeScript already allows structurally — verified at the call site because
 // convex-test rejects the reference outright if the module/function name it
 // resolves to does not actually exist.
-const summaryQuery = anyApi.summary.summary as import("convex/server").FunctionReference<
+const summaryQuery = anyApi.summary.summarySnapshot as import("convex/server").FunctionReference<
   "query",
   "public",
   { now: number },
@@ -35,7 +35,7 @@ const summaryQuery = anyApi.summary.summary as import("convex/server").FunctionR
 >;
 
 // SAFETY: same `anyApi` `any`-typed reference as `summaryQuery` above.
-const healthQuery = anyApi.summary.health as import("convex/server").FunctionReference<
+const healthQuery = anyApi.summary.healthSnapshot as import("convex/server").FunctionReference<
   "query",
   "public",
   { now: number },
@@ -144,7 +144,13 @@ async function insertPublication(
 
 async function insertReceipt(
   t: Awaited<ReturnType<typeof setup>>["t"],
-  args: { jobId: Id<"jobs">; captureId: string; receiptId?: string; records?: number },
+  args: {
+    jobId: Id<"jobs">;
+    captureId: string;
+    receiptId?: string;
+    records?: number;
+    posts?: number;
+  },
 ) {
   return t.run((ctx) =>
     ctx.db.insert("receipts", {
@@ -152,6 +158,7 @@ async function insertReceipt(
       captureId: args.captureId,
       receiptId: args.receiptId ?? args.captureId,
       records: args.records ?? 1,
+      posts: args.posts,
     }),
   );
 }
@@ -360,6 +367,98 @@ describe("summary.summary", () => {
       kind: "known",
       unit: "captures",
       value: 1,
+    });
+  });
+
+  it("confirms empty captures at receipt time without a publication update", async () => {
+    const { t, alice, a } = await setup();
+    await insertAccount(t, { handle: "adam", userId: "1" });
+    const job = await insertJob(t, alice, { input: "adam", expectedUserId: "1" });
+    await insertReceipt(t, { jobId: job, captureId: "empty-window", records: 0 });
+    await insertReceipt(t, { jobId: job, captureId: "has-posts", records: 1 });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 1,
+    });
+  });
+
+  it("confirms profile-only receipts on a partial job without hiding posts", async () => {
+    const { t, alice, a } = await setup();
+    const job = await insertJob(t, alice, { input: "missing-account" });
+
+    await t.run((ctx) => ctx.db.patch(job, { status: "partial", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "profile-only", records: 1, posts: 0 });
+    await insertReceipt(t, { jobId: job, captureId: "has-posts", records: 1, posts: 1 });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 1,
+    });
+  });
+
+  it("corrects only a verified legacy partial-job receipt", async () => {
+    const { t, alice, a } = await setup();
+    const job = await insertJob(t, alice, { input: "missing-account" });
+
+    await t.run((ctx) => ctx.db.patch(job, { status: "partial", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "legacy-profile", records: 1 });
+
+    await t.mutation(anyApi.jobs.confirmVerifiedEmptyReceipt, {
+      jobId: job,
+      captureId: "legacy-profile",
+    });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
+    });
+    await expect(
+      t.mutation(anyApi.jobs.confirmVerifiedEmptyReceipt, { jobId: job, captureId: "wrong" }),
+    ).rejects.toThrow("Receipt does not match");
+  });
+
+  it("also corrects a verified profile-only receipt on a failed job", async () => {
+    const { t, alice, a } = await setup();
+    const job = await insertJob(t, alice, { input: "missing-account" });
+
+    await t.run((ctx) => ctx.db.patch(job, { status: "failed", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "failed-profile", records: 1 });
+    await t.mutation(anyApi.jobs.confirmVerifiedEmptyReceipt, {
+      jobId: job,
+      captureId: "failed-profile",
+    });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
+    });
+  });
+
+  it("does not count a completed zero-post history window saved with raw records", async () => {
+    const { t, alice, a } = await setup();
+    await insertAccount(t, { handle: "adam", userId: "1" });
+    const job = await insertJob(t, alice, { input: "adam", expectedUserId: "1" });
+    await t.run((ctx) => ctx.db.patch(job, { status: "complete", postsReceived: 0 }));
+    await insertReceipt(t, { jobId: job, captureId: "profile", records: 1 });
+    await insertReceipt(t, { jobId: job, captureId: "old-empty-window", records: 1 });
+
+    const result = await a.query(summaryQuery, { now: Date.now() });
+    expect(result.queue.savedCapturesAwaitingIndexing).toEqual({
+      kind: "known",
+      unit: "captures",
+      value: 0,
     });
   });
 

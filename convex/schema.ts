@@ -326,6 +326,7 @@ export default defineSchema({
     historyFor: v.optional(v.id("accounts")),
   })
     .index("by_status", ["status"])
+    .index("by_status_and_origin_and_ready_at", ["status", "origin", "readyAt"])
     // No index on `owner` alone: the imported corpus is shared
     // infrastructure, not personal data (to-do.md, convex/lib/search.ts), so
     // no query filters the jobs feed, the account library, or the dashboard
@@ -345,6 +346,7 @@ export default defineSchema({
     // (and filtering out) every live search, single-post, and profile job
     // any owner has ever run.
     .index("by_kind", ["kind"])
+    .index("by_status_and_kind_and_updated_at", ["status", "kind", "updatedAt"])
     // Every history-window job for one account, without a full-table scan
     // filtered after the fact — convex/lib/accounts.ts `latestHistoryWindowJob`
     // is the one place this is queried, to find the account library row's
@@ -481,6 +483,7 @@ export default defineSchema({
     captureId: v.string(),
     receiptId: v.string(),
     records: v.number(),
+    posts: v.optional(v.number()),
   }).index("by_capture", ["jobId", "captureId"]),
   sessions: defineTable({
     owner: v.id("users"),

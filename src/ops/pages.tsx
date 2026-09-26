@@ -1044,14 +1044,21 @@ export function AccountsPage(props: Props) {
                           <Span a={a()} now={ops.now()} />
                         </td>
                         <td class={stale() ? "warn" : "muted"}>
-                          {refreshed() ? (
+                          {run()?.status === "failed" || run()?.status === "partial" ? (
+                            <>
+                              <span class="err">
+                                {run()!.status === "partial" ? "partial import" : "failed"}{" "}
+                                {ago(ops.now() - run()!.updatedAt)}
+                              </span>
+                              {" · last good "}
+                              {refreshed() ? ago(ops.now() - refreshed()!) : "never"}
+                              {" · see jobs"}
+                            </>
+                          ) : refreshed() ? (
                             ago(ops.now() - refreshed()!)
                           ) : (
                             <span class="faint">never</span>
                           )}
-                          <Show when={run()?.status === "failed" || run()?.status === "partial"}>
-                            <div class="err">failed · see jobs</div>
-                          </Show>
                         </td>
                         <td>
                           <div class="acts">
@@ -1142,6 +1149,15 @@ export function JobsPage(props: Props) {
               History<span class="n">{history().length}</span>
             </button>
           </div>
+          <button
+            type="button"
+            class="b"
+            disabled={view() !== "active" || ops.retryAllBusy()}
+            title="Retry every failed job that can run again"
+            onClick={() => void ops.retryAll()}
+          >
+            Retry all failed
+          </button>
           <button
             type="button"
             class="b"
@@ -1306,7 +1322,9 @@ function JobRow(props: {
         {state() === "waiting" ? (
           <span class="faint">
             {props.info?.position ? `Position ${props.info.position}` : "Waiting"}
-            {props.info?.finish ? ` · done ≈ ${clock(props.info.finish)}` : ""}
+            {props.info?.finish
+              ? ` · done ≈ ${clock(props.info.finish)}`
+              : " · estimate unavailable"}
           </span>
         ) : state() === "running" || state() === "stalled" ? (
           <div class="prog">
@@ -1687,7 +1705,7 @@ export function ProviderPage(props: Props) {
             <big>
               {until() !== undefined ? "Limited" : "Available"}
               {/* 0 is the case that matters most, so test for a value, not truthiness. */}
-              <Show when={remaining() !== undefined}>
+              <Show when={until() !== undefined && remaining() !== undefined}>
                 <span class="unit"> {n(remaining()!)} calls left</span>
               </Show>
             </big>

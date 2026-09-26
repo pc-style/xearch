@@ -46,13 +46,14 @@ export const run = internalAction({
           expectedUserId: job.expectedUserId,
         },
         (capture) => deliverCapture(process.env.RAW_CAPTURE_URL!, serviceToken("capture"), capture),
-        async (receipt, count) => {
+        async (receipt, count, posts) => {
           await ctx.runMutation(internal.jobs.ack, {
             jobId,
             attempt: job.attempt,
             captureId: receipt.captureId,
             receiptId: receipt.receiptId,
             count,
+            posts,
           });
         },
         Date.now,
