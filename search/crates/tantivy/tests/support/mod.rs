@@ -14,6 +14,12 @@ pub fn post(id: u32, text: &str) -> Post {
         links: Vec::new(),
         display_name: None,
         avatar: None,
+        views: None,
+        bookmarks: None,
+        reply_to: None,
+        media: Vec::new(),
+        card: None,
+        quote: None,
     }
 }
 

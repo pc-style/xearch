@@ -178,6 +178,7 @@ export const complete = internalMutation({
   args: {
     sessionId: v.id("sessions"),
     rows: v.array(v.object(postFields)),
+    total: v.optional(v.number()),
     warnings: v.array(v.string()),
     nextCursor: v.optional(v.string()),
     stats: v.optional(v.object(searchStatsFields)),

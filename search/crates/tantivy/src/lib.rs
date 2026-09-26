@@ -14,8 +14,8 @@ use std::{
 };
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{
-    AllQuery, BooleanQuery, ConstScoreQuery, EmptyQuery, Occur, PhraseQuery, Query, RangeQuery,
-    TermQuery,
+    AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, Occur, PhraseQuery, Query,
+    RangeQuery, TermQuery,
 };
 use tantivy::schema::{
     FAST, Field, INDEXED, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing,
@@ -25,6 +25,61 @@ use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer, TokenStream}
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
 const MAX_WINDOW: usize = 10_000;
+
+/// How much a plural or singular form of a searched word counts against the
+/// exact spelling.
+const OTHER_FORM_WEIGHT: f32 = 0.8;
+
+/// How much searched words appearing side by side add, against the words'
+/// own scores (see `Engine::adjacent`).
+const ADJACENT_WEIGHT: f32 = 1.0;
+
+/// The singular and plural of an English word, as far as a suffix can tell.
+/// Deliberately small: no stemming, so `run` never matches `running` and
+/// the index needs no rebuild. Only plain lowercase words of three letters
+/// or more; names, numbers and code keep their exact spelling.
+fn word_forms(word: &str) -> Vec<String> {
+    // Words that end in "s" without being plurals of anything worth finding.
+    const NOT_PLURAL: [&str; 8] = [
+        "news",
+        "series",
+        "species",
+        "always",
+        "perhaps",
+        "sometimes",
+        "whereas",
+        "towards",
+    ];
+    if word.len() < 3 || !word.bytes().all(|c| c.is_ascii_lowercase()) || NOT_PLURAL.contains(&word)
+    {
+        return Vec::new();
+    }
+    let sibilant = ["s", "x", "z", "ch", "sh"];
+    if let Some(stem) = word.strip_suffix("ies").filter(|stem| stem.len() > 1) {
+        return vec![format!("{stem}y")];
+    }
+    if let Some(stem) = word.strip_suffix("es")
+        && sibilant.iter().any(|end| stem.ends_with(end))
+    {
+        return vec![stem.to_owned()];
+    }
+    // A stem under three letters is a word like "its", "has" or "was".
+    if let Some(stem) = word.strip_suffix('s')
+        && stem.len() >= 3
+        && !["s", "u", "i"].iter().any(|end| stem.ends_with(end))
+    {
+        return vec![stem.to_owned()];
+    }
+    if sibilant.iter().any(|end| word.ends_with(end)) {
+        return vec![format!("{word}es")];
+    }
+    if let Some(stem) = word.strip_suffix('y')
+        && !stem.ends_with(['a', 'e', 'i', 'o', 'u'])
+    {
+        return vec![format!("{stem}ies")];
+    }
+    vec![format!("{word}s")]
+}
 
 fn started(enabled: bool) -> Option<Instant> {
     enabled.then(Instant::now)
@@ -264,6 +319,59 @@ impl Engine {
         u64::try_from(count).map_err(|_| Error::Invalid("Author count overflowed u64.".into()))
     }
 
+    /// One searched word, matching its singular and plural too: `ssd` finds
+    /// "SSDs" and `batteries` finds "battery". The exact spelling scores a
+    /// little higher. Quoted words stay exact.
+    fn word(&self, term: Term) -> Box<dyn Query> {
+        let forms = term.value().as_str().map(word_forms).unwrap_or_default();
+        let exact = Box::new(TermQuery::new(term, IndexRecordOption::WithFreqs));
+        if forms.is_empty() {
+            return exact;
+        }
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Should, exact)];
+        for form in forms {
+            clauses.push((
+                Occur::Should,
+                Box::new(BoostQuery::new(
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.fields.text, &form),
+                        IndexRecordOption::WithFreqs,
+                    )),
+                    OTHER_FORM_WEIGHT,
+                )),
+            ));
+        }
+        Box::new(BooleanQuery::new(clauses))
+    }
+
+    /// For each run of plain words typed side by side (`local first`), an
+    /// optional phrase that scores posts using them side by side above
+    /// posts that merely contain them somewhere. It never changes which
+    /// posts match.
+    fn adjacent<'a>(&self, children: &'a [Expr]) -> impl Iterator<Item = Box<dyn Query>> + 'a {
+        let fields = self.fields;
+        children
+            .chunk_by(|a, b| matches!(a, Expr::Term(_)) && matches!(b, Expr::Term(_)))
+            .filter(|run| run.len() > 1 && matches!(run.first(), Some(Expr::Term(_))))
+            .filter_map(move |run| {
+                let mut analyzer = analyzer();
+                let mut terms = Vec::new();
+                for word in run {
+                    let Expr::Term(word) = word else { return None };
+                    let mut stream = analyzer.token_stream(word);
+                    while stream.advance() {
+                        terms.push(Term::from_field_text(fields.text, &stream.token().text));
+                    }
+                }
+                (terms.len() > 1).then(|| -> Box<dyn Query> {
+                    Box::new(BoostQuery::new(
+                        Box::new(PhraseQuery::new(terms)),
+                        ADJACENT_WEIGHT,
+                    ))
+                })
+            })
+    }
+
     fn compile(&self, expression: &Expr) -> Result<Box<dyn Query>> {
         match expression {
             Expr::Term(text) | Expr::Phrase(text) => {
@@ -279,18 +387,22 @@ impl Engine {
                 if terms.is_empty() {
                     return Ok(Box::new(EmptyQuery));
                 }
-                if matches!(expression, Expr::Phrase(_)) && terms.len() > 1 {
-                    return Ok(Box::new(PhraseQuery::new(terms)));
+                if matches!(expression, Expr::Phrase(_)) {
+                    if terms.len() > 1 {
+                        return Ok(Box::new(PhraseQuery::new(terms)));
+                    }
+                    return Ok(Box::new(BooleanQuery::new(vec![(
+                        Occur::Must,
+                        Box::new(TermQuery::new(
+                            terms.swap_remove(0),
+                            IndexRecordOption::WithFreqs,
+                        )),
+                    )])));
                 }
                 Ok(Box::new(BooleanQuery::new(
                     terms
                         .into_iter()
-                        .map(|term| -> (Occur, Box<dyn Query>) {
-                            (
-                                Occur::Must,
-                                Box::new(TermQuery::new(term, IndexRecordOption::WithFreqs)),
-                            )
-                        })
+                        .map(|term| (Occur::Must, self.word(term)))
                         .collect(),
                 )))
             }
@@ -321,11 +433,14 @@ impl Engine {
                 } else {
                     Occur::Should
                 };
-                let children = children
+                let mut clauses = children
                     .iter()
                     .map(|child| self.compile(child).map(|query| (occur, query)))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Box::new(BooleanQuery::new(children)))
+                if occur == Occur::Must {
+                    clauses.extend(self.adjacent(children).map(|query| (Occur::Should, query)));
+                }
+                Ok(Box::new(BooleanQuery::new(clauses)))
             }
             Expr::Not(child) => Ok(Box::new(BooleanQuery::new(vec![
                 (
@@ -374,12 +489,12 @@ impl IndexSink for Writer {
             self.fields.author,
             search_query::normalize_author(&post.author)?,
         );
-        document.add_text(self.fields.text, &post.text);
+        document.add_text(self.fields.text, post.body());
         document.add_text(
             self.fields.post,
             serde_json::to_string(post).map_err(storage)?,
         );
-        document.add_f64(self.fields.engagement, search_ranking::engagement(post));
+        document.add_f64(self.fields.engagement, search_ranking::prior(post));
         if let Some(time) = post.created_at {
             document.add_i64(self.fields.created, time);
         }
@@ -396,6 +511,26 @@ impl IndexSink for Writer {
         self.inner()?.commit().map_err(storage)?;
         Ok(())
     }
+}
+
+/// The ranked page, plus on the first page how many posts match in all.
+/// Counting rides the same pass over the matches, so it costs little.
+fn collect<C>(
+    searcher: &tantivy::Searcher,
+    query: &dyn Query,
+    collector: C,
+    offset: usize,
+) -> Result<(Option<u64>, C::Fruit)>
+where
+    C: tantivy::collector::Collector,
+{
+    if offset > 0 {
+        return Ok((None, searcher.search(query, &collector).map_err(storage)?));
+    }
+    let (count, hits) = searcher
+        .search(query, &(Count, collector))
+        .map_err(storage)?;
+    Ok((Some(u64::try_from(count).unwrap_or(u64::MAX)), hits))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -469,7 +604,7 @@ impl Engine {
                 sort: request.sort,
                 now,
             });
-        let hits = searcher.search(&query, &collector).map_err(storage)?;
+        let (total, hits) = collect(&searcher, query.as_ref(), collector, offset)?;
         let more = hits.len() > page_limit;
         let rows = hits
             .into_iter()
@@ -503,6 +638,7 @@ impl Engine {
         };
         Ok(SearchResponse {
             rows,
+            total,
             next_cursor,
             warnings,
             stats: None,
@@ -551,7 +687,7 @@ impl SearchBackend for Engine {
                 now,
             });
         let stage = started(true);
-        let hits = searcher.search(&query, &collector).map_err(storage)?;
+        let (total, hits) = collect(&searcher, query.as_ref(), collector, offset)?;
         backend.retrieve_us = elapsed_us(stage);
         backend.candidate_hits = u64::try_from(hits.len()).unwrap_or(u64::MAX);
         backend.ranking_calls = backend.candidate_hits;
@@ -594,6 +730,7 @@ impl SearchBackend for Engine {
         backend.total_us = elapsed_us(stats_started);
         Ok(SearchResponse {
             rows,
+            total,
             next_cursor,
             warnings,
             stats: Some(SearchStats { backend, api: None }),

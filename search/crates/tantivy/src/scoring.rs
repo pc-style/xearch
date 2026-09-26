@@ -41,6 +41,17 @@ impl SortKeyComputer for Ranking {
     }
 }
 
+/// An `f64` as a `u64` that sorts the same way, negatives included (the
+/// raw bits of a negative float sort backwards and above every positive).
+const fn ordered_f64(value: f64) -> u64 {
+    let bits = value.to_bits();
+    if value.is_sign_negative() {
+        !bits
+    } else {
+        bits | (1 << 63)
+    }
+}
+
 impl SegmentSortKeyComputer for SegmentRanking {
     type SortKey = Key;
     type SegmentSortKey = Key;
@@ -48,17 +59,21 @@ impl SegmentSortKeyComputer for SegmentRanking {
     fn segment_sort_key(&mut self, doc: DocId, score: Score) -> Key {
         let created = self.created.first(doc);
         let (present, value) = match self.sort {
-            Sort::Relevance => (true, f64::from(score.max(0.0)).to_bits()),
-            Sort::Engagement => (
-                true,
-                search_ranking::blended(
+            Sort::Relevance | Sort::Engagement => {
+                let weights = if self.sort == Sort::Relevance {
+                    search_ranking::RELEVANT
+                } else {
+                    search_ranking::POPULAR
+                };
+                let value = search_ranking::score(
+                    weights,
                     score,
                     self.engagement.first(doc).unwrap_or(0.0),
                     created,
                     self.now,
-                )
-                .to_bits(),
-            ),
+                );
+                (true, ordered_f64(value))
+            }
             Sort::Likes => {
                 let likes = self.likes.first(doc);
                 (likes.is_some(), likes.unwrap_or(0))

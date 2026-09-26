@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#080808" />
+    <!-- X's media hosts refuse videos requested with another site's Referer,
+         and a <video> cannot opt out on its own (src/PostEmbeds.tsx). -->
+    <meta name="referrer" content="no-referrer" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <meta

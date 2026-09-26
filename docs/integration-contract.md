@@ -95,7 +95,7 @@ Set `SEARCH_API_URL` to the exact retrieval endpoint and `SEARCH_SERVICE_TOKEN` 
 }
 ```
 
-Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. Omitted author means all indexed accounts. The provider owns the cursor and its relationship to query and sort. The Rust API returns HTTP 409 Conflict for a stale cursor; on a paginated request the app asks the user to restart the search rather than treating it as a service outage.
+Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. How `relevance` and `engagement` weigh the text match against engagement and freshness is described in `search/crates/ranking/src/lib.rs`. Omitted author means all indexed accounts. The provider owns the cursor and its relationship to query and sort. `total` counts every post the query matches and is present on the first page only; `replyTo`, `media`, `card` and `quote` are absent on posts indexed before the service kept them. The Rust API returns HTTP 409 Conflict for a stale cursor; on a paginated request the app asks the user to restart the search rather than treating it as a service outage.
 
 ```json
 {
@@ -111,9 +111,36 @@ Sort values: `relevance`, `engagement`, `likes`, `newest`, `oldest`. Omitted aut
       "replies": 1,
       "links": ["https://example.com/article"],
       "displayName": "Theo",
-      "avatar": "https://example.com/avatar.jpg"
+      "avatar": "https://example.com/avatar.jpg",
+      "replyTo": "optional handle this post replies to",
+      "media": [
+        {
+          "kind": "photo | video | gif",
+          "image": "https://pbs.twimg.com/media/example.jpg",
+          "video": "optional https MP4 for a video or GIF",
+          "width": 1200,
+          "height": 675,
+          "alt": "optional alt text"
+        }
+      ],
+      "card": {
+        "url": "https://example.com/article",
+        "title": "Link preview title",
+        "description": "optional",
+        "domain": "optional example.com",
+        "image": "optional https image"
+      },
+      "quote": {
+        "url": "https://x.com/someone/status/122",
+        "author": "someone",
+        "displayName": "optional",
+        "text": "The quoted post's text",
+        "createdAt": 1789770000000,
+        "image": "optional first image"
+      }
     }
   ],
+  "total": 43,
   "nextCursor": "optional",
   "warnings": [],
   "stats": {

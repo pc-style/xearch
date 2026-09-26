@@ -321,3 +321,103 @@ fn a_search_sees_a_commit_made_after_the_previous_search() {
     }
     assert_eq!(all(&engine, request("hello")).unwrap().len(), 2);
 }
+
+#[test]
+fn plurals_match_totals_count_and_side_by_side_words_rank_first() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    for post in [
+        post(1, "my new ssd"),
+        post(2, "cheap SSDs today"),
+        post(3, "two batteries"),
+        post(4, "first we went local"),
+        post(5, "local first apps"),
+        post(6, "the news today"),
+        post(7, "something new"),
+    ] {
+        writer.upsert(&post).unwrap();
+    }
+    writer.commit().unwrap();
+    let ids = |query: &str| {
+        all(&engine, request(query))
+            .unwrap()
+            .iter()
+            .map(|p| p.tweet_id.to_string())
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(ids("ssd"), BTreeSet::from(["1".into(), "2".into()]));
+    assert_eq!(ids("ssds"), BTreeSet::from(["1".into(), "2".into()]));
+    assert_eq!(ids("battery"), BTreeSet::from(["3".into()]));
+    // Quoted words and non-plurals stay exact.
+    assert_eq!(ids("\"ssds\""), BTreeSet::from(["2".into()]));
+    assert_eq!(ids("news"), BTreeSet::from(["6".into()]));
+
+    let expr = search_query::parse("local first", None).unwrap();
+    let mut first_page = request("local first");
+    first_page.limit = 1;
+    let response = engine
+        .search(&expr, &first_page, 1_800_000_000_000)
+        .unwrap();
+    assert_eq!(response.total, Some(2));
+    assert_eq!(response.rows[0].tweet_id.to_string(), "5");
+    first_page.cursor = response.next_cursor;
+    let next = engine
+        .search(&expr, &first_page, 1_800_000_000_000)
+        .unwrap();
+    assert_eq!(next.total, None, "only the first page counts");
+}
+
+#[test]
+fn replies_to_others_rank_below_equal_posts() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    let mut reply = post(1, "rust is fast");
+    reply.likes = Some(10);
+    reply.reply_to = Some("bob".into());
+    let mut own = post(2, "rust is fast");
+    own.likes = Some(10);
+    let mut thread = post(3, "rust is fast");
+    thread.likes = Some(10);
+    thread.reply_to = Some("alice".into());
+    for post in [reply, own, thread] {
+        writer.upsert(&post).unwrap();
+    }
+    writer.commit().unwrap();
+    let order = all(&engine, request("rust"))
+        .unwrap()
+        .iter()
+        .map(|p| p.tweet_id.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(order.last().map(String::as_str), Some("1"));
+}
+
+#[test]
+fn reply_handles_are_not_searched_and_thin_posts_rank_last() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    // Only the reply chain says "beyang": not a match.
+    let mut chain = post(1, "@beyang @theo nice");
+    chain.reply_to = Some("beyang".into());
+    // Named in what the author wrote: a match.
+    let mut named = post(2, "@sqs ask beyang about it");
+    named.reply_to = Some("sqs".into());
+    // The same words, but one says almost nothing.
+    let thin = post(3, "rust lol");
+    let full = post(4, "rust compile times are fine now");
+    for post in [chain, named, thin, full] {
+        writer.upsert(&post).unwrap();
+    }
+    writer.commit().unwrap();
+    let ids = |query| {
+        all(&engine, request(query))
+            .unwrap()
+            .iter()
+            .map(|p| p.tweet_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids("beyang"), ["2"]);
+    assert_eq!(ids("rust"), ["4", "3"]);
+}

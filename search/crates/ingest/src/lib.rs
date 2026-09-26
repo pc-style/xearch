@@ -1,6 +1,6 @@
 //! Replayable imports: retain exact input bytes, stream posts, commit, then receipt.
 use search_backend::IndexSink;
-use search_model::{Error, Post, Result, TweetId};
+use search_model::{Card, Error, Media, MediaKind, Post, Quote, Result, TweetId};
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
@@ -305,6 +305,7 @@ pub fn normalize(value: &Value) -> Result<Post> {
         .filter(|s| s.starts_with("https://"))
         .map(str::to_owned)
         .collect();
+    let reply_to = reply_to(value, &author, &text);
     Ok(Post {
         url: format!("https://x.com/{author}/status/{tweet_id}"),
         tweet_id: TweetId(numeric),
@@ -328,5 +329,130 @@ pub fn normalize(value: &Value) -> Result<Post> {
             .and_then(Value::as_str)
             .filter(|s| s.starts_with("https://"))
             .map(str::to_owned),
+        views: value.get("views").and_then(Value::as_u64),
+        bookmarks: value
+            .get("bookmarks")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok()),
+        reply_to,
+        media: media(value),
+        card: card(value),
+        quote: quote(value),
+    })
+}
+
+/// An https URL string at `key`, or nothing. Every URL the app renders
+/// passes through here, so nothing else can reach an `<img>` or `<video>`.
+fn https(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| s.starts_with("https://") && s.len() <= 2048)
+        .map(str::to_owned)
+}
+
+fn text(value: &Value, key: &str, limit: usize) -> Option<String> {
+    let text = value.get(key)?.as_str()?.trim();
+    (!text.is_empty()).then(|| text.chars().take(limit).collect())
+}
+
+fn dimension(value: &Value, key: &str) -> Option<u32> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0)
+}
+
+/// The handle a reply answers. Newer captures carry `replying_to`; older
+/// ones only the replied-to status id, so the handle comes from the @mention
+/// a reply's text starts with — or, with none, the reply continues the
+/// author's own thread.
+fn reply_to(value: &Value, author: &str, text: &str) -> Option<String> {
+    if let Some(handle) = value
+        .get("replying_to")
+        .and_then(|reply| reply.get("screen_name"))
+        .and_then(Value::as_str)
+    {
+        return search_query::normalize_author(handle).ok();
+    }
+    let replied = value
+        .get("replying_to_status")
+        .and_then(Value::as_array)
+        .is_some_and(|ids| !ids.is_empty());
+    if !replied {
+        return None;
+    }
+    let mention = text
+        .strip_prefix('@')
+        .and_then(|rest| {
+            rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .next()
+        })
+        .and_then(|handle| search_query::normalize_author(handle).ok());
+    Some(mention.unwrap_or_else(|| author.to_owned()))
+}
+
+/// Photos, videos and GIFs, at most four as on X. Malformed entries are
+/// skipped rather than rejecting the post: media is decoration, not identity.
+fn media(value: &Value) -> Vec<Media> {
+    value
+        .get("media")
+        .and_then(|media| media.get("all"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let kind = match item.get("type").and_then(Value::as_str)? {
+                "photo" => MediaKind::Photo,
+                "video" => MediaKind::Video,
+                "gif" | "animated_gif" => MediaKind::Gif,
+                _ => return None,
+            };
+            let image = if kind == MediaKind::Photo {
+                https(item, "url")?
+            } else {
+                https(item, "thumbnail_url")?
+            };
+            Some(Media {
+                kind,
+                image,
+                video: (kind != MediaKind::Photo)
+                    .then(|| https(item, "url"))
+                    .flatten(),
+                width: dimension(item, "width"),
+                height: dimension(item, "height"),
+                alt: text(item, "altText", 1000).or_else(|| text(item, "alt", 1000)),
+            })
+        })
+        .take(4)
+        .collect()
+}
+
+fn card(value: &Value) -> Option<Card> {
+    let card = value.get("card")?;
+    Some(Card {
+        url: https(card, "url")?,
+        title: text(card, "title", 300)?,
+        description: text(card, "description", 500),
+        domain: text(card, "domain", 253),
+        image: card.get("image").and_then(|image| https(image, "url")),
+    })
+}
+
+fn quote(value: &Value) -> Option<Quote> {
+    let quote = value.get("quote")?;
+    let author = quote.get("author")?;
+    Some(Quote {
+        url: https(quote, "url")?,
+        author: search_query::normalize_author(author.get("screen_name")?.as_str()?).ok()?,
+        display_name: text(author, "name", 100),
+        text: text(quote, "text", 2000).unwrap_or_default(),
+        created_at: quote
+            .get("created_timestamp")
+            .and_then(Value::as_i64)
+            .filter(|n| *n >= 0)
+            .and_then(|n| n.checked_mul(1000)),
+        image: media(quote).into_iter().next().map(|media| media.image),
     })
 }

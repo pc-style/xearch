@@ -141,3 +141,65 @@ fn null_expanded_url_does_not_shadow_valid_url() {
     let receipt = search_ingest::import(input.path(), &root.path().join("raw"), writer).unwrap();
     assert_eq!(receipt.accepted, 1);
 }
+
+#[test]
+fn embeds_and_replies_are_kept() {
+    let post = search_ingest::normalize(&serde_json::json!({
+        "id": "10",
+        "text": "@bob look at this",
+        "author": {"id": "7", "screen_name": "Alice"},
+        "replying_to": {"screen_name": "Bob", "status": "9"},
+        "views": 5_000_000_000_u64,
+        "bookmarks": 4,
+        "media": {"all": [
+            {"type": "photo", "url": "https://pbs.twimg.com/media/a.jpg", "width": 1200, "height": 675, "altText": "A chart"},
+            {"type": "video", "url": "https://video.twimg.com/v.mp4", "thumbnail_url": "https://pbs.twimg.com/t.jpg"},
+            {"type": "photo", "url": "http://insecure.example/a.jpg"},
+            {"type": "sticker", "url": "https://pbs.twimg.com/s.png"}
+        ]},
+        "card": {"url": "https://example.com/post", "title": "A post", "domain": "example.com", "image": {"url": "https://pbs.twimg.com/card.jpg"}},
+        "quote": {"url": "https://x.com/carol/status/8", "text": "quoted", "author": {"screen_name": "Carol", "name": "Carol C"}, "media": {"all": [{"type": "photo", "url": "https://pbs.twimg.com/q.jpg"}]}}
+    }))
+    .unwrap();
+    assert_eq!(post.reply_to.as_deref(), Some("bob"));
+    assert!(post.replies_to_other());
+    assert_eq!(post.views, Some(5_000_000_000));
+    assert_eq!(post.bookmarks, Some(4));
+    assert_eq!(
+        post.media.len(),
+        2,
+        "insecure and unknown media are dropped"
+    );
+    assert_eq!(post.media[0].alt.as_deref(), Some("A chart"));
+    assert_eq!(post.media[1].image, "https://pbs.twimg.com/t.jpg");
+    assert_eq!(
+        post.media[1].video.as_deref(),
+        Some("https://video.twimg.com/v.mp4")
+    );
+    let card = post.card.unwrap();
+    assert_eq!(
+        card.image.as_deref(),
+        Some("https://pbs.twimg.com/card.jpg")
+    );
+    let quote = post.quote.unwrap();
+    assert_eq!(
+        (quote.author.as_str(), quote.image.as_deref()),
+        ("carol", Some("https://pbs.twimg.com/q.jpg"))
+    );
+
+    // Older captures name only the replied-to status: the handle comes from
+    // the text, and a reply without a leading mention continues a thread.
+    let older = |text: &str| {
+        search_ingest::normalize(&serde_json::json!({
+            "id": "11", "text": text, "author": {"id": "7", "screen_name": "alice"},
+            "replying_to_status": ["9"]
+        }))
+        .unwrap()
+    };
+    assert_eq!(older("@Dave yes").reply_to.as_deref(), Some("dave"));
+    assert_eq!(
+        older("and another thing").reply_to.as_deref(),
+        Some("alice")
+    );
+    assert!(!older("and another thing").replies_to_other());
+}

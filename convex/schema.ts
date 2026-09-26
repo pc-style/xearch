@@ -10,6 +10,17 @@ export const sortValidator = v.union(
   v.literal("oldest"),
 );
 
+/** A photo, video or GIF attached to a post. `image` is the photo or the
+ * still shown before a video plays; `video` is the MP4. */
+export const mediaFields = {
+  kind: v.union(v.literal("photo"), v.literal("video"), v.literal("gif")),
+  image: v.string(),
+  video: v.optional(v.string()),
+  width: v.optional(v.number()),
+  height: v.optional(v.number()),
+  alt: v.optional(v.string()),
+};
+
 export const postFields = {
   tweetId: v.string(),
   author: v.string(),
@@ -22,6 +33,29 @@ export const postFields = {
   links: v.array(v.string()),
   avatar: v.optional(v.string()),
   displayName: v.optional(v.string()),
+  // Embeds. Optional: posts indexed before the search service kept them,
+  // and posts stored in bookmarks or the wall before then, have none.
+  replyTo: v.optional(v.string()),
+  media: v.optional(v.array(v.object(mediaFields))),
+  card: v.optional(
+    v.object({
+      url: v.string(),
+      title: v.string(),
+      description: v.optional(v.string()),
+      domain: v.optional(v.string()),
+      image: v.optional(v.string()),
+    }),
+  ),
+  quote: v.optional(
+    v.object({
+      url: v.string(),
+      author: v.string(),
+      displayName: v.optional(v.string()),
+      text: v.string(),
+      createdAt: v.optional(v.number()),
+      image: v.optional(v.string()),
+    }),
+  ),
 };
 
 export const backendStatsFields = {
@@ -498,6 +532,8 @@ export default defineSchema({
       v.literal("failed"),
     ),
     rows: v.array(v.object(postFields)),
+    // How many posts match in all. Only the first page carries it.
+    total: v.optional(v.number()),
     nextCursor: v.optional(v.string()),
     warnings: v.array(v.string()),
     stats: v.optional(v.object(searchStatsFields)),
