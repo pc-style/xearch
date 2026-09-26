@@ -5,6 +5,9 @@ export type ShellState = {
   typed: string;
   focused: boolean;
   submitted: boolean;
+  /** The sort and "Stats for nerds" choices, which a replayed search uses. */
+  sort: string;
+  stats: boolean;
 };
 
 /**
@@ -19,6 +22,8 @@ export function captureShell(root: ParentNode): ShellState {
     typed: query?.value ?? "",
     focused: query !== null && query.ownerDocument.activeElement === query,
     submitted: form?.dataset.submitted === "1",
+    sort: form?.querySelector<HTMLSelectElement>("select.sort")?.value ?? "",
+    stats: form?.querySelector<HTMLInputElement>(".opts input[type=checkbox]")?.checked ?? false,
   };
 }
 
@@ -27,6 +32,19 @@ export function replayShell(state: ShellState, root: ParentNode): void {
   const query = root.querySelector<HTMLInputElement>("#query");
 
   if (!query) return;
+
+  // The controls first: with the box still empty, a sort change only sets
+  // the sort rather than searching.
+  const sort = query.form?.querySelector<HTMLSelectElement>("select.sort");
+
+  if (sort && state.sort && sort.value !== state.sort) {
+    sort.value = state.sort;
+    sort.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  const stats = query.form?.querySelector<HTMLInputElement>(".opts input[type=checkbox]");
+
+  if (stats && stats.checked !== state.stats) stats.click();
 
   if (state.typed) {
     query.value = state.typed;
