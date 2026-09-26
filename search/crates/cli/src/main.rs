@@ -262,7 +262,7 @@ async fn run_serve(index: &std::path::Path, listen: SocketAddr) -> color_eyre::R
     );
     let key = std::env::var("SEARCH_LOCAL_SIGNING_KEY")?.into_bytes();
     let bearer = std::env::var("SEARCH_SERVICE_TOKEN")?.into_bytes();
-    let engine = Arc::new(search_tantivy::open(index, false)?);
+    let engine = Arc::new(search_tantivy::open_for_serving(index)?);
     let app = search_api::router(engine, key, bearer)?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     eprintln!("Search listening on {listen}");

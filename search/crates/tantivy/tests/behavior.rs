@@ -421,3 +421,26 @@ fn reply_handles_are_not_searched_and_thin_posts_rank_last() {
     assert_eq!(ids("beyang"), ["2"]);
     assert_eq!(ids("rust"), ["4", "3"]);
 }
+
+#[test]
+fn a_serving_engine_picks_up_commits_in_the_background() {
+    let directory = tempfile::tempdir().unwrap();
+    // Create the index, as the indexer would.
+    let indexer = search_tantivy::open(directory.path(), true).unwrap();
+    let mut writer = indexer.writer().unwrap();
+    writer.upsert(&post(1, "rust")).unwrap();
+    writer.commit().unwrap();
+    let server = search_tantivy::open_for_serving(directory.path()).unwrap();
+    assert_eq!(all(&server, request("rust")).unwrap().len(), 1);
+    writer.upsert(&post(2, "rust again")).unwrap();
+    writer.commit().unwrap();
+    // Tantivy polls meta.json every 500 ms.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while all(&server, request("rust")).unwrap().len() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "commit never showed up"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
