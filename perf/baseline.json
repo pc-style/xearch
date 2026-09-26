@@ -131,9 +131,9 @@
       "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
     },
     "load.main-thread-blocking": {
-      "value": 108,
+      "value": 65,
       "unit": "ms",
-      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+      "commit": "553d5c3b793f02aacad29a9ec21549fb1b7f3c83"
     },
     "operator.all-js": {
       "value": 85266,
@@ -151,29 +151,29 @@
       "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
     },
     "search.\"to be or not to be\"": {
-      "value": 83568,
+      "value": 53587,
       "unit": "ns",
-      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+      "commit": "553d5c3b793f02aacad29a9ec21549fb1b7f3c83"
     },
     "search.from:alice": {
-      "value": 149204,
+      "value": 84801,
       "unit": "ns",
-      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+      "commit": "553d5c3b793f02aacad29a9ec21549fb1b7f3c83"
     },
     "search.rust disk": {
-      "value": 65599,
+      "value": 37296,
       "unit": "ns",
-      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+      "commit": "553d5c3b793f02aacad29a9ec21549fb1b7f3c83"
     },
     "search.the": {
-      "value": 142591,
+      "value": 83548,
       "unit": "ns",
-      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+      "commit": "553d5c3b793f02aacad29a9ec21549fb1b7f3c83"
     },
     "search.the -rust": {
-      "value": 175639,
+      "value": 104869,
       "unit": "ns",
-      "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
+      "commit": "553d5c3b793f02aacad29a9ec21549fb1b7f3c83"
     }
   }
 }
