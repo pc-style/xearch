@@ -18,7 +18,8 @@
  * did not cause; the baseline shows when small regressions have added up.
  */
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 const THRESHOLD = 0.1;
 
@@ -249,6 +250,8 @@ async function updateBaseline() {
   baseline.metrics = Object.fromEntries(
     Object.entries(baseline.metrics).toSorted(([a], [b]) => a.localeCompare(b)),
   );
+  // The first baseline creates its directory.
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(baseline, null, 2)}\n`);
   console.log(changed.join("\n"));
 }
