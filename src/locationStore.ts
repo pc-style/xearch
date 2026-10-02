@@ -252,6 +252,9 @@ function navigate(mode: "pushState" | "replaceState", patch: LocationPatch): voi
 /** The operator dashboard's address. Each tab has its own path below it. */
 export const OPS_PATH = "/ops";
 
+/** Adam's Jev search (src/jev), operator build only. */
+export const JEV_PATH = "/pc-jev";
+
 /** The dashboard's tabs, in nav order. "overview" lives at `OPS_PATH` itself. */
 export const OPS_TABS = [
   "overview",

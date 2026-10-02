@@ -5,7 +5,7 @@ import * as z from "zod/mini";
  * `undefined` object properties so object-literal test fixtures that omit an
  * optional field (inferred by TypeScript as `?: undefined`) satisfy it too.
  */
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json | undefined };
+export type Json = string | number | boolean | null | Json[] | { [key: string]: Json | undefined };
 
 // zod/mini rather than zod: every search query loads this module, and the
 // full `zod` namespace is ~450KB of bundle the Convex isolate has to parse on
