@@ -245,6 +245,40 @@ describe("jobs.finish schedules the deep-history backfill", () => {
 
     expect(backfills).toHaveLength(1);
   });
+
+  it("starts after the timeline's own run of posts, not a pinned post months before it", async () => {
+    const { t, owner } = await setup();
+    const jobId = await insertBulkJob(t, owner);
+
+    // Earlier pages reached July 11; the last page held only a pinned post.
+    await t.run((ctx) => ctx.db.patch(jobId, { oldest: "2026-07-11T01:08:34.000Z" }));
+    await t.mutation(internal.jobs.finish, {
+      jobId,
+      attempt: 1,
+      warnings: [],
+      postsReceived: 1,
+      newest: "2026-03-30T03:03:36.000Z",
+      oldest: "2026-03-30T03:03:36.000Z",
+      floorReached: true,
+      expectedUserId: "123",
+      profile: { handle: "theo", userId: "123", name: "Theo", joined: FLOOR },
+    });
+
+    expect(await t.run((ctx) => ctx.db.get(jobId))).toMatchObject({
+      oldest: "2026-07-11T01:08:34.000Z",
+    });
+
+    const account = await t.run((ctx) =>
+      ctx.db
+        .query("accounts")
+        .withIndex("by_user_id", (q) => q.eq("userId", "123"))
+        .unique(),
+    );
+
+    expect(await historyJobsFor(t, account!._id)).toEqual([
+      expect.objectContaining({ until: "2026-07-12" }),
+    ]);
+  });
 });
 
 describe("a history-window job's own finish drives the backfill forward", () => {
@@ -306,6 +340,62 @@ describe("a history-window job's own finish drives the backfill forward", () => 
       until: expectedNext.until,
       status: "queued",
     });
+  });
+
+  it("resumes from the oldest post when x.md stopped paging before the window's start", async () => {
+    const { t, owner } = await setup();
+    const { accountId, jobId } = await seedRunningBackfill(t, owner);
+
+    await t.mutation(internal.jobs.finish, {
+      jobId,
+      attempt: 1,
+      warnings: [],
+      postsReceived: 40,
+      newest: "2020-12-01T09:00:00.000Z",
+      oldest: "2020-11-20T05:00:00.000Z",
+    });
+
+    expect(await backfillFor(t, accountId)).toMatchObject({
+      status: "running",
+      windowDays: 30,
+      cursorUntil: "2020-10-22",
+    });
+    const scheduled = (await historyJobsFor(t, accountId)).find((j) => j._id !== jobId);
+
+    expect(scheduled).toMatchObject({ since: "2020-10-22", until: "2020-11-21" });
+  });
+
+  it("keeps walking when the window reaching the joined date was cut short", async () => {
+    const { t, owner } = await setup();
+    const accountId = await insertAccount(t);
+
+    await t.run((ctx) =>
+      ctx.db.insert("historyBackfills", {
+        accountId,
+        handle: "theo",
+        owner,
+        since: FLOOR,
+        cursorUntil: FLOOR,
+        windowDays: 30,
+        postsFound: 0,
+        status: "running",
+        updatedAt: Date.now(),
+      }),
+    );
+    const jobId = await insertWindowJob(t, owner, accountId, FLOOR, addDaysUTC(FLOOR, 20));
+
+    await t.mutation(internal.jobs.finish, {
+      jobId,
+      attempt: 1,
+      warnings: [],
+      postsReceived: 20,
+      oldest: `${addDaysUTC(FLOOR, 10)}T08:00:00.000Z`,
+    });
+
+    expect(await backfillFor(t, accountId)).toMatchObject({ status: "running" });
+    const scheduled = (await historyJobsFor(t, accountId)).find((j) => j._id !== jobId);
+
+    expect(scheduled).toMatchObject({ since: FLOOR, until: addDaysUTC(FLOOR, 11) });
   });
 
   it("an empty window widens the next window ×4", async () => {
@@ -391,6 +481,64 @@ describe("a history-window job's own finish drives the backfill forward", () => 
       error: "x.md could not finish this request (500).",
     });
     expect(await historyJobsFor(t, accountId)).toHaveLength(1);
+  });
+});
+
+describe("jobs.restartHistoryBackfill", () => {
+  it("walks a finished backfill again from the given date", async () => {
+    const { t, owner } = await setup();
+    const accountId = await insertAccount(t);
+
+    const backfillId = await t.run((ctx) =>
+      ctx.db.insert("historyBackfills", {
+        accountId,
+        handle: "theo",
+        owner,
+        since: FLOOR,
+        cursorUntil: FLOOR,
+        windowDays: 365,
+        postsFound: 30_000,
+        status: "complete",
+        updatedAt: Date.now(),
+      }),
+    );
+
+    await t.mutation(internal.jobs.restartHistoryBackfill, {
+      handle: "@Theo",
+      until: "2026-07-12",
+    });
+
+    expect(await t.run((ctx) => ctx.db.get(backfillId))).toMatchObject({
+      status: "running",
+      windowDays: 30,
+      cursorUntil: "2026-06-12",
+    });
+    expect(await historyJobsFor(t, accountId)).toEqual([
+      expect.objectContaining({ since: "2026-06-12", until: "2026-07-12", status: "queued" }),
+    ]);
+  });
+
+  it("refuses while the backfill is still running", async () => {
+    const { t, owner } = await setup();
+    const accountId = await insertAccount(t);
+
+    await t.run((ctx) =>
+      ctx.db.insert("historyBackfills", {
+        accountId,
+        handle: "theo",
+        owner,
+        since: FLOOR,
+        cursorUntil: "2020-01-01",
+        windowDays: 30,
+        postsFound: 0,
+        status: "running",
+        updatedAt: Date.now(),
+      }),
+    );
+
+    await expect(
+      t.mutation(internal.jobs.restartHistoryBackfill, { handle: "theo", until: "2026-07-12" }),
+    ).rejects.toThrow("still running");
   });
 });
 

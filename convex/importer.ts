@@ -79,6 +79,7 @@ export const run = internalAction({
         attempt: job.attempt,
         warnings: result.warnings,
         postsReceived: result.postsReceived,
+        newest: result.newest,
         oldest: result.oldest,
         floorReached: result.floorReached,
         expectedUserId: result.expectedUserId,

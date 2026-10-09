@@ -223,6 +223,7 @@ export const report = action({
     // as a transient provider error, even a permanent 4xx.
     retryable: v.optional(v.boolean()),
     postsReceived: v.optional(v.number()),
+    newest: v.optional(v.string()),
     oldest: v.optional(v.string()),
     floorReached: v.optional(v.boolean()),
     nextUntil: v.optional(v.string()),
@@ -309,6 +310,7 @@ export const report = action({
         retryAfter: args.retryAfter,
         retryable: args.retryable,
         postsReceived: args.postsReceived,
+        newest: args.newest,
         oldest: args.oldest,
         floorReached: args.floorReached,
         nextUntil: args.nextUntil,

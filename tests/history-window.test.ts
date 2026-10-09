@@ -5,9 +5,10 @@ import {
   addDaysUTC,
   computeWindow,
   historyWindowQuery,
-  isFinalWindow,
   nextWindowDays,
+  resumeUntil,
 } from "../convex/lib/historyWindow";
+import { postSpan } from "../convex/lib/collect";
 
 describe("canonicalQuery with allowDateWindow (deep-history backfill)", () => {
   it("accepts from:<handle> since:<date> until:<date> and renders it byte-identical", () => {
@@ -83,17 +84,53 @@ describe("computeWindow", () => {
   });
 });
 
-describe("isFinalWindow", () => {
-  it("is true once a window's since reaches the floor", () => {
-    expect(
-      isFinalWindow({ since: DEFAULT_JOIN_FLOOR, until: "2006-04-01" }, DEFAULT_JOIN_FLOOR),
-    ).toBe(true);
+describe("resumeUntil", () => {
+  const year = { since: "2021-11-02", until: "2022-11-02" };
+
+  it("walks on from the window's start when x.md paged all the way down", () => {
+    expect(resumeUntil(year, undefined)).toBe("2021-11-02");
+    expect(resumeUntil(year, "2021-10-31T23:00:00.000Z")).toBe("2021-11-02");
   });
 
-  it("is false while the window is still above the floor", () => {
-    expect(isFinalWindow({ since: "2020-01-01", until: "2020-02-01" }, DEFAULT_JOIN_FLOOR)).toBe(
-      false,
+  it("resumes from the oldest post's day when x.md stopped early", () => {
+    // Production: this window returned only September and October 2022.
+    expect(resumeUntil(year, "2022-09-28T20:43:31.000Z")).toBe("2022-09-29");
+  });
+
+  it("always moves earlier than the window's own until", () => {
+    expect(resumeUntil(year, "2022-11-01T12:00:00.000Z")).toBe("2022-11-01");
+    expect(resumeUntil({ since: "2022-11-01", until: "2022-11-02" }, "2022-11-01T12:00:00Z")).toBe(
+      "2022-11-01",
     );
+  });
+});
+
+describe("postSpan", () => {
+  const at = (created_at: string) => ({ created_at });
+
+  it("reads X's created_at format and reports ISO bounds", () => {
+    expect(
+      postSpan([at("Wed Sep 28 20:43:31 +0000 2022"), at("Fri Oct 07 00:07:03 +0000 2022")]),
+    ).toEqual({ newest: "2022-10-07T00:07:03.000Z", oldest: "2022-09-28T20:43:31.000Z" });
+  });
+
+  it("leaves out a pinned post from months before the rest", () => {
+    // Production @theo timeline: July to September, plus one post from March.
+    expect(
+      postSpan([
+        at("2026-09-24T00:59:29.000Z"),
+        at("2026-03-30T03:03:36.000Z"),
+        at("2026-07-11T01:08:34.000Z"),
+        at("2026-08-10T00:00:00.000Z"),
+        at("2026-09-01T00:00:00.000Z"),
+      ]),
+    ).toEqual({ newest: "2026-09-24T00:59:29.000Z", oldest: "2026-07-11T01:08:34.000Z" });
+  });
+
+  it("reports nothing for a page without dated posts", () => {
+    expect(postSpan([])).toEqual({});
+    expect(postSpan(undefined)).toEqual({});
+    expect(postSpan([{ id: "1" }])).toEqual({});
   });
 });
 

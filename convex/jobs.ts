@@ -14,13 +14,14 @@ import { capturePostHog, sanitizeError } from "./lib/posthog";
 import { ACCOUNT_JOB_KIND, canonicalAccountForUserId } from "./lib/accounts";
 import {
   DEFAULT_JOIN_FLOOR,
+  DETACHED_GAP_MS,
   INITIAL_WINDOW_DAYS,
   addDaysUTC,
   computeWindow,
   historyWindowQuery,
-  isFinalWindow,
   isValidDate,
   nextWindowDays,
+  resumeUntil,
 } from "./lib/historyWindow";
 
 // Every filter a caller cares about is applied BEFORE the limit, by streaming
@@ -1073,6 +1074,9 @@ export const finish = internalMutation({
     nextCursor: v.optional(v.string()),
     expectedUserId: v.optional(v.string()),
     postsReceived: v.optional(v.number()),
+    // This page's newest post and the oldest one contiguous with it
+    // (convex/lib/collect.ts `postSpan`).
+    newest: v.optional(v.string()),
     oldest: v.optional(v.string()),
     floorReached: v.optional(v.boolean()),
     profile: v.optional(
@@ -1110,6 +1114,15 @@ export const finish = internalMutation({
       : undefined;
 
     const pages = (job.pages ?? 0) + (args.error ? 0 : 1);
+
+    // Pages arrive newest first, so each one's oldest post extends how far
+    // back this job has collected — unless the whole page sits more than
+    // DETACHED_GAP_MS before that, like the last page of @theo's timeline,
+    // which held only a pinned post from four months earlier.
+    const detached =
+      job.oldest !== undefined &&
+      args.newest !== undefined &&
+      Date.parse(job.oldest) - Date.parse(args.newest) > DETACHED_GAP_MS;
 
     // The admin types a handle once; xearch indexes everything it can obtain
     // for it without anyone asking for the next page. Bulk history pages by
@@ -1169,7 +1182,7 @@ export const finish = internalMutation({
       expectedUserId: args.expectedUserId ?? job.expectedUserId,
       pages,
       postsReceived: (job.postsReceived ?? 0) + (args.error ? 0 : (args.postsReceived ?? 0)),
-      oldest: args.oldest ?? job.oldest,
+      oldest: detached ? job.oldest : (args.oldest ?? job.oldest),
       floorReached: args.floorReached ?? job.floorReached,
       updatedAt: Date.now(),
     };
@@ -1252,7 +1265,7 @@ export const finish = internalMutation({
         const timelineFellShort = account.statuses !== undefined && account.statuses > totalPosts;
 
         if (args.floorReached === true || timelineFellShort)
-          await maybeStartHistoryBackfill(ctx, job.owner, account, args.oldest ?? patch.oldest);
+          await maybeStartHistoryBackfill(ctx, job.owner, account, patch.oldest);
       }
     }
 
@@ -1281,6 +1294,7 @@ export const finish = internalMutation({
         job.historyFor,
         patch.status as "complete" | "partial" | "failed",
         patch.postsReceived ?? 0,
+        patch.oldest,
         args.error,
       );
   },
@@ -1572,8 +1586,8 @@ async function maybeStartHistoryBackfill(
  * (widening it first if this one came back empty — see
  * convex/lib/historyWindow.ts `nextWindowDays`) or stop the backfill for
  * good, exactly as docs for this feature specify:
- *   - the window that just finished already reached the account's floor
- *     (`isFinalWindow`) → "complete";
+ *   - the walk, resumed from the oldest post this window returned
+ *     (`resumeUntil`), has reached the account's floor → "complete";
  *   - the window job itself failed permanently, after `finish`'s own
  *     MAX_PAGE_ATTEMPTS backoff attempts → "stopped", with the job's error.
  */
@@ -1583,6 +1597,7 @@ async function onHistoryWindowFinished(
   accountId: Id<"accounts">,
   finalStatus: "complete" | "partial" | "failed",
   totalPostsThisWindow: number,
+  oldest: string | undefined,
   error: string | undefined,
 ): Promise<void> {
   const backfill = await ctx.db
@@ -1615,17 +1630,12 @@ async function onHistoryWindowFinished(
 
   const account = await ctx.db.get(accountId);
   const floor = account ? joinFloor(account) : DEFAULT_JOIN_FLOOR;
-  // `job.since` is this window's own lower bound (set when it was created by
-  // `insertHistoryWindowJob`) — the next window's upper bound, since a
-  // backfill only ever walks backward.
+  // `job.since`/`job.until` are this window's own bounds (set when it was
+  // created by `insertHistoryWindowJob`). The next window ends where this
+  // one's posts stopped, which is `job.since` only when x.md paged all the
+  // way down to it. `launchNextWindow` completes the backfill once that
+  // reaches the floor.
   const completedWindow = { since: job.since ?? floor, until: job.until ?? floor };
-
-  if (isFinalWindow(completedWindow, floor)) {
-    await ctx.db.patch(backfill._id, { status: "complete", updatedAt: Date.now() });
-
-    return;
-  }
-
   const windowDays = nextWindowDays(backfill.windowDays, totalPostsThisWindow);
 
   await launchNextWindow(
@@ -1634,8 +1644,55 @@ async function onHistoryWindowFinished(
     backfill.owner,
     accountId,
     backfill.handle,
-    completedWindow.since,
+    resumeUntil(completedWindow, oldest),
     windowDays,
     floor,
   );
 }
+
+/**
+ * Walk an account's history again from `until` back to its join date, for a
+ * backfill that finished or stopped with holes in it. Backfills that ran
+ * before windows resumed from their oldest post (`resumeUntil`) skipped most
+ * of every window x.md stopped paging early. Re-asks x.md for every window,
+ * so it spends search allowance; the indexer dedupes posts it already has.
+ *
+ *   npx convex run --prod jobs:restartHistoryBackfill '{"handle":"theo","until":"2026-07-12"}'
+ */
+export const restartHistoryBackfill = internalMutation({
+  args: { handle: v.string(), until: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    if (!isValidDate(args.until)) throw new ConvexError("Use a YYYY-MM-DD `until` date.");
+
+    const account = await ctx.db
+      .query("accounts")
+      .withIndex("by_handle", (q) => q.eq("handle", args.handle.replace(/^@/, "").toLowerCase()))
+      .first();
+
+    if (!account) throw new ConvexError(`No account @${args.handle}.`);
+
+    const backfill = await ctx.db
+      .query("historyBackfills")
+      .withIndex("by_account", (q) => q.eq("accountId", account._id))
+      .first();
+
+    if (!backfill) throw new ConvexError(`@${account.handle} has never been backfilled.`);
+
+    if (backfill.status === "queued" || backfill.status === "running")
+      throw new ConvexError(`@${account.handle}'s backfill is still running.`);
+    await ctx.db.patch(backfill._id, { error: undefined, windowDays: INITIAL_WINDOW_DAYS });
+    await launchNextWindow(
+      ctx,
+      backfill._id,
+      backfill.owner,
+      account._id,
+      account.handle,
+      args.until,
+      INITIAL_WINDOW_DAYS,
+      joinFloor(account),
+    );
+
+    return null;
+  },
+});

@@ -9,6 +9,7 @@ import {
   type JsonValue,
 } from "./xmd";
 import { CAPTURE_MAX_BYTES, jsonBytes, type Capture, type Receipt } from "./handoff";
+import { DETACHED_GAP_MS } from "./historyWindow";
 
 /**
  * Bytes of provider payload allowed in one capture. `deliverCapture` rejects a
@@ -110,6 +111,32 @@ async function historyPage(
   }
 }
 
+export type PostSpan = { newest?: string; oldest?: string };
+
+/**
+ * The newest post on a page, and the oldest one reached from it without a
+ * gap longer than DETACHED_GAP_MS. x.md's own `meta.oldest` counts a pinned
+ * post from months back, and the backfill starts from whatever this reports
+ * (convex/jobs.ts `maybeStartHistoryBackfill`): trusting it left @theo's
+ * history without April to July.
+ */
+export function postSpan(posts: JsonValue | undefined): PostSpan {
+  const times = (Array.isArray(posts) ? posts : [])
+    .map((post) => Date.parse(string(record(post).created_at) ?? ""))
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a);
+
+  if (!times.length) return {};
+  let oldest = times[0];
+
+  for (const time of times) {
+    if (oldest - time > DETACHED_GAP_MS) break;
+    oldest = time;
+  }
+
+  return { newest: new Date(times[0]).toISOString(), oldest: new Date(oldest).toISOString() };
+}
+
 export type CollectionRequest = {
   runId: string;
   attempt: number;
@@ -141,7 +168,9 @@ export async function collectXmd(
     profile: RawObject | undefined,
     expectedUserId = request.expectedUserId;
 
-  let postsReceived = 0;
+  let postsReceived = 0,
+    span: PostSpan = {};
+
   const warnings: string[] = [];
 
   const descriptor = {
@@ -287,6 +316,7 @@ export async function collectXmd(
           );
         metadata = record(response.meta);
         postsReceived = response.posts.length;
+        span = postSpan(response.posts);
 
         if (response.posts.length > options.maxPosts)
           throw new ProviderError("import_limit", "x.md exceeded the requested history size.");
@@ -371,6 +401,7 @@ export async function collectXmd(
       // and the job row reports it. Without this every search-backed window
       // read as empty no matter what it fetched.
       postsReceived = response.posts.length;
+      span = postSpan(response.posts);
 
       if (response.degraded)
         warnings.push(
@@ -398,7 +429,8 @@ export async function collectXmd(
       nextCursor: string(metadata.nextCursor),
       profile,
       postsReceived,
-      oldest: string(metadata.oldest),
+      newest: span.newest,
+      oldest: span.oldest ?? string(metadata.oldest),
       floorReached: metadata.floor_reached === true,
     };
   } catch (error) {
