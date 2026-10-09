@@ -125,6 +125,55 @@ impl Post {
         }
         rest
     }
+
+    /// What a search matches: the [`body`](Self::body) without its links,
+    /// each @handle as one word, and the title of the page it links to.
+    ///
+    /// A link's path is not something the post says (`onepl.us/na_event6`
+    /// is not a post about "na"), nor is part of a handle (`@perplexity_ai`
+    /// is not about "ai"); the whole handle still is (`@convex` is about
+    /// Convex). The linked page's title is how the post describes it.
+    #[must_use]
+    pub fn searchable(&self) -> String {
+        let body = self.body();
+        let mut out = String::with_capacity(body.len());
+        let mut rest = body;
+        while let Some(c) = rest.chars().next() {
+            if rest.starts_with("https://") || rest.starts_with("http://") {
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                rest = rest.get(end..).unwrap_or_default();
+                out.push(' ');
+                continue;
+            }
+            let joined = out
+                .chars()
+                .next_back()
+                .is_some_and(|before| before.is_alphanumeric() || before == '_');
+            if c == '@' && !joined {
+                let handle = rest.get(1..).unwrap_or_default();
+                let end = handle
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(handle.len());
+                out.push('@');
+                out.extend(
+                    handle
+                        .get(..end)
+                        .unwrap_or_default()
+                        .chars()
+                        .filter(|&c| c != '_'),
+                );
+                rest = handle.get(end..).unwrap_or_default();
+                continue;
+            }
+            out.push(c);
+            rest = rest.get(c.len_utf8()..).unwrap_or_default();
+        }
+        if let Some(card) = &self.card {
+            out.push('\n');
+            out.push_str(&card.title);
+        }
+        out
+    }
 }
 
 /// A post quoting a search result, as shown under it.
@@ -341,6 +390,28 @@ mod tests {
         assert_eq!(post.body(), "");
         post.text = "@ hi".into();
         assert_eq!(post.body(), "@ hi");
+    }
+
+    #[test]
+    fn searchable_text_leaves_out_links_and_handle_pieces() {
+        let mut post: Post = serde_json::from_value(serde_json::json!({
+            "tweetId": "1", "author": "a", "url": "https://x.com/a/status/1",
+            "text": "Ask @perplexity_ai (or @convex), mail a@b.co: https://onepl.us/na_event6\nok",
+            "links": []
+        }))
+        .unwrap();
+        assert_eq!(
+            post.searchable(),
+            "Ask @perplexityai (or @convex), mail a@b.co:  \nok"
+        );
+        post.card = Some(super::Card {
+            url: "https://news.convex.dev/convex-raises-57m/".into(),
+            title: "Convex raises $57M".into(),
+            description: None,
+            domain: None,
+            image: None,
+        });
+        assert!(post.searchable().ends_with("\nConvex raises $57M"));
     }
 
     #[test]

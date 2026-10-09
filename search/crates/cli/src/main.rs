@@ -40,7 +40,9 @@ enum Command {
         #[arg(long)]
         archive: PathBuf,
     },
-    /// Run one search and print the version-1 JSON response.
+    /// Run one search and print the version-1 JSON response. With `-`,
+    /// run one search per line of stdin and print one response per line,
+    /// opening the index once (for ranking evaluations).
     Query {
         query: String,
         #[arg(long, default_value = "relevance", value_parser = ["relevance", "engagement", "likes", "newest", "oldest"])]
@@ -130,24 +132,33 @@ fn run_query(
 ) -> color_eyre::Result<()> {
     let engine = search_tantivy::open_for_search(index, false)?;
     let sort: Sort = serde_json::from_value(serde_json::Value::String(sort.to_owned()))?;
-    let expression = search_query::parse(query, None)?;
-    let request = SearchRequest {
-        version: 1,
-        query: query.to_owned(),
-        author: None,
-        sort,
-        limit: 20,
-        cursor: None,
-        include_stats,
-    };
-    println!(
-        "{}",
-        serde_json::to_string(&engine.search(
+    let search = |query: &str| -> color_eyre::Result<String> {
+        let expression = search_query::parse(query, None)?;
+        let request = SearchRequest {
+            version: 1,
+            query: query.to_owned(),
+            author: None,
+            sort,
+            limit: 20,
+            cursor: None,
+            include_stats,
+        };
+        Ok(serde_json::to_string(&engine.search(
             &expression,
             &request,
-            jiff::Timestamp::now().as_millisecond()
-        )?)?
-    );
+            jiff::Timestamp::now().as_millisecond(),
+        )?)?)
+    };
+    if query != "-" {
+        println!("{}", search(query)?);
+        return Ok(());
+    }
+    for line in std::io::stdin().lines() {
+        let line = line?;
+        if !line.trim().is_empty() {
+            println!("{}", search(&line)?);
+        }
+    }
     Ok(())
 }
 

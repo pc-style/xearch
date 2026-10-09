@@ -1,15 +1,16 @@
 # How results are ranked
 
-"Relevant" and "Relevant + engagement" both score a matching post from three
+"Relevant" and "Relevant + engagement" both score a matching post from four
 signals, multiplied together (added in log space). The code is
-`search/crates/ranking/src/lib.rs`; the weights were tuned by hand on a copy of
-the production index (September 25, 2026).
+`search/crates/ranking/src/lib.rs`; the weights were tuned on a copy of the
+production index against the constraints below (October 9, 2026).
 
-| Signal    | What it is                                                                                                  | Relevant   | Relevant + engagement |
-| --------- | ----------------------------------------------------------------------------------------------------------- | ---------- | --------------------- |
-| Text      | Tantivy BM25, plus a phrase bonus when the searched words sit side by side                                  | BM25^0.6   | BM25^0.8              |
-| Prior     | 1 + likes + 2·replies + 2·bookmarks + 3·reposts + 4·quotes; a reply to someone else counts ⅓, a thin post ⅒ | prior^0.15 | prior^0.35            |
-| Freshness | Up to +15% (+10%) for a post made now, falling to a third after 30 days                                     | ×1.15 max  | ×1.10 max             |
+| Signal       | What it is                                                                                                  | Relevant   | Relevant + engagement |
+| ------------ | ----------------------------------------------------------------------------------------------------------- | ---------- | --------------------- |
+| Text         | Tantivy BM25                                                                                                | BM25^0.6   | BM25^0.4              |
+| Side by side | The searched words appear together as typed (`local first`, `local-first`)                                  | ×2.0       | ×2.3                  |
+| Prior        | 1 + likes + 2·replies + 2·bookmarks + 3·reposts + 4·quotes; a reply to someone else counts ⅓, a thin post ⅒ | prior^0.15 | prior^0.4             |
+| Freshness    | Up to +15% (+10%) for a post made now, falling to a third after 30 days                                     | ×1.15 max  | ×1.10 max             |
 
 Two more signals come from the whole index rather than one post (see
 "Borrowed from Google and X" below): the author's authority, weighted 0.03
@@ -17,6 +18,56 @@ on a log scale, and a diversity pass over the best 100 results.
 
 Queries that only filter (`@theo` on its own) have no text score, so the prior
 and freshness decide.
+
+## Constraints
+
+What each mode promises, between two matching posts alike in everything
+else. `search/crates/ranking` tests each one exactly (`mod constraints`), and
+`search/crates/tantivy/tests/behavior.rs` checks them through a real index.
+
+- **Engagement breaks ties.** More engagement ranks higher in both modes.
+- **Relevant reads the words first.** The searched words side by side beat
+  them scattered unless the scattered post has about a hundred times the
+  engagement (at least thirty is promised). Twice the BM25 beats five times
+  the engagement.
+- **Relevant + engagement reads the room first.** Words side by side beat a
+  scattered post with up to about eight times the engagement (at least
+  three, at most ten). Five times the engagement beats twice the BM25.
+- **A search matches what a post says**: its words, each @handle as one
+  word (`convex` finds "@convex"), and the title of the page it links to.
+  Not a link's path (`na` does not find `onepl.us/na_event6`) and not part
+  of a handle (`ai` does not find "@perplexity_ai").
+- **Quiet and thin posts wait their turn.** One under three engagements, or
+  under three words with nothing attached, does not rank in the top 10 while
+  a better-engaged match that is as close a match waits below it.
+
+On the real corpus these hold most of the time, not always: BM25 still
+varies between posts, and some random word pairs are not phrases anyone
+types. `scripts/ranking-check.mjs` measures how often each is broken, on 20
+common queries and 120 random words and 120 random two-word phrases sampled
+from the archive (a fixed seed, so runs compare):
+
+```sh
+node scripts/ranking-check.mjs --index="$BASE/index" --archive="$BASE/archive" [--verbose]
+```
+
+It only reads. `--verbose` prints every result that breaks a constraint.
+Before and after this change, on rebuilt copies of the production archive
+(top-10 results breaking each constraint, Relevant / Relevant + engagement):
+
+| Constraint (top 10s)                          | Common queries (20) | Random words (120) | Random phrases (120) |
+| --------------------------------------------- | ------------------- | ------------------ | -------------------- |
+| Scattered above side by side (before → after) | 3/4 → 0/5           | —                  | 161/149 → 87/74      |
+| Matched only through a link or handle piece   | 5/6 → 0/0           | 30/26 → 0/0        | 9/12 → 0/0           |
+| Avoidable quiet posts                         | 1/0 → 1/0           | 11/4 → 11/4        | 10/1 → 9/1           |
+| Avoidable thin posts                          | 0/0 → 0/0           | 2/0 → 3/0          | 0/0 → 0/0            |
+| Overlap of the two modes' top 10s             | 0.65 → 0.48         | 0.72 → 0.56        | 0.71 → 0.53          |
+| Median engagement, Relevant + engagement      | 6,988 → 8,148       | 5,337 → 7,972      | 4,464 → 7,568        |
+
+"Before" is the previous ranking on an index rebuilt with the previous
+code; "after" is this ranking on one rebuilt with this code.
+What still breaks the phrase constraint is a scattered match whose BM25 is
+higher, or a word pair nobody would type as a phrase ("days now").
 
 ## Why not plain BM25
 
@@ -129,19 +180,31 @@ posts), which a later change could add.
   This is done when the query is built, so it needs no reindex.
 - Words typed side by side score higher when they appear side by side, without
   changing which posts match (`local first` puts "local-first" posts above one
-  that says "local" in one sentence and "first" in another).
+  that says "local" in one sentence and "first" in another). A fixed bonus,
+  not more BM25: BM25 for a phrase mostly rewards the shortest posts that
+  have it, which lifted one-line replies.
+- Links are not searched, and a handle is searched whole (`@perplexity_ai`
+  as "perplexityai"). A link card's title is searched with the post.
 - The first page of a search reports how many posts match in all, shown as
   "20 of 43 posts".
 
 ## What needs a reindex
 
 The prior and the searched text are fixed per post when it is indexed, and so
-are media, link cards, quoted posts and reply targets. Posts indexed before
-this change keep their old prior (engagement without bookmarks or the reply
-and thin penalties), stay searchable by their reply handles and have no embeds
-until the index is rebuilt from `archive/`. The index schema is
-unchanged, so the new binary serves the old index in the meantime. Rebuild
-into a new directory and swap it in:
+are media, link cards, quoted posts and reply targets. A post indexed before
+a change to any of them keeps the old version until the index is rebuilt
+from `archive/`; ranking weights and the side-by-side bonus apply at once.
+
+The production index has not been rebuilt since the prior gained bookmarks
+and the reply and thin penalties: the reindexes logged after that change
+failed on the indexer's lock. Posts indexed before then still carry the
+old prior, are found by their reply handles and have no embeds; with this
+change they also keep links and handle pieces in their searched text. On
+the rebuilt copy, `@theo convex` no longer puts the one-word reply
+"@ccccjjjjeeee Convex" second.
+
+The index schema is unchanged, so the new binary serves the old index in
+the meantime. Rebuild into a new directory and swap it in:
 
 ```sh
 systemctl --user stop xearch-search-indexer
@@ -152,8 +215,9 @@ done
 # stop xearch-search, move index.new over index, start both again
 ```
 
-A full rebuild of the production archive (3,239 captures) took under two
-minutes locally.
+Importing one capture per process, the production archive (9,746
+captures, 239,000 posts, October 2026) took about a quarter of an hour on a
+laptop. Then run `xearch-search --index "$BASE/index.new" compact`.
 
 ## Sources
 
