@@ -464,6 +464,9 @@ function profileSuffix(kind: "profile" | "following" | "followers" | "archive"):
  */
 const SWITCH_KEY_STATUSES = new Set([401, 402, 403, 429]);
 
+/** A key that is invalid or disabled, rather than out of allowance. */
+const DEAD_KEY_STATUSES = new Set([401, 403]);
+
 export class XmdClient {
   readonly origin: string;
   constructor(
@@ -502,16 +505,29 @@ export class XmdClient {
     const keys =
       this.fallbackKey && this.fallbackKey !== this.key ? [this.key, this.fallbackKey] : [this.key];
 
+    let primary: ProviderError | undefined;
+
     for (const [index, key] of keys.entries()) {
       const outcome = await this.attempt(url, query, operation, key, signal);
 
       if (outcome.ok) return outcome.response;
 
-      // The last key's failure is the one reported: with a fallback that is
-      // the fallback's own answer, so a dashboard never blames the primary
-      // key for a refusal the second key would have shown too.
-      if (index === keys.length - 1 || !SWITCH_KEY_STATUSES.has(outcome.status))
-        throw outcome.error;
+      if (index < keys.length - 1 && SWITCH_KEY_STATUSES.has(outcome.status)) {
+        primary = outcome.error;
+        continue;
+      }
+
+      // A dead fallback key says nothing about the request: report what the
+      // primary key was told. In production a rate-limited search (429, retry
+      // later) became the fallback's "invalid_key", which stopped every
+      // running import for good and the older-history backfills with them.
+      if (primary && DEAD_KEY_STATUSES.has(outcome.status)) throw primary;
+
+      // Otherwise the last key's failure is the one reported: with a
+      // fallback that is the fallback's own answer, so a dashboard never
+      // blames the primary key for a refusal the second key would have shown
+      // too.
+      throw outcome.error;
     }
 
     throw new Error("unreachable: every key attempt returns or throws");
