@@ -1,8 +1,9 @@
 name: Deploy
 
-# Production deploy, only from main, only after Check passes, and only when a
-# deploy key exists. Without CONVEX_DEPLOY_KEY the job reports a notice and
-# exits clean rather than failing red on every push.
+# Production deploy, only from main, only after Check passes, only for the
+# commit main points at, and only when a deploy key exists. Without
+# CONVEX_DEPLOY_KEY the job reports a notice and exits clean rather than
+# failing red on every push.
 on:
   workflow_run:
     workflows: ["Check"]
@@ -29,16 +30,27 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Check for a deploy key
+      # Runs are serialized but not ordered: Check for an older commit can
+      # finish after Check for a newer one, and its deploy then replaced the
+      # newer code in production (on October 10, #90's deploy undid #91's).
+      # Only the commit main points at now deploys; a newer commit's own run
+      # deploys it.
+      - name: Check for a deploy key and the newest main
         id: key
         env:
           DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if [ -n "$DEPLOY_KEY" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          git fetch --quiet --depth=1 origin main
+          newest=$(git rev-parse FETCH_HEAD)
+          if [ -z "$DEPLOY_KEY" ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::notice::CONVEX_DEPLOY_KEY is not set; skipping the deploy."
+          elif [ "$newest" != "$HEAD_SHA" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main has moved on to ${newest:0:7}; its own run deploys it, so ${HEAD_SHA:0:7} is skipped."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
           fi
 
       - if: steps.key.outputs.present == 'true'
