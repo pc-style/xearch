@@ -1419,9 +1419,11 @@ dependencies = [
 name = "search-indexer"
 version = "0.1.0"
 dependencies = [
+ "search-backend",
  "search-ingest",
  "search-model",
  "search-query",
+ "search-ranking",
  "search-tantivy",
  "serde",
  "serde_json",

@@ -191,9 +191,11 @@ posts), which a later change could add.
 ## What needs a reindex
 
 The prior and the searched text are fixed per post when it is indexed, and so
-are media, link cards, quoted posts and reply targets. A post indexed before
-a change to any of them keeps the old version until the index is rebuilt
-from `archive/`; ranking weights and the side-by-side bonus apply at once.
+are media, link cards, quoted posts and reply targets. A change to any of
+them bumps `INDEX_FORMAT`, and the indexer rebuilds the index from
+`archive/` on its next pass (see "Rebuilding the index" in
+[the indexer docs](search-indexer.md)); ranking weights and the
+side-by-side bonus apply at once.
 
 The production index has not been rebuilt since the prior gained bookmarks
 and the reply and thin penalties: the reindexes logged after that change
@@ -203,21 +205,8 @@ change they also keep links and handle pieces in their searched text. On
 the rebuilt copy, `@theo convex` no longer puts the one-word reply
 "@ccccjjjjeeee Convex" second.
 
-The index schema is unchanged, so the new binary serves the old index in
-the meantime. Rebuild into a new directory and swap it in:
-
-```sh
-systemctl --user stop xearch-search-indexer
-for f in "$BASE"/archive/*.json; do
-  case "$f" in *.receipt.json) continue ;; esac
-  xearch-search --index "$BASE/index.new" import --input "$f" --archive "$BASE/archive"
-done
-# stop xearch-search, move index.new over index, start both again
-```
-
-Importing one capture per process, the production archive (9,746
-captures, 239,000 posts, October 2026) took about a quarter of an hour on a
-laptop. Then run `xearch-search --index "$BASE/index.new" compact`.
+Production's index will be rebuilt by the first watcher pass after this
+change is deployed (it reads as format 0).
 
 ## Sources
 

@@ -342,6 +342,58 @@ xearch-search --base-dir "$BASE" users list
 xearch-search --base-dir "$BASE" publish <handle>
 ```
 
+## Rebuilding the index
+
+What the index holds for a post (the searched text, the prior, the stored
+post) is fixed when it is imported. `INDEX_FORMAT` in
+`search/crates/tantivy/src/lib.rs` names that version and every commit
+records it in `meta.json`. When the watcher starts a pass on an index
+built in an older format, it rebuilds the index from `archive/` before
+importing anything, so an upgrade that changes what is indexed reaches
+every post without anyone running anything. An index committed before
+formats were recorded reads as format 0 and is rebuilt the same way.
+
+The rebuild runs inside the watcher, with its one writer, so it never
+fights the index lock. It replays every archived input in the order it was
+first imported (a post seen in several captures ends with its latest
+likes and replies), into a single commit: searches keep serving the old
+posts until the new ones replace them all at once, and nothing changes if
+it stops partway. Then it merges the index into one segment. On the
+production archive (9,746 captures, 239,418 posts) it took under a minute on a
+laptop.
+
+Safeguards:
+
+- It refuses to commit when the archive holds fewer than 99% of the posts
+  the index already has (a wrong `--archive`, lost files): the error says
+  how many each holds.
+- An input that cannot be read as a capture or dump (it failed when first
+  imported too) is skipped and logged; a storage error stops the rebuild.
+- A failed rebuild is written to `state/rebuild.failed` and reported as a
+  failed pass, so the heartbeat shows it. The watcher keeps importing into
+  the old index and tries again an hour later.
+- Adding posts to an old index (`import`, or the watcher's own imports
+  before a rebuild succeeds) keeps its old format: only a rebuild marks it
+  current.
+- `search/crates/indexer/tests/rebuild.rs` fingerprints what is indexed
+  for a set of fixture posts. Changing it fails that test until
+  `INDEX_FORMAT` is bumped, so a change cannot ship without a rebuild.
+
+To rebuild by hand:
+
+```sh
+xearch-search --base-dir "$BASE" rebuild
+```
+
+With the watcher running, this leaves `state/rebuild.request` and the
+watcher rebuilds on its next pass (watch its log for `indexer rebuilt`).
+Without one, it takes the indexer lock and rebuilds itself, printing
+`{"format":…,"files":…,"skipped":…,"posts":…,"elapsedMs":…}`.
+
+Waiting drop files are also imported in the order they arrived, not by
+name: capture batches are named by their hash, so name order let an older
+capture imported last overwrite a post's newer numbers.
+
 ## Index corruption recovery
 
 If the index directory is damaged the watcher keeps running but every pass
@@ -416,7 +468,8 @@ whole configuration.
 | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--index`/`SEARCH_INDEX`                               | overrides `"$BASE/index"`                                                                                                                                                                                       |
 | `import --input --archive`                             | one-shot retained import                                                                                                                                                                                        |
-| `query <q> [--sort …] [--stats]`                       | prints version-1 response JSON; `--stats` adds timings                                                                                                                                                          |
+| `query <q> [--sort …] [--stats]`                       | prints version-1 response JSON; `--stats` adds timings; `query -` runs one search per stdin line                                                                                                                |
+| `rebuild [--archive --state-dir]`                      | rebuild the index from the archive in place (see "Rebuilding the index"); with a watcher running, asks it to                                                                                                    |
 | `serve [--listen 127.0.0.1:4320]`                      | needs `SEARCH_LOCAL_SIGNING_KEY` + `SEARCH_SERVICE_TOKEN`                                                                                                                                                       |
 | `watch [--archive --drop-dir --state-dir --poll-secs]` | background indexer; resolves and logs its dirs at startup                                                                                                                                                       |
 | `users list [--status …]` / `users mark …`             | registry ops; `list` now also shows each account's publication state                                                                                                                                            |

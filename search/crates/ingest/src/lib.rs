@@ -107,6 +107,47 @@ pub fn import(input: &Path, archive: &Path, mut sink: impl IndexSink) -> Result<
     Ok(receipt)
 }
 
+/// Upsert every post in an already-archived file into `sink`.
+///
+/// Without committing, retaining or writing a receipt: for rebuilding an
+/// index from `archive/`, where one writer takes every file and commits
+/// once. Records the provider rejects are counted, not quarantined again.
+///
+/// # Errors
+/// Returns [`Error::Invalid`] for a malformed envelope and the sink's own
+/// errors (a storage failure) as themselves.
+pub fn replay(input: &Path, sink: &mut dyn IndexSink) -> Result<Receipt> {
+    let mut receipt = Receipt {
+        sha256: input
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .to_owned(),
+        accepted: 0,
+        rejected: 0,
+    };
+    let mut quarantine = std::io::sink();
+    let mut context = Context {
+        sink,
+        receipt: &mut receipt,
+        quarantine: &mut quarantine,
+        failure: None,
+    };
+    let source = File::open(input)
+        .map_err(storage)?
+        .take(MAX_INPUT.saturating_add(1));
+    let mut deserializer = serde_json::Deserializer::from_reader(BufReader::new(source));
+    let parsed = Envelope(&mut context).deserialize(&mut deserializer);
+    if let Some(error) = context.failure.take() {
+        return Err(error);
+    }
+    parsed.map_err(|e| Error::Invalid(e.to_string()))?;
+    deserializer
+        .end()
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    Ok(receipt)
+}
+
 struct Context<'a> {
     sink: &'a mut dyn IndexSink,
     receipt: &'a mut Receipt,

@@ -27,6 +27,25 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Te
 
 const MAX_WINDOW: usize = 10_000;
 
+/// Version of what the index holds for each post.
+///
+/// That is the searched text ([`Post::searchable`]), the prior
+/// ([`search_ranking::prior`]) and the stored post as
+/// `search_ingest::normalize` builds it. Bump it whenever any of them
+/// changes; the indexer then rebuilds the index from the archive
+/// (`search_indexer::rebuild`) instead of leaving older posts as they were.
+///
+/// 1: links and handle pieces left out of the searched text, link card
+/// titles added (and everything before formats were stamped, which reads
+/// as 0).
+pub const INDEX_FORMAT: u32 = 1;
+
+/// What every commit records in `meta.json` (Tantivy's commit payload).
+#[derive(Serialize, Deserialize)]
+struct Stamp {
+    format: u32,
+}
+
 /// How much a plural or singular form of a searched word counts against the
 /// exact spelling.
 const OTHER_FORM_WEIGHT: f32 = 0.8;
@@ -270,16 +289,56 @@ pub struct Engine {
 impl Engine {
     /// Create a single writer with a bounded 32 MB indexing buffer.
     ///
+    /// Its commits keep the index's [`format`](Self::format): adding posts
+    /// to an index built the old way does not make it current, only
+    /// [`rebuild_writer`](Self::rebuild_writer) does.
+    ///
     /// # Errors
     /// Fails if another writer owns the lock or storage is unavailable.
     pub fn writer(&self) -> Result<Writer> {
         Ok(Writer {
-            writer: Some(
+            format: self.format()?,
+            tantivy: Some(
                 self.index
                     .writer_with_num_threads(1, 32_000_000)
                     .map_err(storage)?,
             ),
             fields: self.fields,
+        })
+    }
+
+    /// A writer whose commit replaces every post in the index with what it
+    /// was given, at once, and marks the index [`INDEX_FORMAT`]. Searches
+    /// see the old posts until then; nothing is replaced if it is dropped
+    /// uncommitted.
+    ///
+    /// # Errors
+    /// Fails if another writer owns the lock or storage is unavailable.
+    pub fn rebuild_writer(&self) -> Result<Writer> {
+        let writer = self
+            .index
+            .writer_with_num_threads(1, 32_000_000)
+            .map_err(storage)?;
+        writer.delete_all_documents().map_err(storage)?;
+        Ok(Writer {
+            format: INDEX_FORMAT,
+            tantivy: Some(writer),
+            fields: self.fields,
+        })
+    }
+
+    /// The [`INDEX_FORMAT`] the index was last rebuilt in. An index with
+    /// nothing in it is current; one committed before formats were stamped
+    /// is 0.
+    ///
+    /// # Errors
+    /// Returns storage errors when `meta.json` cannot be read.
+    pub fn format(&self) -> Result<u32> {
+        let metas = self.index.load_metas().map_err(storage)?;
+        Ok(match metas.payload.as_deref() {
+            Some(payload) => serde_json::from_str::<Stamp>(payload).map_or(0, |stamp| stamp.format),
+            None if metas.segments.is_empty() => INDEX_FORMAT,
+            None => 0,
         })
     }
 
@@ -514,13 +573,15 @@ impl Engine {
 
 pub struct Writer {
     /// `None` only once dropped (see `Drop`).
-    writer: Option<IndexWriter>,
+    tantivy: Option<IndexWriter>,
     fields: Fields,
+    /// What each commit stamps (see [`Engine::format`]).
+    format: u32,
 }
 
 impl Writer {
     fn inner(&mut self) -> Result<&mut IndexWriter> {
-        self.writer
+        self.tantivy
             .as_mut()
             .ok_or_else(|| storage("Index writer already closed"))
     }
@@ -531,7 +592,7 @@ impl Writer {
 /// so nothing ever merged and every import left another segment behind.
 impl Drop for Writer {
     fn drop(&mut self) {
-        if let Some(writer) = self.writer.take()
+        if let Some(writer) = self.tantivy.take()
             && let Err(error) = writer.wait_merging_threads()
         {
             eprintln!("index merge failed: {error}");
@@ -567,7 +628,15 @@ impl IndexSink for Writer {
         Ok(())
     }
     fn commit(&mut self) -> Result<()> {
-        self.inner()?.commit().map_err(storage)?;
+        // Tantivy keeps no payload a commit does not set, so every commit
+        // stamps the format again.
+        let stamp = serde_json::to_string(&Stamp {
+            format: self.format,
+        })
+        .map_err(storage)?;
+        let mut prepared = self.inner()?.prepare_commit().map_err(storage)?;
+        prepared.set_payload(&stamp);
+        prepared.commit().map_err(storage)?;
         Ok(())
     }
 }
