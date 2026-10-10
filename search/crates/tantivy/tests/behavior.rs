@@ -423,6 +423,78 @@ fn reply_handles_are_not_searched_and_thin_posts_rank_last() {
 }
 
 #[test]
+fn words_side_by_side_outrank_more_engaged_posts_as_far_as_each_mode_allows() {
+    for signals in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = if signals {
+            search_tantivy::open_for_search(directory.path(), true)
+        } else {
+            search_tantivy::open(directory.path(), true)
+        }
+        .unwrap();
+        let mut writer = engine.writer().unwrap();
+        // As long as each other, so BM25 cannot tell them apart.
+        for post in [
+            by(1, "alice", "the typescript compiler is slow today", 20),
+            by(2, "bob", "typescript ships a new compiler today", 200),
+            by(3, "carol", "my typescript compiler is fast today", 1),
+        ] {
+            writer.upsert(&post).unwrap();
+        }
+        writer.commit().unwrap();
+        let order = |sort| {
+            let mut req = request("typescript compiler");
+            req.sort = sort;
+            ids(&all(&engine, req).unwrap())
+        };
+        // Relevant: side by side is worth far more than ten times the likes.
+        assert_eq!(order(Sort::Relevance), [1, 3, 2]);
+        // Relevant + engagement: ten times the likes wins, twenty times
+        // fewer does not.
+        assert_eq!(order(Sort::Engagement), [2, 1, 3]);
+        // One word that is two counts the same.
+        let mut req = request("typescript-compiler");
+        req.sort = Sort::Relevance;
+        assert_eq!(ids(&all(&engine, req).unwrap()), [1, 3, 2]);
+    }
+}
+
+#[test]
+fn searches_match_what_a_post_says_not_link_paths_or_handle_pieces() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = search_tantivy::open(directory.path(), true).unwrap();
+    let mut writer = engine.writer().unwrap();
+    let mut linked = post(5, "read this https://news.example/convex-raises");
+    linked.card = Some(search_model::Card {
+        url: "https://news.example/convex-raises".into(),
+        title: "Convex raises its series B".into(),
+        description: None,
+        domain: None,
+        image: None,
+    });
+    for post in [
+        post(1, "ask @perplexity_ai anything"),
+        post(2, "AI is everywhere"),
+        post(3, "launch day https://onepl.us/na_event6"),
+        post(4, "thanks @convex"),
+        linked,
+    ] {
+        writer.upsert(&post).unwrap();
+    }
+    writer.commit().unwrap();
+    let found = |query| {
+        let mut found = ids(&all(&engine, request(query)).unwrap());
+        found.sort_unstable();
+        found
+    };
+    assert_eq!(found("ai"), [2]);
+    assert!(found("na").is_empty());
+    // A whole handle is a word; the linked page's title describes the post.
+    assert_eq!(found("convex"), [4, 5]);
+    assert_eq!(found("series"), [5]);
+}
+
+#[test]
 fn a_serving_engine_picks_up_commits_in_the_background() {
     let directory = tempfile::tempdir().unwrap();
     // Create the index, as the indexer would.

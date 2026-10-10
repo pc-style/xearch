@@ -55,11 +55,35 @@ export function computeWindow(
   return { since, until: cursorUntil };
 }
 
-/** Whether `window` already reaches the account's floor — the last window
- * this backfill will ever run, once it finishes. */
-export function isFinalWindow(window: Window, floor: string): boolean {
-  return window.since <= floor;
+/**
+ * Where the walk continues once `window` has finished: the day after the
+ * oldest post it returned, or `window.since` when it reached that far.
+ *
+ * x.md's search pages a dated query newest first and can stop well before
+ * the window's start: a year of @theo ended after two months, every time,
+ * so walking on from `window.since` left ten-month holes. Resuming from the
+ * oldest post re-asks for what was missed; `until:` is exclusive, so the
+ * oldest post's own day is asked for again rather than skipped. Always
+ * earlier than `window.until`, so the walk cannot stall.
+ */
+export function resumeUntil(window: Window, oldest: string | undefined): string {
+  const day = oldest?.slice(0, 10);
+
+  if (!isValidDate(day) || day < window.since) return window.since;
+  const next = addDaysUTC(day, 1);
+  const last = addDaysUTC(window.until, -1);
+
+  return next < last ? next : last;
 }
+
+/**
+ * How long an account can go quiet before an older post counts as detached
+ * from the run of posts it came with. X's timeline returns a pinned or
+ * highlighted post from months back alongside the recent ones; taking it as
+ * the oldest collected post would tell the backfill that those months are
+ * already covered.
+ */
+export const DETACHED_GAP_MS = 30 * 86_400_000;
 
 /**
  * The window size for the NEXT window, given how many posts the window that

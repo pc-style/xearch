@@ -5,13 +5,16 @@ use std::sync::Arc;
 use tantivy::collector::sort_key::NaturalComparator;
 use tantivy::collector::{SegmentSortKeyComputer, SortKeyComputer};
 use tantivy::columnar::Column;
-use tantivy::{DocId, Score, SegmentReader};
+use tantivy::query::{Scorer, Weight};
+use tantivy::{DocId, DocSet, Score, SegmentReader};
 
 pub struct Ranking {
     pub sort: Sort,
     pub now: i64,
     /// Corpus-wide signals, when the engine computes them.
     pub signals: Option<Arc<Signals>>,
+    /// The runs of words typed side by side (see `Engine::phrases`).
+    pub phrases: Arc<[Box<dyn Weight>]>,
 }
 
 pub type Key = (bool, u64, Reverse<u64>);
@@ -24,6 +27,28 @@ pub struct SegmentRanking {
     created: Column<i64>,
     engagement: Column<f64>,
     signals: Option<Arc<Segment>>,
+    /// One scorer per phrase. Matches arrive in doc order, so each only
+    /// ever seeks forward.
+    phrases: Vec<Box<dyn Scorer>>,
+}
+
+impl SegmentRanking {
+    /// The share of the query's side-by-side runs this post has side by side.
+    fn phrase(&mut self, doc: DocId) -> f64 {
+        if self.phrases.is_empty() {
+            return 0.0;
+        }
+        let mut matched = 0_u32;
+        for scorer in &mut self.phrases {
+            if scorer.doc() < doc {
+                scorer.seek(doc);
+            }
+            if scorer.doc() == doc {
+                matched = matched.saturating_add(1);
+            }
+        }
+        f64::from(matched) / f64::from(u32::try_from(self.phrases.len()).unwrap_or(u32::MAX))
+    }
 }
 
 impl SortKeyComputer for Ranking {
@@ -42,6 +67,11 @@ impl SortKeyComputer for Ranking {
             likes: fields.u64("likes")?,
             created: fields.i64("created")?,
             engagement: fields.f64("engagement")?,
+            phrases: self
+                .phrases
+                .iter()
+                .map(|phrase| phrase.scorer(reader, 1.0))
+                .collect::<tantivy::Result<_>>()?,
             signals: self
                 .signals
                 .as_ref()
@@ -84,6 +114,7 @@ impl SegmentSortKeyComputer for SegmentRanking {
                 } else {
                     search_ranking::POPULAR
                 };
+                let phrase = self.phrase(doc);
                 let value = search_ranking::score(
                     weights,
                     score,
@@ -91,6 +122,7 @@ impl SegmentSortKeyComputer for SegmentRanking {
                     self.signals
                         .as_ref()
                         .map_or(0.0, |signals| signals.authority(doc)),
+                    phrase,
                     created,
                     self.now,
                 );

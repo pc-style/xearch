@@ -92,26 +92,37 @@ pub struct Weights {
     /// A tiebreaker: the archive's captured accounts cite each other, so
     /// more lets their one-word posts outrank others' launches.
     pub authority: f64,
+    /// Log bonus for a post that has the searched words side by side, as
+    /// typed: worth e^(phrase / prior) times the engagement. A fixed bonus,
+    /// unlike folding a phrase match into BM25, which mostly rewards the
+    /// shortest posts that have the phrase.
+    pub phrase: f64,
 }
 
-/// "Relevant": how well the words match comes first; engagement separates
-/// posts that match about equally well, which among tweets is most of them.
+/// "Relevant": how well the words match comes first.
+///
+/// Engagement separates posts that match about equally well, which among
+/// tweets is most of them. Words side by side are worth about a hundred
+/// times the engagement.
 pub const RELEVANT: Weights = Weights {
     text: 0.6,
     prior: 0.15,
     fresh: 0.15,
     authority: 0.03,
+    phrase: 0.7,
 };
 
-/// "Relevant + engagement": engagement counts for twice as much or more.
+/// "Relevant + engagement": engagement counts as much as the text match.
 ///
-/// The text match still keeps a viral post that barely matches from
-/// outranking ones that are about the searched words.
+/// Four times its share under [`RELEVANT`]. Every result still has every
+/// searched word; this decides which of those people engaged with most.
+/// Words side by side are worth about eight times the engagement.
 pub const POPULAR: Weights = Weights {
-    text: 0.8,
-    prior: 0.35,
+    text: 0.4,
+    prior: 0.4,
     fresh: 0.1,
     authority: 0.03,
+    phrase: 0.85,
 };
 
 /// How long freshness takes to fall to about a third.
@@ -121,14 +132,17 @@ const FRESH_DAYS: f64 = 30.0;
 ///
 /// `text` is BM25 (zero when the query only filters, as `@theo` alone does,
 /// so every post ties on text and the prior decides). `prior` is the stored
-/// [`prior`], `authority` the author's (0 when unknown); `created_at` and
-/// `now` are epoch milliseconds.
+/// [`prior`], `authority` the author's (0 when unknown), `phrase` the share
+/// of the runs of words typed side by side that the post has side by side
+/// (0 to 1; 0 for one-word queries); `created_at` and `now` are epoch
+/// milliseconds.
 #[must_use]
 pub fn score(
     weights: Weights,
     text: f32,
     prior: f64,
     authority: f64,
+    phrase: f64,
     created_at: Option<i64>,
     now: i64,
 ) -> f64 {
@@ -139,9 +153,12 @@ pub fn score(
                 / 86_400.0;
         weights.fresh * (-days / FRESH_DAYS).exp()
     });
-    let authority = weights
-        .authority
-        .mul_add(authority.clamp(AUTHORITY_MIN, AUTHORITY_MAX), fresh.ln_1p());
+    let authority = weights.authority.mul_add(
+        authority.clamp(AUTHORITY_MIN, AUTHORITY_MAX),
+        weights
+            .phrase
+            .mul_add(phrase.clamp(0.0, 1.0), fresh.ln_1p()),
+    );
     weights
         .text
         .mul_add(text, weights.prior.mul_add(prior, authority))
@@ -378,11 +395,13 @@ mod tests {
         let viral = prior(&post(6000, None));
         let quiet = prior(&post(2, Some("someone")));
         assert!(
-            score(RELEVANT, 4.0, viral, 0.0, None, 0) > score(RELEVANT, 6.0, quiet, 0.0, None, 0)
+            score(RELEVANT, 4.0, viral, 0.0, 0.0, None, 0)
+                > score(RELEVANT, 6.0, quiet, 0.0, 0.0, None, 0)
         );
         // ...but not a far better one.
         assert!(
-            score(RELEVANT, 0.5, viral, 0.0, None, 0) < score(RELEVANT, 10.0, quiet, 0.0, None, 0)
+            score(RELEVANT, 0.5, viral, 0.0, 0.0, None, 0)
+                < score(RELEVANT, 10.0, quiet, 0.0, 0.0, None, 0)
         );
     }
 
@@ -392,12 +411,12 @@ mod tests {
         let modest = prior(&post(50, None));
         let (loose, exact) = (2.0, 10.0);
         assert!(
-            score(RELEVANT, loose, viral, 0.0, None, 0)
-                < score(RELEVANT, exact, modest, 0.0, None, 0)
+            score(RELEVANT, loose, viral, 0.0, 0.0, None, 0)
+                < score(RELEVANT, exact, modest, 0.0, 0.0, None, 0)
         );
         assert!(
-            score(POPULAR, loose, viral, 0.0, None, 0)
-                > score(POPULAR, exact, modest, 0.0, None, 0)
+            score(POPULAR, loose, viral, 0.0, 0.0, None, 0)
+                > score(POPULAR, exact, modest, 0.0, 0.0, None, 0)
         );
     }
 
@@ -469,12 +488,67 @@ mod tests {
         assert_eq!(wording(&with("https://t.co/a @bob")), None);
     }
 
+    /// The trade-offs `docs/search-ranking.md` promises, between two posts
+    /// alike in everything else. `with(n)` is the prior of a post with `n`
+    /// likes' worth of engagement.
+    mod constraints {
+        use super::super::{POPULAR, RELEVANT, Weights, score};
+
+        fn with(engagement: f64) -> f64 {
+            engagement.ln_1p()
+        }
+
+        /// Whether a post with `a`'s text, engagement and side-by-side share
+        /// outranks one with `b`'s.
+        fn beats(weights: Weights, a: (f32, f64, f64), b: (f32, f64, f64)) -> bool {
+            score(weights, a.0, with(a.1), 0.0, a.2, None, 0)
+                > score(weights, b.0, with(b.1), 0.0, b.2, None, 0)
+        }
+
+        #[test]
+        fn more_engagement_ranks_higher_in_both_modes() {
+            for weights in [RELEVANT, POPULAR] {
+                assert!(beats(weights, (5.0, 20.0, 0.0), (5.0, 10.0, 0.0)));
+                assert!(beats(weights, (5.0, 20.0, 1.0), (5.0, 10.0, 1.0)));
+            }
+        }
+
+        #[test]
+        fn relevant_puts_words_side_by_side_above_thirty_times_the_engagement() {
+            assert!(beats(RELEVANT, (5.0, 100.0, 1.0), (5.0, 3_000.0, 0.0)));
+            // ...but not above any amount of it.
+            assert!(!beats(RELEVANT, (5.0, 100.0, 1.0), (5.0, 30_000.0, 0.0)));
+        }
+
+        #[test]
+        fn popular_trades_words_side_by_side_for_three_to_ten_times_the_engagement() {
+            assert!(beats(POPULAR, (5.0, 100.0, 1.0), (5.0, 300.0, 0.0)));
+            assert!(!beats(POPULAR, (5.0, 100.0, 1.0), (5.0, 1_000.0, 0.0)));
+        }
+
+        #[test]
+        fn relevant_leans_on_the_text_and_popular_on_engagement() {
+            // Twice the BM25 against five times the engagement.
+            let (closer, liked) = ((8.0, 100.0, 0.0), (4.0, 500.0, 0.0));
+            assert!(beats(RELEVANT, closer, liked));
+            assert!(beats(POPULAR, liked, closer));
+        }
+
+        #[test]
+        fn half_the_phrases_earn_half_the_bonus() {
+            for weights in [RELEVANT, POPULAR] {
+                assert!(beats(weights, (5.0, 10.0, 1.0), (5.0, 10.0, 0.5)));
+                assert!(beats(weights, (5.0, 10.0, 0.5), (5.0, 10.0, 0.0)));
+            }
+        }
+    }
+
     #[test]
     fn freshness_is_a_nudge() {
         let day = 86_400_000;
         let now = 400 * day;
-        let fresh = score(RELEVANT, 5.0, 3.0, 0.0, Some(now - day), now);
-        let old = score(RELEVANT, 5.0, 3.0, 0.0, Some(0), now);
+        let fresh = score(RELEVANT, 5.0, 3.0, 0.0, 0.0, Some(now - day), now);
+        let old = score(RELEVANT, 5.0, 3.0, 0.0, 0.0, Some(0), now);
         assert!(fresh > old);
         assert!(fresh - old < 0.15);
     }

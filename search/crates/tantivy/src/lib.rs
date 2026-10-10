@@ -31,10 +31,6 @@ const MAX_WINDOW: usize = 10_000;
 /// exact spelling.
 const OTHER_FORM_WEIGHT: f32 = 0.8;
 
-/// How much searched words appearing side by side add, against the words'
-/// own scores (see `Engine::adjacent`).
-const ADJACENT_WEIGHT: f32 = 1.0;
-
 /// The singular and plural of an English word, as far as a suffix can tell.
 /// Deliberately small: no stemming, so `run` never matches `running` and
 /// the index needs no rebuild. Only plain lowercase words of three letters
@@ -393,15 +389,15 @@ impl Engine {
         Box::new(BooleanQuery::new(clauses))
     }
 
-    /// For each run of plain words typed side by side (`local first`), an
-    /// optional phrase that scores posts using them side by side above
-    /// posts that merely contain them somewhere. It never changes which
-    /// posts match.
+    /// For each run of plain words typed side by side (`local first`, or
+    /// `local-first` as one word), the phrase a post has when it uses them
+    /// side by side. The ranking's phrase bonus (see `Engine::phrases`); it
+    /// never changes which posts match.
     fn adjacent<'a>(&self, children: &'a [Expr]) -> impl Iterator<Item = Box<dyn Query>> + 'a {
         let fields = self.fields;
         children
             .chunk_by(|a, b| matches!(a, Expr::Term(_)) && matches!(b, Expr::Term(_)))
-            .filter(|run| run.len() > 1 && matches!(run.first(), Some(Expr::Term(_))))
+            .filter(|run| matches!(run.first(), Some(Expr::Term(_))))
             .filter_map(move |run| {
                 let mut analyzer = analyzer();
                 let mut terms = Vec::new();
@@ -412,13 +408,30 @@ impl Engine {
                         terms.push(Term::from_field_text(fields.text, &stream.token().text));
                     }
                 }
-                (terms.len() > 1).then(|| -> Box<dyn Query> {
-                    Box::new(BoostQuery::new(
-                        Box::new(PhraseQuery::new(terms)),
-                        ADJACENT_WEIGHT,
-                    ))
-                })
+                (terms.len() > 1).then(|| -> Box<dyn Query> { Box::new(PhraseQuery::new(terms)) })
             })
+    }
+
+    /// Every run of words typed side by side that a matching post may have
+    /// side by side, for the ranking's phrase bonus. Not under an exclusion:
+    /// a post never matches those words at all.
+    fn phrases(&self, expression: &Expr) -> Vec<Box<dyn Query>> {
+        match expression {
+            // One word that is several (`local-first`).
+            Expr::Term(_) => self.adjacent(std::slice::from_ref(expression)).collect(),
+            Expr::Or(children) => children
+                .iter()
+                .flat_map(|child| self.phrases(child))
+                .collect(),
+            // Its words are in the runs; only groups inside need a look.
+            Expr::And(children) => children
+                .iter()
+                .filter(|child| !matches!(child, Expr::Term(_)))
+                .flat_map(|child| self.phrases(child))
+                .chain(self.adjacent(children))
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn compile(&self, expression: &Expr) -> Result<Box<dyn Query>> {
@@ -482,13 +495,10 @@ impl Engine {
                 } else {
                     Occur::Should
                 };
-                let mut clauses = children
+                let clauses = children
                     .iter()
                     .map(|child| self.compile(child).map(|query| (occur, query)))
                     .collect::<Result<Vec<_>>>()?;
-                if occur == Occur::Must {
-                    clauses.extend(self.adjacent(children).map(|query| (Occur::Should, query)));
-                }
                 Ok(Box::new(BooleanQuery::new(clauses)))
             }
             Expr::Not(child) => Ok(Box::new(BooleanQuery::new(vec![
@@ -538,7 +548,7 @@ impl IndexSink for Writer {
             self.fields.author,
             search_query::normalize_author(&post.author)?,
         );
-        document.add_text(self.fields.text, post.body());
+        document.add_text(self.fields.text, post.searchable());
         document.add_text(
             self.fields.post,
             serde_json::to_string(post).map_err(storage)?,
@@ -650,6 +660,7 @@ impl Engine {
     fn page(
         searcher: &tantivy::Searcher,
         query: &dyn Query,
+        phrases: &[Box<dyn Query>],
         request: &SearchRequest,
         offset: usize,
         now: i64,
@@ -661,10 +672,24 @@ impl Engine {
             search_model::Sort::Relevance | search_model::Sort::Engagement
         );
         let diversify = ranked && signals.is_some() && offset < DIVERSITY_WINDOW;
+        let phrases = if ranked {
+            phrases
+                .iter()
+                .map(|phrase| {
+                    phrase.weight(tantivy::query::EnableScoring::disabled_from_searcher(
+                        searcher,
+                    ))
+                })
+                .collect::<tantivy::Result<Vec<_>>>()
+                .map_err(storage)?
+        } else {
+            Vec::new()
+        };
         let ranking = scoring::Ranking {
             sort: request.sort,
             now,
             signals: signals.cloned(),
+            phrases: phrases.into(),
         };
         if !diversify {
             let collector = TopDocs::with_limit(page_limit.saturating_add(1))
@@ -815,9 +840,11 @@ impl Engine {
         let fingerprint = fingerprint(&searcher, expression, request.sort, request.limit)?;
         let (offset, now) = cursor_bounds(request, &fingerprint, now)?;
         let query = self.compile(expression)?;
+        let phrases = self.phrases(expression);
         let page = Self::page(
             &searcher,
             query.as_ref(),
+            &phrases,
             request,
             offset,
             now,
@@ -906,12 +933,14 @@ impl SearchBackend for Engine {
 
         let stage = started(true);
         let query = self.compile(expression)?;
+        let phrases = self.phrases(expression);
         backend.compile_us = elapsed_us(stage);
 
         let stage = started(true);
         let page = Self::page(
             &searcher,
             query.as_ref(),
+            &phrases,
             request,
             offset,
             now,

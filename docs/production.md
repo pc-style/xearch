@@ -52,6 +52,14 @@ Production imports use an outbound worker. At the September 20 integration check
 
 In outbound mode the worker is also the only production writer of `providerThrottleEvents`, through `worker.report`'s `"throttle"` event. Without it the Provider limits panel stays empty while x.md is refusing imports. Facts are captured from refusals only, so remaining allowance on a _successful_ call is still invisible, and `{ kind: "none" }` means nothing was observed, never "not throttled".
 
+Older history comes from x.md's dated search, not the account timeline, which stops near X's ~3,200-post floor. Once a timeline import reaches that floor, `convex/jobs.ts` walks `from:<handle> since:… until:…` windows back to the account's join date, one job per window. x.md pages a window newest first and can stop long before its start (a year of @theo ended after two months), so the next window continues from the oldest post the last one returned, never from the window's own start (`convex/lib/historyWindow.ts` `resumeUntil`). The walk starts where the timeline's run of posts ends, ignoring a pinned post months older than the rest (`postSpan` in `convex/lib/collect.ts`).
+
+A backfill runs once per account. One that finished before windows resumed from their oldest post has holes; walk it again from a date (it spends x.md search allowance; the indexer drops posts it already has):
+
+```sh
+npx convex run --prod jobs:restartHistoryBackfill '{"handle":"theo","until":"2026-07-12"}'
+```
+
 Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
 
 At the September 20 check the hosted frontend and Convex backend were still older than main `e98e093`; a full authenticated UI journey with the new diagnostics is not yet verified. Main now does contain the publication sender (`search/crates/indexer/src/publish.rs`, merged in `4c13fe4`), so `publication.env` reaches a real consumer — but only on a checkout and installed binary built from that commit or later. Do not add a second sender. See `to-do.md` for the rollout, and [indexer operations](search-indexer.md) for the credential file and the `publish=enabled` startup check.
