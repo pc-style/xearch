@@ -575,6 +575,103 @@ export const startDiscovered = internalMutation({
   },
 });
 
+const OPERATOR_CLI_EMAIL = "operator-cli@xearch.internal";
+
+/** The owner recorded on runs an operator starts with `convex run`, the
+ * same kind of system user as `discoveryOwner`. */
+async function operatorCliOwner(ctx: MutationCtx): Promise<Id<"users">> {
+  const existing = await ctx.db
+    .query("users")
+    .withIndex("email", (q) => q.eq("email", OPERATOR_CLI_EMAIL))
+    .first();
+
+  if (existing) return existing._id;
+
+  return ctx.db.insert("users", {
+    isAnonymous: false,
+    email: OPERATOR_CLI_EMAIL,
+    name: "Operator (command line)",
+  });
+}
+
+/**
+ * Import indexed accounts' timelines again, from `since` when given (only
+ * newer posts) or in full. Nothing refreshes an account on its own, so
+ * after the worker's imports failed from September 30 every account lacked
+ * its newer posts; this is how an operator catches them up without the
+ * dashboard. Skips an account with an import already queued or running.
+ * Spends x.md allowance.
+ *
+ *   npx convex run --prod jobs:startRefresh '{"accounts":[{"handle":"theo","since":"2026-09-20"}]}'
+ */
+export const startRefresh = internalMutation({
+  args: {
+    accounts: v.array(v.object({ handle: v.string(), since: v.optional(v.string()) })),
+  },
+  returns: v.array(v.object({ handle: v.string(), jobId: v.union(v.id("jobs"), v.null()) })),
+  handler: async (ctx, args) => {
+    const owner = await operatorCliOwner(ctx);
+    const started: { handle: string; jobId: Id<"jobs"> | null }[] = [];
+
+    for (const requested of args.accounts) {
+      const input = handle(requested.handle);
+
+      if (requested.since !== undefined && !isValidDate(requested.since))
+        throw new ConvexError(`Use a YYYY-MM-DD \`since\` for @${input}.`);
+
+      const account = await ctx.db
+        .query("accounts")
+        .withIndex("by_handle", (q) => q.eq("handle", input))
+        .first();
+
+      if (!account) throw new ConvexError(`No account @${input}.`);
+
+      let busy = false;
+
+      for (const status of ["queued", "running"] as const)
+        busy ||= !!(await ctx.db
+          .query("jobs")
+          .withIndex("by_input", (q) =>
+            q.eq("kind", "bulk").eq("input", input).eq("status", status),
+          )
+          .first());
+
+      if (busy) {
+        started.push({ handle: input, jobId: null });
+        continue;
+      }
+
+      const id = await ctx.db.insert("jobs", {
+        owner,
+        kind: "bulk",
+        input,
+        since: requested.since,
+        refresh: true,
+        autoContinue: true,
+        pages: 0,
+        postsReceived: 0,
+        expectedUserId: account.userId,
+        status: "queued",
+        count: 0,
+        attempt: 0,
+        warnings: [],
+        origin: "manual",
+        updatedAt: Date.now(),
+      });
+
+      await ctx.scheduler.runAfter(0, internal.importer.run, { jobId: id });
+      await capturePostHog(ctx, {
+        distinctId: owner,
+        event: "job_started",
+        properties: { job_id: id, kind: "bulk", origin: "manual" },
+      });
+      started.push({ handle: input, jobId: id });
+    }
+
+    return started;
+  },
+});
+
 export const claim = internalMutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
