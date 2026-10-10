@@ -518,7 +518,77 @@ describe("jobs.restartHistoryBackfill", () => {
     ]);
   });
 
-  it("refuses while the backfill is still running", async () => {
+  it("replaces a running walk, cancelling its window, and walks ranges in order", async () => {
+    const { t, owner } = await setup();
+    const accountId = await insertAccount(t);
+
+    const backfillId = await t.run((ctx) =>
+      ctx.db.insert("historyBackfills", {
+        accountId,
+        handle: "theo",
+        owner,
+        since: FLOOR,
+        cursorUntil: "2026-06-12",
+        windowDays: 30,
+        postsFound: 400,
+        status: "running",
+        updatedAt: Date.now(),
+      }),
+    );
+
+    const replaced = await insertWindowJob(t, owner, accountId, "2026-06-12", "2026-07-12");
+
+    await t.mutation(internal.jobs.restartHistoryBackfill, {
+      handle: "theo",
+      ranges: [
+        { since: "2022-11-01", until: "2023-01-01" },
+        { since: "2021-11-01", until: "2021-12-01" },
+      ],
+    });
+
+    expect(await t.run((ctx) => ctx.db.get(replaced))).toMatchObject({ status: "cancelled" });
+    expect(await t.run((ctx) => ctx.db.get(backfillId))).toMatchObject({
+      status: "running",
+      since: "2022-11-01",
+      ranges: [{ since: "2021-11-01", until: "2021-12-01" }],
+    });
+
+    // The first range's last window reaches its `since`: the next range starts.
+    const first = (await historyJobsFor(t, accountId)).find((job) => job.status === "queued")!;
+
+    expect(first).toMatchObject({ since: "2022-12-02", until: "2023-01-01" });
+    await t.run((ctx) =>
+      ctx.db.patch(first._id, { since: "2022-11-01", status: "running", attempt: 1 }),
+    );
+    await t.mutation(internal.jobs.finish, {
+      jobId: first._id,
+      attempt: 1,
+      warnings: [],
+      postsReceived: 20,
+    });
+
+    expect(await t.run((ctx) => ctx.db.get(backfillId))).toMatchObject({
+      status: "running",
+      since: "2021-11-01",
+      ranges: [],
+    });
+    const second = (await historyJobsFor(t, accountId)).find((job) => job.status === "queued")!;
+
+    expect(second).toMatchObject({ since: "2021-11-01", until: "2021-12-01" });
+
+    // And once the last range is walked, the backfill is complete.
+    await t.run((ctx) => ctx.db.patch(second._id, { status: "running", attempt: 1 }));
+    await t.mutation(internal.jobs.finish, {
+      jobId: second._id,
+      attempt: 1,
+      warnings: [],
+      postsReceived: 5,
+    });
+
+    expect(await t.run((ctx) => ctx.db.get(backfillId))).toMatchObject({ status: "complete" });
+  });
+
+  it("refuses a range that ends before it starts", async () => {
     const { t, owner } = await setup();
     const accountId = await insertAccount(t);
 
@@ -528,17 +598,20 @@ describe("jobs.restartHistoryBackfill", () => {
         handle: "theo",
         owner,
         since: FLOOR,
-        cursorUntil: "2020-01-01",
+        cursorUntil: FLOOR,
         windowDays: 30,
         postsFound: 0,
-        status: "running",
+        status: "complete",
         updatedAt: Date.now(),
       }),
     );
 
     await expect(
-      t.mutation(internal.jobs.restartHistoryBackfill, { handle: "theo", until: "2026-07-12" }),
-    ).rejects.toThrow("still running");
+      t.mutation(internal.jobs.restartHistoryBackfill, {
+        handle: "theo",
+        ranges: [{ since: "2023-01-01", until: "2022-11-01" }],
+      }),
+    ).rejects.toThrow("since");
   });
 });
 

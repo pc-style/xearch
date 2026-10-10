@@ -523,6 +523,10 @@ export default defineSchema({
     postsFound: v.number(),
     status: historyBackfillStatusValidator,
     error: v.optional(v.string()),
+    // Date ranges still to walk once the current one reaches `since`, in
+    // order (`jobs.restartHistoryBackfill`). Absent for an ordinary
+    // backfill, which walks one range down to the account's join date.
+    ranges: v.optional(v.array(v.object({ since: v.string(), until: v.string() }))),
     updatedAt: v.number(),
   }).index("by_account", ["accountId"]),
   receipts: defineTable({

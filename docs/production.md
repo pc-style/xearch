@@ -58,7 +58,12 @@ A backfill runs once per account. One that finished before windows resumed from 
 
 ```sh
 npx convex run --prod jobs:restartHistoryBackfill '{"handle":"theo","until":"2026-07-12"}'
+# or only the holes, in the order given:
+npx convex run --prod jobs:restartHistoryBackfill \
+  '{"handle":"theo","ranges":[{"since":"2022-11-01","until":"2023-07-20"},{"since":"2021-10-20","until":"2022-10-01"}]}'
 ```
+
+x.md allows about 20 search pages (400 posts) per 15-minute window; a rate-limited window job waits for the reset and continues, so a long walk runs by itself at roughly 1,600 posts an hour. Restarting replaces a backfill that is still running.
 
 Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
 
