@@ -450,6 +450,13 @@ pub fn run_once(config: &Config) -> Result<Registry> {
             registry.captures.len()
         );
     }
+    // The registry is saved after each import, so a killed watcher resumes
+    // where it stopped, but not after each file it skips: the drop
+    // directory keeps every capture ever received (10,000 by October 2026)
+    // and the registry records each, so saving per file rewrote and synced
+    // 2 MB ten thousand times a pass. Passes took hours and new captures
+    // waited for them.
+    let mut changed = false;
     for file in candidates(&config.drop_dir) {
         let Some(stem) = stem_of(&file).map(str::to_owned) else {
             continue;
@@ -464,9 +471,11 @@ pub fn run_once(config: &Config) -> Result<Registry> {
             );
             continue;
         }
-        if is_capture_name(&stem) {
-            run_capture(config, &engine, &mut registry, &file, &stem, index_empty);
+        let imported = if is_capture_name(&stem) {
+            run_capture(config, &engine, &mut registry, &file, &stem, index_empty)
         } else {
+            // Per-user dumps are few, and every path through them may touch
+            // their record.
             run_user(
                 config,
                 &engine,
@@ -475,10 +484,16 @@ pub fn run_once(config: &Config) -> Result<Registry> {
                 &file_name,
                 index_empty,
             );
+            true
+        };
+        if imported {
+            registry.save(&path)?;
+            changed = true;
         }
+    }
+    if changed || !path.exists() {
         registry.save(&path)?;
     }
-    registry.save(&path)?;
     rebuilt?;
     Ok(registry)
 }
@@ -554,6 +569,8 @@ pub fn run_pass(config: &Config) -> Result<Registry> {
     result
 }
 
+/// Import one capture batch unless it already was. Returns whether it
+/// tried, and so may have changed the registry.
 fn run_capture(
     config: &Config,
     engine: &search_tantivy::Engine,
@@ -561,7 +578,7 @@ fn run_capture(
     file: &Path,
     sha: &str,
     index_empty: bool,
-) {
+) -> bool {
     // The batch is recorded and the index still has content: nothing about
     // this content can need importing again, and any publication still
     // owed for its handle travels on its own (see
@@ -569,14 +586,14 @@ fn run_capture(
     // file. After an index reset (`index_empty`) the recorded hash must be
     // reimported from drop regardless.
     if !index_empty && registry.captures.contains_key(sha) {
-        return;
+        return false;
     }
     let identity = capture_identity(file);
     let writer = match engine.writer() {
         Ok(writer) => writer,
         Err(error) => {
             eprintln!("indexer err capture={sha} {error}");
-            return;
+            return true;
         }
     };
     match search_ingest::import(file, &config.archive, writer) {
@@ -624,6 +641,7 @@ fn run_capture(
             }
         }
     }
+    true
 }
 
 fn run_user(
@@ -1072,6 +1090,36 @@ mod tests {
             registry.captures.get(&sha).expect("capture").accepted,
             1,
             "capture must not reimport"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pass_over_imported_captures_does_not_rewrite_the_registry() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = config_in(dir.path());
+        for name in ['a', 'b', 'c'] {
+            std::fs::write(
+                config
+                    .drop_dir
+                    .join(format!("{}.json", name.to_string().repeat(64))),
+                serde_json::to_string(&serde_json::json!({
+                    "records": [{"receivedAt": 1, "payload": {"posts": [post("5001", "hero")]}}]
+                }))
+                .expect("json"),
+            )
+            .expect("write capture");
+        }
+        run_once(&config).expect("first pass");
+        let registry = registry_path(&config.state_dir);
+        let saved = std::fs::metadata(&registry).expect("registry").ino();
+
+        run_once(&config).expect("second pass");
+        assert_eq!(
+            std::fs::metadata(&registry).expect("registry").ino(),
+            saved,
+            "nothing was imported, so the registry is not written again"
         );
     }
 
