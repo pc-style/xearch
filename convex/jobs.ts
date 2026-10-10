@@ -1422,6 +1422,14 @@ function joinFloor(account: Doc<"accounts">): string {
   return isValidDate(account.joined) ? account.joined : DEFAULT_JOIN_FLOOR;
 }
 
+/** How far back the backfill's current range walks: its `since`, never
+ * before the account existed. */
+function rangeFloor(account: Doc<"accounts"> | null, since: string): string {
+  const joined = account ? joinFloor(account) : DEFAULT_JOIN_FLOOR;
+
+  return since > joined ? since : joined;
+}
+
 /**
  * One `kind: "live"` job for one dated window of one account's timeline.
  * Deliberately bypasses the public `start` mutation (and its
@@ -1491,6 +1499,25 @@ async function launchNextWindow(
   const window = computeWindow(cursorUntil, windowDays, floor);
 
   if (!window) {
+    const backfill = await ctx.db.get(backfillId);
+    const [next, ...rest] = backfill?.ranges ?? [];
+
+    if (next) {
+      await ctx.db.patch(backfillId, { since: next.since, ranges: rest, updatedAt: Date.now() });
+      await launchNextWindow(
+        ctx,
+        backfillId,
+        owner,
+        accountId,
+        handleText,
+        next.until,
+        INITIAL_WINDOW_DAYS,
+        rangeFloor(await ctx.db.get(accountId), next.since),
+      );
+
+      return;
+    }
+
     await ctx.db.patch(backfillId, { status: "complete", updatedAt: Date.now() });
 
     return;
@@ -1628,8 +1655,7 @@ async function onHistoryWindowFinished(
     return;
   }
 
-  const account = await ctx.db.get(accountId);
-  const floor = account ? joinFloor(account) : DEFAULT_JOIN_FLOOR;
+  const floor = rangeFloor(await ctx.db.get(accountId), backfill.since);
   // `job.since`/`job.until` are this window's own bounds (set when it was
   // created by `insertHistoryWindowJob`). The next window ends where this
   // one's posts stopped, which is `job.since` only when x.md paged all the
@@ -1651,26 +1677,46 @@ async function onHistoryWindowFinished(
 }
 
 /**
- * Walk an account's history again from `until` back to its join date, for a
- * backfill that finished or stopped with holes in it. Backfills that ran
- * before windows resumed from their oldest post (`resumeUntil`) skipped most
- * of every window x.md stopped paging early. Re-asks x.md for every window,
- * so it spends search allowance; the indexer dedupes posts it already has.
+ * Walk an account's history again, for a backfill that finished or stopped
+ * with holes in it. Backfills that ran before windows resumed from their
+ * oldest post (`resumeUntil`) skipped most of every window x.md stopped
+ * paging early. Re-asks x.md for every window, so it spends search
+ * allowance; the indexer drops posts it already has.
+ *
+ * `until` walks from that date back to the join date. `ranges` walks only
+ * those date ranges, in the order given, so the holes can be filled without
+ * fetching the months already complete again. A backfill still running is
+ * replaced: its current window job is cancelled.
  *
  *   npx convex run --prod jobs:restartHistoryBackfill '{"handle":"theo","until":"2026-07-12"}'
+ *   npx convex run --prod jobs:restartHistoryBackfill \
+ *     '{"handle":"theo","ranges":[{"since":"2022-11-01","until":"2023-07-01"}]}'
  */
 export const restartHistoryBackfill = internalMutation({
-  args: { handle: v.string(), until: v.string() },
+  args: {
+    handle: v.string(),
+    until: v.optional(v.string()),
+    ranges: v.optional(v.array(v.object({ since: v.string(), until: v.string() }))),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
-    if (!isValidDate(args.until)) throw new ConvexError("Use a YYYY-MM-DD `until` date.");
-
     const account = await ctx.db
       .query("accounts")
       .withIndex("by_handle", (q) => q.eq("handle", args.handle.replace(/^@/, "").toLowerCase()))
       .first();
 
     if (!account) throw new ConvexError(`No account @${args.handle}.`);
+
+    const ranges =
+      args.ranges ?? (args.until ? [{ since: joinFloor(account), until: args.until }] : []);
+
+    if (
+      !ranges.length ||
+      ranges.some(
+        ({ since, until }) => !isValidDate(since) || !isValidDate(until) || since >= until,
+      )
+    )
+      throw new ConvexError("Give an `until` date or `ranges` of YYYY-MM-DD `since` < `until`.");
 
     const backfill = await ctx.db
       .query("historyBackfills")
@@ -1679,18 +1725,37 @@ export const restartHistoryBackfill = internalMutation({
 
     if (!backfill) throw new ConvexError(`@${account.handle} has never been backfilled.`);
 
-    if (backfill.status === "queued" || backfill.status === "running")
-      throw new ConvexError(`@${account.handle}'s backfill is still running.`);
-    await ctx.db.patch(backfill._id, { error: undefined, windowDays: INITIAL_WINDOW_DAYS });
+    // One window job at a time per account: retire the walk being replaced.
+    const inFlight = await ctx.db
+      .query("jobs")
+      .withIndex("by_history_for", (q) => q.eq("historyFor", account._id))
+      .collect();
+
+    for (const job of inFlight)
+      if (job.status === "queued" || job.status === "running")
+        await ctx.db.patch(job._id, {
+          status: "cancelled",
+          phase: "Replaced by a restarted backfill.",
+          updatedAt: Date.now(),
+        });
+
+    const [first, ...rest] = ranges;
+
+    await ctx.db.patch(backfill._id, {
+      error: undefined,
+      since: first.since,
+      ranges: rest,
+      windowDays: INITIAL_WINDOW_DAYS,
+    });
     await launchNextWindow(
       ctx,
       backfill._id,
       backfill.owner,
       account._id,
       account.handle,
-      args.until,
+      first.until,
       INITIAL_WINDOW_DAYS,
-      joinFloor(account),
+      rangeFloor(account, first.since),
     );
 
     return null;
