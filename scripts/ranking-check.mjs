@@ -15,6 +15,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { report, sample, violations } from "./lib/rankingCheck.mjs";
 
 const arg = (name, fallback) =>
@@ -26,7 +27,11 @@ const INDEX = arg("index", join(BASE, "index"));
 
 const ARCHIVE = arg("archive", join(BASE, "archive"));
 
-const BIN = arg("bin", join(import.meta.dirname, "../search/target/release/xearch-search"));
+// Not `import.meta.dirname`: the VM runs Node 18, which does not have it.
+const BIN = arg(
+  "bin",
+  fileURLToPath(new URL("../search/target/release/xearch-search", import.meta.url)),
+);
 
 const VERBOSE = process.argv.includes("--verbose");
 
