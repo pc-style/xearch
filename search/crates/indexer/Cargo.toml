@@ -6,6 +6,7 @@ license.workspace = true
 [lints]
 workspace = true
 [dependencies]
+search-backend.workspace = true
 search-ingest.workspace = true
 search-model.workspace = true
 search-query.workspace = true
@@ -18,4 +19,5 @@ thiserror.workspace = true
 tokio.workspace = true
 ureq.workspace = true
 [dev-dependencies]
+search-ranking.workspace = true
 tempfile.workspace = true

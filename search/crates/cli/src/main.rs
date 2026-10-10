@@ -54,6 +54,16 @@ enum Command {
     /// Merge the index into one segment. Run once on an index built before
     /// imports waited for their merges; stop `watch` first (one writer).
     Compact,
+    /// Rebuild the index from the archive, replacing every post at once
+    /// while searches keep serving the old ones. With a watcher running,
+    /// asks it to rebuild on its next pass instead. The watcher also does
+    /// this by itself after an upgrade that changes what is indexed.
+    Rebuild {
+        #[arg(long, env = "SEARCH_ARCHIVE_DIR")]
+        archive: Option<PathBuf>,
+        #[arg(long, env = "SEARCH_STATE_DIR")]
+        state_dir: Option<PathBuf>,
+    },
     /// Serve the existing app contract on loopback.
     Serve {
         #[arg(long, default_value = "127.0.0.1:4320")]
@@ -159,6 +169,26 @@ fn run_query(
             println!("{}", search(&line)?);
         }
     }
+    Ok(())
+}
+
+/// Rebuild now, or leave the request for a running watcher (which holds
+/// the index's only writer).
+fn run_rebuild(
+    index: &std::path::Path,
+    archive: &std::path::Path,
+    state_dir: &std::path::Path,
+) -> color_eyre::Result<()> {
+    if let Some(pid) = search_indexer::watcher_pid(state_dir) {
+        search_indexer::rebuild::request(state_dir)?;
+        println!("{{\"requested\":true,\"watcherPid\":{pid}}}");
+        eprintln!("The watcher (pid {pid}) will rebuild on its next pass; follow its log.");
+        return Ok(());
+    }
+    let _lock = search_indexer::acquire_exclusive(state_dir, "rebuild")?;
+    let engine = search_tantivy::open(index, true)?;
+    let rebuilt = search_indexer::rebuild::rebuild(archive, &engine)?;
+    println!("{}", serde_json::to_string(&rebuilt)?);
     Ok(())
 }
 
@@ -393,6 +423,16 @@ async fn main() -> color_eyre::Result<()> {
             println!("{{\"segmentsBefore\":{before}}}");
             Ok(())
         }
+        Command::Rebuild { archive, state_dir } => run_rebuild(
+            &resolve_top_index()?,
+            &resolve_dir(
+                archive,
+                top_base.as_ref(),
+                "archive",
+                "--archive / SEARCH_ARCHIVE_DIR",
+            )?,
+            &resolve_top_state(state_dir)?,
+        ),
         Command::Serve { listen } => run_serve(&resolve_top_index()?, listen).await,
         Command::Publish { state_dir, handle } => run_publish(
             &resolve_top_index()?,

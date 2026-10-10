@@ -26,6 +26,7 @@
 
 pub mod health;
 pub mod publish;
+pub mod rebuild;
 pub mod users;
 
 use search_model::{Error, Result};
@@ -94,7 +95,7 @@ impl Config {
 }
 
 /// Path of the single-instance lock (`<pid> <kind>`, kind is
-/// watch|mark|publish).
+/// watch|mark|publish|rebuild).
 #[must_use]
 pub fn lock_path(state_dir: &Path) -> PathBuf {
     state_dir.join("indexer.lock")
@@ -249,9 +250,12 @@ fn signature(file: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
+/// Drop files in the order they arrived. Capture batches are named by
+/// their hash, so name order is random: after a backlog, an older capture
+/// imported last would overwrite a post's newer likes and replies.
 fn candidates(drop_dir: &Path) -> Vec<PathBuf> {
     let entries = std::fs::read_dir(drop_dir).map_or_else(|_| Vec::new(), Iterator::collect);
-    let mut files: Vec<PathBuf> = entries
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
         .into_iter()
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| {
@@ -259,10 +263,15 @@ fn candidates(drop_dir: &Path) -> Vec<PathBuf> {
                 .and_then(|ext| ext.to_str())
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
         })
-        .filter(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
+        .filter_map(|path| {
+            let metadata = std::fs::metadata(&path).ok()?;
+            metadata
+                .is_file()
+                .then_some((metadata.modified().ok()?, path))
+        })
         .collect();
     files.sort();
-    files
+    files.into_iter().map(|(_, path)| path).collect()
 }
 
 fn file_name_of(file: &Path) -> Option<String> {
@@ -407,6 +416,11 @@ fn too_large(file: &Path) -> bool {
 
 /// Import every due dump once, updating the registry.
 ///
+/// First, when the index is behind [`search_tantivy::INDEX_FORMAT`] or a
+/// rebuild was requested, rebuild it from the archive ([`rebuild`]). A
+/// failed rebuild leaves the index as it was; the pass still imports and
+/// then returns the failure, so the heartbeat reports it.
+///
 /// A user is due when its status is not `complete`, when the bytes of its
 /// recorded file changed, when its recorded file is gone (rename recovery),
 /// or when the index is empty but the registry is not (index reset). A
@@ -427,6 +441,7 @@ pub fn run_once(config: &Config) -> Result<Registry> {
     if replay_pending_publications(config, &engine, &mut registry) {
         registry.save(&path)?;
     }
+    let rebuilt = rebuild::when_due(&config.archive, &config.state_dir, &engine);
     let index_empty = engine.num_docs()? == 0;
     if index_empty && (!registry.users.is_empty() || !registry.captures.is_empty()) {
         eprintln!(
@@ -464,6 +479,7 @@ pub fn run_once(config: &Config) -> Result<Registry> {
         registry.save(&path)?;
     }
     registry.save(&path)?;
+    rebuilt?;
     Ok(registry)
 }
 
