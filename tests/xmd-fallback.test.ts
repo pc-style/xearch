@@ -55,6 +55,28 @@ describe("x.md fallback key", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it("reports the primary key's answer when the fallback key is dead", async () => {
+    for (const status of [401, 403]) {
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
+        keyOf(init) === "primary"
+          ? Response.json(
+              { code: "rate_limited" },
+              { status: 429, headers: { "Retry-After": "60" } },
+            )
+          : Response.json({ code: "invalid_key" }, { status }),
+      );
+
+      const read = new XmdClient("primary", fetcher, "https://mdfromx.com", "fallback").read(
+        "search",
+        "from:theo",
+      );
+
+      await expect(read).rejects.toBeInstanceOf(ProviderError);
+      await expect(read).rejects.toMatchObject({ retryable: true });
+      await expect(read).rejects.not.toMatchObject({ code: "invalid_key" });
+    }
+  });
+
   it("never sends the same key twice", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response("", { status: 429 }));
 
