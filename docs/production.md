@@ -63,6 +63,19 @@ npx convex run --prod jobs:restartHistoryBackfill \
   '{"handle":"theo","ranges":[{"since":"2022-11-01","until":"2023-07-20"},{"since":"2021-10-20","until":"2022-10-01"}]}'
 ```
 
+Every account backfilled before `resumeUntil` has holes. `scripts/backfill-gaps.mjs` finds them from the retained captures (each window recorded what it asked for and the oldest post it got) and restarts each backfill over just those ranges:
+
+```sh
+node scripts/backfill-gaps.mjs --json > plan.json            # on the VM, where the archive is
+CONVEX_DEPLOYMENT=prod:utmost-kudu-321 node scripts/backfill-gaps.mjs --from=plan.json --apply
+```
+
+Nothing refreshes an account's newer posts on its own. To import them again (from a date, or in full without `since`):
+
+```sh
+npx convex run --prod jobs:startRefresh '{"accounts":[{"handle":"theo","since":"2026-09-20"}]}'
+```
+
 x.md allows about 20 search pages (400 posts) per 15-minute window; a rate-limited window job waits for the reset and continues, so a long walk runs by itself at roughly 1,600 posts an hour. Restarting replaces a backfill that is still running.
 
 Tantivy retrieval is running. On September 20, authenticated search and pagination passed through Rust on loopback port 4320, nginx on port 4321, and the configured HTTPS search endpoint. Twelve pages passed the current response decoder, with diagnostics opt-in and no first/next-page overlap. The index reported 48,331 documents; all 321 retained raw captures had archive receipts. These are point-in-time observations, not a promise of complete account history.
