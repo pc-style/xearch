@@ -110,6 +110,21 @@
       "unit": "bytes",
       "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
     },
+    "indexer.idle pass, 4000 captures": {
+      "value": 26218320,
+      "unit": "ns",
+      "commit": "1557d068b09f45afa531a405d9da4232e71db354"
+    },
+    "indexer.import one capture, 4000 captures": {
+      "value": 400063163,
+      "unit": "ns",
+      "commit": "1557d068b09f45afa531a405d9da4232e71db354"
+    },
+    "indexer.rebuild, 6000 posts": {
+      "value": 47628006,
+      "unit": "ns",
+      "commit": "1557d068b09f45afa531a405d9da4232e71db354"
+    },
     "load.app-ready": {
       "value": 1184,
       "unit": "ms",
