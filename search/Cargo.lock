@@ -1419,6 +1419,7 @@ dependencies = [
 name = "search-indexer"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "search-backend",
  "search-ingest",
  "search-model",

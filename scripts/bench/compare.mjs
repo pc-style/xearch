@@ -79,6 +79,7 @@ const GROUPS = [
   ["load.", "Page load (throttled phone, median)"],
   ["convex.", "Convex function modules (minified)"],
   ["search.", "Search engine (criterion median)"],
+  ["indexer.", "Search indexer (criterion median)"],
 ];
 
 const groupOf = (name) => GROUPS.find(([prefix]) => name.startsWith(prefix))?.[1] ?? "Other";
@@ -236,7 +237,8 @@ async function updateBaseline() {
 
   // A module or benchmark that no longer exists has nothing to ratchet.
   for (const name of Object.keys(baseline.metrics))
-    if (!(name in head.metrics) && (head.rust || !name.startsWith("search."))) {
+    // Rust benchmarks only run with --rust: a run without them removes none.
+    if (!(name in head.metrics) && (head.rust || !/^(search|indexer)\./u.test(name))) {
       delete baseline.metrics[name];
       changed.push(`${name}: removed`);
     }

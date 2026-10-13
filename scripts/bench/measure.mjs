@@ -16,7 +16,9 @@
  *   a slow phone on a slow network, with a fixed delay per file standing in
  *   for static hosting. Checkouts are measured interleaved, run by run, so a
  *   noisy moment on the runner hits both sides.
- * - ns: the Rust search engine's criterion benchmark (`--rust` only).
+ * - ns: the Rust search engine's criterion benchmark, and the indexer's
+ *   (a watcher pass, an import, a rebuild: crates/indexer/benches) where the
+ *   checkout has it (`--rust` only).
  *
  * Nothing talks to a real backend: the site is built against an unreachable
  * Convex URL and every request that leaves the local server is aborted.
@@ -367,7 +369,9 @@ async function criterionResults(root) {
       await readFile(file.replace("benchmark.json", "estimates.json"), "utf8"),
     );
 
-    results[`search.${id}`] = estimates.median.point_estimate;
+    const name = id.startsWith("indexer/") ? `indexer.${id.slice(8)}` : `search.${id}`;
+
+    results[name] = estimates.median.point_estimate;
   }
 
   return results;
@@ -387,24 +391,32 @@ async function searchBench() {
   for (let round = 0; round < rustRounds; round += 1) {
     for (const [index, checkout] of checkouts.entries()) {
       await rm(criterion, { recursive: true, force: true });
-      run(
-        "cargo",
-        [
-          "bench",
-          "--locked",
-          "-p",
-          "search-tantivy",
-          "--bench",
-          "search",
-          "--",
-          "--warm-up-time",
-          "1",
-          "--measurement-time",
-          "3",
-          "--noplot",
-        ],
-        { cwd: join(checkout.dir, "search"), env: { ...process.env, CARGO_TARGET_DIR: target } },
-      );
+
+      const benches = [["search-tantivy", "search"]];
+
+      // A base branch from before the indexer benchmark has none to run.
+      if (existsSync(join(checkout.dir, "search", "crates", "indexer", "benches", "indexer.rs")))
+        benches.push(["search-indexer", "indexer"]);
+
+      for (const [crate, bench] of benches)
+        run(
+          "cargo",
+          [
+            "bench",
+            "--locked",
+            "-p",
+            crate,
+            "--bench",
+            bench,
+            "--",
+            "--warm-up-time",
+            "1",
+            "--measurement-time",
+            "3",
+            "--noplot",
+          ],
+          { cwd: join(checkout.dir, "search"), env: { ...process.env, CARGO_TARGET_DIR: target } },
+        );
 
       for (const [id, nanos] of Object.entries(await criterionResults(criterion)))
         best[index][id] = Math.min(best[index][id] ?? Infinity, nanos);
