@@ -394,6 +394,26 @@ Waiting drop files are also imported in the order they arrived, not by
 name: capture batches are named by their hash, so name order let an older
 capture imported last overwrite a post's newer numbers.
 
+## Guarding against regressions
+
+Two checks keep the indexer's costs from creeping up unnoticed, as they did
+in October 2026, when every watcher pass rewrote the 2 MB registry once per
+stored capture and the indexer sat at full CPU for hours:
+
+- **Work budgets** (`search/crates/indexer/tests/work.rs`, part of
+  `cargo test`, so every pull request runs them). On a data root shaped
+  like production's (4,000 captures, all recorded), a pass with nothing new
+  must write under 64 KB and read the registry about once, and a pass
+  importing one capture must write under three registries' worth. They
+  count the bytes the pass's thread reads and writes
+  (`/proc/thread-self/io`), which are exact on a shared runner where
+  timings are not. The October bug writes 2.9 GB in the first test.
+- **Benchmarks** (`search/crates/indexer/benches/indexer.rs`): the same
+  idle pass, importing one capture, and a 6,000-post rebuild. The
+  Performance workflow runs them with the search benchmark on any pull
+  request that touches `search/`, against its base branch on the same
+  runner, and flags anything more than 10% slower (`indexer.*` metrics).
+
 ## Index corruption recovery
 
 If the index directory is damaged the watcher keeps running but every pass
