@@ -788,7 +788,7 @@ select.sort {
   max-width: 64ch;
   margin: 56px auto 0;
   text-align: center;
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.65;
   color: var(--faint);
 }
@@ -799,7 +799,7 @@ select.sort {
   color: var(--muted);
 }
 .intro p {
-  margin: 0 0 10px;
+  margin: 0 0 6px;
 }
 .intro a {
   color: var(--muted);
