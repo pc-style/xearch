@@ -5,6 +5,7 @@ import { AgentMail } from "@agentmail/convex";
 import { auth } from "./auth";
 import { receiveUpdate } from "./publication";
 import { receiveReport } from "./health";
+import { registerApiRoutes } from "./agents/api";
 import { registerAgentRoutes } from "./agents/routes";
 
 const http = httpRouter();
@@ -56,6 +57,8 @@ http.route({
 
 // Agent-facing documents and MCP servers, then the static frontend with real
 // 404s for unknown paths. See convex/agents/routes.ts.
+registerApiRoutes(http);
+
 registerAgentRoutes(http);
 
 export default http;

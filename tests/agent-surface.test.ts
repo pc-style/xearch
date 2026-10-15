@@ -4,7 +4,7 @@ import { convexTest } from "convex-test";
 import staticHosting from "@convex-dev/static-hosting/test";
 import schema from "../convex/schema";
 import { sha256 } from "../convex/agents/discovery";
-import type { Json } from "../convex/agents/mcp";
+import type { Json } from "../convex/agents/core";
 import { SITE_URL } from "../convex/agents/pages";
 
 const modules = import.meta.glob("../convex/**/*.ts");
@@ -90,7 +90,7 @@ describe("agent-facing documents", () => {
     expect(response.headers.get("Content-Type")).toContain("text/markdown");
     expect(response.headers.get("Vary")).toContain("Accept");
     expect(response.headers.get("Link")).toContain('</sitemap.xml>; rel="sitemap"');
-    expect(await response.text()).toMatch(/^---\ntitle: /);
+    expect(await response.text()).toMatch(/^# Xearch\n/);
 
     const crawler = await t.fetch("/", {
       headers: { "User-Agent": "GPTBot/1.2", Accept: "text/html" },
@@ -101,6 +101,26 @@ describe("agent-facing documents", () => {
     const agentMode = await t.fetch("/?mode=agent");
 
     expect(agentMode.headers.get("Content-Type")).toContain("text/markdown");
+    expect(await agentMode.text()).toMatch(/## Endpoints[^]*## Authentication/);
+  });
+
+  it("serves every Markdown twin heading-first, including the llms.txt files", async () => {
+    const t = setup();
+
+    for (const path of [
+      "/index.md",
+      "/docs.md",
+      "/docs/api.md",
+      "/auth.md",
+      "/docs/llms.txt.md",
+      "/mcp.md",
+    ]) {
+      const response = await t.fetch(path);
+
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get("Content-Type"), path).toContain("text/markdown");
+      expect(await response.text(), path).toMatch(/^# /);
+    }
   });
 
   it("returns a real 404 with Markdown guidance for unknown paths", async () => {
@@ -115,6 +135,21 @@ describe("agent-facing documents", () => {
 
     // No index.html is uploaded here, so this checks the status, not the app page.
     expect(browser.status).toBe(404);
+
+    const client = await t.fetch("/no/such/page", { headers: { Accept: "application/json" } });
+
+    expect(client.status).toBe(404);
+    expect(client.headers.get("Content-Type")).toContain("application/problem+json");
+    expect((await client.json()).code).toBe("not_found");
+  });
+
+  it("answers people who open an MCP endpoint with a page, and MCP clients with a 405", async () => {
+    const t = setup();
+    const page = await t.fetch("/mcp", { headers: { Accept: "text/html" } });
+
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("search_posts");
+    expect((await t.fetch("/mcp", { headers: { Accept: "text/event-stream" } })).status).toBe(405);
   });
 
   it("serves trust pages as HTML with real content, and their Markdown twins", async () => {
@@ -200,7 +235,10 @@ describe("MCP servers", () => {
     });
 
     expect(notification.status).toBe(202);
-    expect((await t.fetch("/mcp")).status).toBe(405);
+    expect(
+      (await t.fetch("/mcp", { headers: { Accept: "application/json, text/event-stream" } }))
+        .status,
+    ).toBe(405);
   });
 
   it("searches through the search service and returns posts", async () => {
@@ -266,5 +304,153 @@ describe("MCP servers", () => {
     );
 
     expect(JSON.stringify(page.result)).toContain("Privacy policy");
+  });
+});
+
+function stubSearchService(): string[] {
+  vi.stubEnv("SEARCH_API_URL", "https://search.test/v1/search");
+  const requests: string[] = [];
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      requests.push(String(init.body));
+
+      return Response.json({
+        rows: [
+          {
+            tweetId: "1",
+            author: "levelsio",
+            text: "pricing is hard",
+            url: "https://x.com/levelsio/status/1",
+            links: [],
+            createdAt: 1_700_000_000_000,
+            likes: 10,
+          },
+        ],
+        total: 1,
+        nextCursor: "next",
+      });
+    }),
+  );
+
+  return requests;
+}
+
+type OpenApi = {
+  openapi: string;
+  paths: { [path: string]: { [method: string]: { operationId: string; description: string } } };
+};
+
+describe("REST API, NLWeb and A2A", () => {
+  it("searches over GET and describes itself with OpenAPI", async () => {
+    const requests = stubSearchService();
+    const t = setup();
+    const response = await t.fetch("/api/v1/search?q=%40levelsio+pricing&sort=likes");
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(requests[0])).toMatchObject({
+      query: "pricing",
+      author: "levelsio",
+      sort: "likes",
+    });
+    expect(body.posts[0].url).toBe("https://x.com/levelsio/status/1");
+    expect(body.nextCursor).toBe("next");
+
+    const spec: OpenApi = await (await t.fetch("/openapi.json")).json();
+    const operations = Object.values(spec.paths).flatMap((path) => Object.values(path));
+
+    expect(spec.openapi).toBe("3.1.0");
+    expect(new Set(operations.map((op) => op.operationId)).size).toBe(operations.length);
+
+    for (const op of operations) expect(op.description, op.operationId).toBeTruthy();
+  });
+
+  it("answers bad API requests with problem documents", async () => {
+    const t = setup();
+    const missing = await t.fetch("/api/v1/search");
+
+    expect(missing.status).toBe(400);
+    expect(missing.headers.get("Content-Type")).toContain("application/problem+json");
+    expect((await missing.json()).code).toBe("invalid_request");
+
+    const operator = await t.fetch("/api/v1/search?q=foo+lang%3Aen");
+
+    expect([400, 503]).toContain(operator.status);
+    expect((await t.fetch("/api/v2/nothing")).status).toBe(404);
+    expect((await t.fetch("/api/v1/search", { method: "POST" })).status).toBe(405);
+  });
+
+  it("runs several searches in one batch request", async () => {
+    stubSearchService();
+    const t = setup();
+
+    const response = await t.fetch("/api/v1/search/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "abc" },
+      body: JSON.stringify({
+        searches: [{ query: "pricing" }, { query: "convex", sort: "newest" }],
+      }),
+    });
+
+    const body = await response.json();
+
+    expect(response.headers.get("Idempotency-Key")).toBe("abc");
+    expect(body.results.map((result: { status: number }) => result.status)).toEqual([200, 200]);
+  });
+
+  it("answers NLWeb asks as JSON and as a stream", async () => {
+    stubSearchService();
+    const t = setup();
+
+    const answer = await (
+      await t.fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: { text: "pricing" } }),
+      })
+    ).json();
+
+    expect(answer._meta).toMatchObject({ response_type: "answer", version: "0.55" });
+    expect(answer.results[0].url).toBe("https://x.com/levelsio/status/1");
+
+    const stream = await t.fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: { text: "pricing" }, prefer: { streaming: true } }),
+    });
+
+    const events = [...(await stream.text()).matchAll(/^event: (\w+)$/gm)].map((match) => match[1]);
+
+    expect(stream.headers.get("Content-Type")).toContain("text/event-stream");
+    expect(events).toEqual(["start", "result", "complete"]);
+  });
+
+  it("publishes an A2A agent card and answers message/send", async () => {
+    stubSearchService();
+    const t = setup();
+    const card = await (await t.fetch("/.well-known/agent-card.json")).json();
+
+    expect(card.url).toBe(`${SITE_URL}/a2a`);
+
+    const reply = await (
+      await t.fetch("/a2a", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 7,
+          method: "message/send",
+          params: {
+            message: { messageId: "m1", role: "user", parts: [{ kind: "text", text: "pricing" }] },
+          },
+        }),
+      })
+    ).json();
+
+    expect(reply.id).toBe(7);
+    expect(reply.result.kind).toBe("message");
+    expect(reply.result.parts[0].text).toContain("https://x.com/levelsio/status/1");
   });
 });

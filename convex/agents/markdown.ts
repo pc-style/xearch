@@ -18,9 +18,12 @@ function inline(text: string): string {
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
 }
 
-/** A document without its leading `---` frontmatter block. */
-export function stripFrontmatter(markdown: string): string {
-  return markdown.replace(/^---\n[^]*?\n---\n+/, "");
+function cells(row: string): string[] {
+  return row
+    .trim()
+    .replace(/^\||\|$/g, "")
+    .split("|")
+    .map((cell) => cell.trim());
 }
 
 export function markdownToHtml(markdown: string): string {
@@ -50,6 +53,25 @@ export function markdownToHtml(markdown: string): string {
       continue;
     }
 
+    // A table: a header row, a `| --- |` rule, then body rows.
+    if (line.startsWith("|") && /^\|[\s|:-]+\|$/.test(lines[i + 1] ?? "")) {
+      flush();
+      const head = cells(line).map((cell) => `<th>${inline(cell)}</th>`);
+      const rows: string[] = [];
+
+      for (i += 2; i < lines.length && lines[i].startsWith("|"); i++)
+        rows.push(
+          `<tr>${cells(lines[i])
+            .map((cell) => `<td>${inline(cell)}</td>`)
+            .join("")}</tr>`,
+        );
+      i--;
+      out.push(
+        `<table><thead><tr>${head.join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`,
+      );
+      continue;
+    }
+
     const heading = line.match(/^(#{1,3}) (.*)$/);
 
     if (heading) {
@@ -59,7 +81,7 @@ export function markdownToHtml(markdown: string): string {
     } else if (line.startsWith("- ")) {
       if (paragraph.length) flush();
       list.push(line.slice(2));
-    } else if (!line.trim()) {
+    } else if (!line.trim() || line === "---") {
       flush();
     } else if (list.length && line.startsWith("  ")) {
       list[list.length - 1] += ` ${line.trim()}`;

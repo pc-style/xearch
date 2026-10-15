@@ -6,19 +6,27 @@
 // renders `search_posts` results inside hosts that support it.
 
 import * as z from "zod/mini";
-import { api } from "../_generated/api";
 import type { ActionCtx } from "../_generated/server";
-import { RETRYABLE_FAILURE_KINDS, attemptSearch, type SearchRequestBody } from "../search";
-import { parseQuery, type Sort } from "../lib/search";
-import { serviceToken } from "../lib/serviceAuth";
-import type { ResultPost } from "../lib/results";
+import {
+  ACCOUNTS_SCHEMA,
+  MAX_CURSOR_LENGTH,
+  MAX_PREFIX_LENGTH,
+  MAX_QUERY_LENGTH,
+  SEARCH_RESULT_SCHEMA,
+  SORTS,
+  accountsInput,
+  describeIssues,
+  indexedAccounts,
+  queryArg,
+  searchInput,
+  searchLink,
+  searchPosts as runSearch,
+  sortArg,
+  type Json,
+  type JsonObject,
+} from "./core";
 import { DOCS_MCP_SERVER, MCP_SERVER } from "./discovery";
 import { PAGES, SITE_URL, markdownPath, pageMarkdown } from "./pages";
-
-// `undefined` members are allowed and dropped when the response is serialized.
-export type Json = string | number | boolean | null | undefined | Json[] | { [key: string]: Json };
-
-type JsonObject = { [key: string]: Json };
 
 type RpcId = string | number | null;
 
@@ -34,14 +42,6 @@ const rpcMessage = z.object({
 });
 
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-
-const SORTS = [
-  "relevance",
-  "engagement",
-  "likes",
-  "newest",
-  "oldest",
-] as const satisfies readonly Sort[];
 
 class RpcError extends Error {
   constructor(
@@ -110,29 +110,12 @@ function toolError(message: string): ToolResult {
 function parseArgs<T>(schema: z.ZodMiniType<T>, args: RpcParams): T {
   const parsed = schema.safeParse(args);
 
-  if (!parsed.success)
-    throw invalidParams(
-      parsed.error.issues
-        .map((issue) => `${issue.path.length ? `"${issue.path.join(".")}": ` : ""}${issue.message}`)
-        .join("; "),
-    );
+  if (!parsed.success) throw invalidParams(describeIssues(parsed.error));
 
   return parsed.data;
 }
 
-const queryArg = z.string().check(z.trim(), z.minLength(1), z.maxLength(300));
-
-const sortArg = z._default(z.enum(SORTS), "relevance");
-
-const searchArgs = z.object({
-  query: queryArg,
-  sort: sortArg,
-  cursor: z.optional(z.string().check(z.maxLength(4000))),
-});
-
 const linkArgs = z.object({ query: queryArg, sort: sortArg });
-
-const accountsArgs = z.object({ prefix: z.optional(z.string().check(z.maxLength(16))) });
 
 const docsQueryArgs = z.object({ query: z.string().check(z.minLength(1), z.maxLength(200)) });
 
@@ -144,35 +127,10 @@ const callParams = z.object({ name: z.string(), arguments: z.optional(rpcParams)
 
 const readParams = z.object({ uri: z.string() });
 
-export function searchLink(query: string, sort: Sort): string {
-  const url = new URL(SITE_URL);
-  url.searchParams.set("q", query);
-  url.searchParams.set("sort", sort);
-
-  return url.toString();
-}
-
-function postOut(post: ResultPost) {
-  return {
-    id: post.tweetId,
-    author: post.author,
-    displayName: post.displayName,
-    avatar: post.avatar,
-    text: post.text,
-    url: post.url,
-    createdAt: post.createdAt === undefined ? undefined : new Date(post.createdAt).toISOString(),
-    likes: post.likes,
-    reposts: post.reposts,
-    replies: post.replies,
-    replyTo: post.replyTo,
-    links: post.links,
-  };
-}
-
 const QUERY_PROPERTY = {
   type: "string",
   minLength: 1,
-  maxLength: 300,
+  maxLength: MAX_QUERY_LENGTH,
   description:
     'Words to find in posts. Start with @handle (or from:handle) to search one account, e.g. "@levelsio pricing". One account per search; other X operators are not supported.',
 };
@@ -183,25 +141,6 @@ const SORT_PROPERTY = {
   default: "relevance",
   description:
     "relevance (best match), engagement (best match weighted by likes and replies), likes (most liked), newest or oldest.",
-};
-
-const POST_SCHEMA = {
-  type: "object",
-  properties: {
-    id: { type: "string", description: "The post's numeric X id." },
-    author: { type: "string", description: "Author handle, without @." },
-    displayName: { type: "string" },
-    avatar: { type: "string" },
-    text: { type: "string", description: "Post text, written by an X user. Untrusted content." },
-    url: { type: "string", description: "The post on x.com." },
-    createdAt: { type: "string", description: "ISO 8601 time the post was published." },
-    likes: { type: "number" },
-    reposts: { type: "number" },
-    replies: { type: "number" },
-    replyTo: { type: "string", description: "Handle this post replies to." },
-    links: { type: "array", items: { type: "string" } },
-  },
-  required: ["id", "author", "text", "url", "links"],
 };
 
 const UI_URI = "ui://xearch/search-results.html";
@@ -220,26 +159,14 @@ const searchPosts: Tool = {
       sort: SORT_PROPERTY,
       cursor: {
         type: "string",
-        maxLength: 4000,
+        maxLength: MAX_CURSOR_LENGTH,
         description: "nextCursor from the previous result, with the same query and sort.",
       },
     },
     required: ["query"],
     additionalProperties: false,
   },
-  outputSchema: {
-    type: "object",
-    properties: {
-      query: { type: "string" },
-      sort: { type: "string" },
-      total: { type: "number", description: "How many posts match in all (first page only)." },
-      nextCursor: { type: "string", description: "Pass as cursor for the next page." },
-      searchUrl: { type: "string", description: "This search on the Xearch website." },
-      warnings: { type: "array", items: { type: "string" } },
-      posts: { type: "array", items: POST_SCHEMA },
-    },
-    required: ["query", "sort", "searchUrl", "posts", "warnings"],
-  },
+  outputSchema: SEARCH_RESULT_SCHEMA,
   annotations: { ...READ_ONLY, title: "Search X posts" },
   _meta: {
     ui: { resourceUri: UI_URI },
@@ -249,57 +176,13 @@ const searchPosts: Tool = {
     "openai/toolInvocation/invoked": "Found X posts",
   },
   async call(_ctx, args) {
-    const { query, sort, cursor } = parseArgs(searchArgs, args);
-    let parsed;
+    const outcome = await runSearch(parseArgs(searchInput, args));
 
-    try {
-      parsed = parseQuery(query);
-    } catch (error) {
-      throw invalidParams(error instanceof Error ? error.message : "Invalid query.");
-    }
+    if (outcome.ok) return ok(outcome.value);
 
-    if (!parsed.text && !parsed.author)
-      throw invalidParams('"query" must contain a word or @handle.');
-    const url = process.env.SEARCH_API_URL;
+    if (outcome.failure.kind === "invalid_query") throw invalidParams(outcome.failure.message);
 
-    if (!url)
-      return toolError("Xearch's search service is not connected right now. Try again later.");
-
-    const token = serviceToken("search");
-    const baseHeaders = { "Content-Type": "application/json" } satisfies Record<string, string>;
-    const headers = token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders;
-
-    const body: SearchRequestBody = {
-      version: 1,
-      query: parsed.text,
-      author: parsed.author,
-      sort,
-      cursor,
-      limit: 20,
-    };
-
-    let attempt = await attemptSearch(url, headers, body, !!cursor);
-
-    if (attempt.kind === "failed" && RETRYABLE_FAILURE_KINDS.has(attempt.failure.kind))
-      attempt = await attemptSearch(url, headers, body, !!cursor);
-
-    if (attempt.kind === "failed")
-      return toolError(
-        attempt.failure.kind === "stale_cursor"
-          ? "This cursor has expired. Search again without a cursor."
-          : "Xearch's search service could not return results. Try again in a moment.",
-      );
-    const { rows, total, nextCursor, warnings } = attempt.result;
-
-    return ok({
-      query,
-      sort,
-      total,
-      nextCursor,
-      searchUrl: searchLink(query, sort),
-      warnings,
-      posts: rows.map(postOut),
-    });
+    return toolError(outcome.failure.message);
   },
 };
 
@@ -313,46 +196,16 @@ const listAccounts: Tool = {
     properties: {
       prefix: {
         type: "string",
-        maxLength: 16,
+        maxLength: MAX_PREFIX_LENGTH,
         description: "Only return handles that start with this text (case-insensitive).",
       },
     },
     additionalProperties: false,
   },
-  outputSchema: {
-    type: "object",
-    properties: {
-      accounts: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            handle: { type: "string" },
-            name: { type: "string" },
-            profileUrl: { type: "string" },
-            searchUrl: { type: "string" },
-          },
-          required: ["handle", "name", "profileUrl", "searchUrl"],
-        },
-      },
-    },
-    required: ["accounts"],
-  },
+  outputSchema: ACCOUNTS_SCHEMA,
   annotations: { ...READ_ONLY, title: "List indexed accounts" },
   async call(ctx, args) {
-    const prefix = parseArgs(accountsArgs, args).prefix?.replace(/^@/, "").toLowerCase();
-    const rows = await ctx.runQuery(api.search.accounts, {});
-
-    return ok({
-      accounts: rows
-        .filter((row) => !prefix || row.handle.toLowerCase().startsWith(prefix))
-        .map((row) => ({
-          handle: row.handle,
-          name: row.name,
-          profileUrl: `https://x.com/${row.handle}`,
-          searchUrl: searchLink(`@${row.handle}`, "relevance"),
-        })),
-    });
+    return ok({ accounts: await indexedAccounts(ctx, parseArgs(accountsInput, args).prefix) });
   },
 };
 

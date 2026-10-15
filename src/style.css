@@ -782,6 +782,28 @@ select.sort {
 .face:focus-visible img {
   box-shadow: 0 0 0 2px var(--accent);
 }
+/* What Xearch is, in the page itself: crawlers that never run the script
+   read it from index.html's static shell. */
+.intro {
+  max-width: 64ch;
+  margin: 56px auto 0;
+  text-align: center;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--faint);
+}
+.intro h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.intro p {
+  margin: 0 0 10px;
+}
+.intro a {
+  color: var(--muted);
+}
 .wall-cap {
   margin: 12px 0 0;
   font-size: 13px;
@@ -1386,15 +1408,6 @@ select.sort {
 }
 .foot a:hover {
   color: var(--muted);
-}
-/* What Xearch is, in the page itself: crawlers that never run the script
-   read it from index.html's static shell. */
-.foot p {
-  flex-basis: 100%;
-  max-width: 68ch;
-  margin: 0 auto 4px;
-  text-align: center;
-  line-height: 1.6;
 }
 .foot nav {
   display: flex;
