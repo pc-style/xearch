@@ -403,6 +403,9 @@ describe("REST API, NLWeb and A2A", () => {
     expect(next.nextCursor).toBeUndefined();
     expect((await t.fetch("/api/sandbox/v1/search?q=pricing&cursor=stale")).status).toBe(410);
     expect((await (await t.fetch("/api/sandbox/v1/accounts")).json()).accounts).toHaveLength(2);
+    expect((await (await t.fetch("/sandbox")).json()).endpoints.search).toContain(
+      "/api/sandbox/v1/",
+    );
   });
 
   it("runs several searches in one batch request", async () => {
