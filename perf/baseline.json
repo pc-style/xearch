@@ -111,9 +111,9 @@
       "commit": "eab11ab959b6a736238fe0d036b22548b23ceab3"
     },
     "indexer.idle pass, 4000 captures": {
-      "value": 26218320,
+      "value": 22182858,
       "unit": "ns",
-      "commit": "1557d068b09f45afa531a405d9da4232e71db354"
+      "commit": "4b5ee91b9f6eb050c07a042b2c279ac42bc0220a"
     },
     "indexer.import one capture, 4000 captures": {
       "value": 400063163,
