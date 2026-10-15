@@ -1396,16 +1396,31 @@ export default function App() {
                 loading={libraryLoading()}
                 onAccount={(handle) => search(`@${handle}`)}
               />
+              {/* Short paragraphs on purpose: none may out-size the h1, or the
+                  largest contentful paint moves to the live app's repaint. */}
+              <section class="intro" aria-labelledby="intro-title">
+                <h2 id="intro-title">Search what was said on X</h2>
+                <p>
+                  Xearch keeps a full-text index of the public posts from every X account it has
+                  imported.
+                </p>
+                <p>
+                  Type a few words to find a post you half remember, or start with @handle to see
+                  what one account said about a topic.
+                </p>
+                <p>
+                  Sort by relevance, engagement, likes, newest or oldest. Every result links to the
+                  original post on x.com.
+                </p>
+                <p>
+                  Free, no account needed. Agents can use the <a href="/docs">MCP server</a> or the{" "}
+                  <a href="/docs/api">REST API</a>.
+                </p>
+              </section>
             </Show>
           </main>
 
           <footer class="foot">
-            <p>
-              Xearch is a free full-text search engine for public posts on X. Find what indexed
-              accounts said by keyword, start with @handle to search one account, sort by relevance,
-              likes or date, and open every result on x.com. Agents can search it too, through its
-              MCP server, WebMCP tools or plain search links.
-            </p>
             <nav aria-label="About Xearch">
               <a href="/about">About</a>
               <a href="/docs">Docs for agents</a>

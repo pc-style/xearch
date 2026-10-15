@@ -21,12 +21,18 @@ import {
   schemaFeedJsonl,
   sitemapXml,
 } from "./discovery";
-import { markdownToHtml, stripFrontmatter } from "./markdown";
-import { CORS_HEADERS, DOCS_SERVER, PRODUCT_SERVER, mcpGet, serveMcp, type Json } from "./mcp";
+import { problem } from "./api";
+import { markdownToHtml } from "./markdown";
+import type { Json } from "./core";
+import { CORS_HEADERS, DOCS_SERVER, PRODUCT_SERVER, mcpGet, serveMcp } from "./mcp";
 import {
+  AGENT_VIEW,
+  API_LLMS_TXT,
   DOCS_LLMS_TXT,
+  DOCS_MCP_URL,
   HOME,
   LLMS_TXT,
+  MCP_URL,
   PAGES,
   SITE_URL,
   llmsFullTxt,
@@ -46,6 +52,7 @@ const HOME_LINKS = [
   '</llms.txt>; rel="describedby"; type="text/plain"',
   '</.well-known/api-catalog>; rel="api-catalog"',
   '</docs>; rel="service-doc"',
+  '</openapi.json>; rel="service-desc"; type="application/openapi+json"',
   '</mcp/server-card>; rel="service-desc"; type="application/mcp-server-card+json"',
   '</.well-known/ard.json>; rel="describedby"; type="application/json"',
 ].join(", ");
@@ -70,6 +77,18 @@ function acceptQuality(accept: string, type: string): number {
 }
 
 /** Whether this request asked for Markdown over HTML. */
+/** Whether this request asked for JSON over HTML (an API client, not a browser). */
+function prefersJson(request: Request): boolean {
+  const accept = request.headers.get("Accept") ?? "";
+
+  const json = Math.max(
+    acceptQuality(accept, "application/json"),
+    acceptQuality(accept, "application/problem+json"),
+  );
+
+  return json > 0 && json > acceptQuality(accept, "text/html");
+}
+
 export function prefersMarkdown(request: Request): boolean {
   const accept = request.headers.get("Accept") ?? "";
   const markdown = acceptQuality(accept, "text/markdown");
@@ -107,7 +126,7 @@ const NAV = PAGES.map(
 ).join(" · ");
 
 function htmlPage(page: Page): Response {
-  const body = stripFrontmatter(pageMarkdown(page));
+  const body = page.body;
 
   const html = `<!doctype html>
 <html lang="en">
@@ -128,6 +147,7 @@ function htmlPage(page: Page): Response {
 <style>
 body{margin:0 auto;max-width:720px;padding:32px 20px 64px;background:#080808;color:#e9e7e3;font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 a{color:#ffc99b}h1{font-size:34px;letter-spacing:-.02em;line-height:1.15}h2{font-size:20px;margin-top:2em}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{border:1px solid #292827;padding:6px 8px;text-align:left;vertical-align:top}
 code{font:14px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}pre{overflow-x:auto;background:#121110;border:1px solid #292827;border-radius:8px;padding:14px}
 nav,footer{color:#8b8883;font-size:14px}footer{margin-top:48px}
 </style>
@@ -243,7 +263,10 @@ const serveSite = httpAction(async (ctx, request) => {
   const vary = { Vary: "Accept, User-Agent" };
 
   if (path === "/" || path === "/index.html") {
-    if (prefersMarkdown(request) || url.searchParams.get("mode") === "agent")
+    if (url.searchParams.get("mode") === "agent")
+      return text(AGENT_VIEW, MARKDOWN, { ...vary, Link: HOME_LINKS });
+
+    if (prefersMarkdown(request))
       return text(pageMarkdown(HOME), MARKDOWN, { ...vary, Link: HOME_LINKS });
 
     return (
@@ -265,8 +288,12 @@ const serveSite = httpAction(async (ctx, request) => {
     if (asset) return asset;
   }
 
-  // A real 404. Agents get Markdown that points somewhere useful; browsers
-  // get the app, which renders its own not-found page for unknown paths.
+  // A real 404. API clients get a JSON problem document, agents get Markdown
+  // that points somewhere useful, and browsers get the app, which renders its
+  // own not-found page for unknown paths.
+  if (prefersJson(request))
+    return problem(404, "not_found", `There is nothing at ${path}.`, { ...vary });
+
   if (!prefersMarkdown(request)) {
     const app = await staticAsset(ctx, request, "/index.html", 404, vary);
 
@@ -278,6 +305,34 @@ const serveSite = httpAction(async (ctx, request) => {
     headers: { "Content-Type": MARKDOWN, "Cache-Control": "no-store", ...vary },
   });
 });
+
+/** What an MCP endpoint is, for someone who opened it in a browser. */
+function mcpAbout(server: typeof PRODUCT_SERVER, url: string): string {
+  const tools = server.tools.map((tool) => `- \`${tool.name}\`: ${tool.description}`).join("\n");
+
+  return `# ${server.info.title} MCP server
+
+This address is a Model Context Protocol server. Connect an MCP client to it; it is not a web page.
+
+- URL: ${url}
+- Transport: Streamable HTTP (JSON-RPC 2.0 over POST, JSON responses, stateless)
+- Authentication: none
+- Server card: ${url}/server-card
+
+## Tools
+
+${tools}
+
+## Try it
+
+\`\`\`bash
+curl -s ${url} -H 'Content-Type: application/json' \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+\`\`\`
+
+More: ${SITE_URL}/docs.md
+`;
+}
 
 function getRoute(http: HttpRouter, path: string, respond: () => Response | Promise<Response>) {
   http.route({ path, method: "GET", handler: httpAction(async () => await respond()) });
@@ -300,6 +355,16 @@ export function registerAgentRoutes(http: HttpRouter): void {
   getRoute(http, "/llms.txt", () => text(LLMS_TXT, "text/plain; charset=utf-8"));
   getRoute(http, "/llms-full.txt", () => text(llmsFullTxt(), "text/plain; charset=utf-8"));
   getRoute(http, "/docs/llms.txt", () => text(DOCS_LLMS_TXT, "text/plain; charset=utf-8"));
+  getRoute(http, "/api/llms.txt", () => text(API_LLMS_TXT, "text/plain; charset=utf-8"));
+
+  // llms.txt files are Markdown already; `.md` on their address serves them as such.
+  for (const [path, body] of [
+    ["/llms.txt.md", LLMS_TXT],
+    ["/llms-full.txt.md", llmsFullTxt()],
+    ["/docs/llms.txt.md", DOCS_LLMS_TXT],
+    ["/api/llms.txt.md", API_LLMS_TXT],
+  ] as const)
+    getRoute(http, path, () => text(body, MARKDOWN));
   getRoute(http, "/robots.txt", () => text(ROBOTS_TXT, "text/plain; charset=utf-8"));
   getRoute(http, "/sitemap.xml", () => text(sitemapXml(), "application/xml; charset=utf-8"));
   getRoute(http, "/schemamap.xml", () => text(SCHEMAMAP_XML, "application/xml; charset=utf-8"));
@@ -331,16 +396,36 @@ export function registerAgentRoutes(http: HttpRouter): void {
   getRoute(http, "/mcp/server-card", () => json(SERVER_CARD));
   getRoute(http, "/docs/mcp/server-card", () => json(DOCS_SERVER_CARD));
 
-  for (const [path, server] of [
-    ["/mcp", PRODUCT_SERVER],
-    ["/docs/mcp", DOCS_SERVER],
+  for (const [path, server, about] of [
+    ["/mcp", PRODUCT_SERVER, mcpAbout(PRODUCT_SERVER, MCP_URL)],
+    ["/docs/mcp", DOCS_SERVER, mcpAbout(DOCS_SERVER, DOCS_MCP_URL)],
   ] as const) {
+    getRoute(http, `${path}.md`, () => text(about, MARKDOWN));
     http.route({
       path,
       method: "POST",
       handler: httpAction((ctx, request) => serveMcp(server, ctx, request)),
     });
-    http.route({ path, method: "GET", handler: httpAction(async () => mcpGet()) });
+    // A person or crawler opening the endpoint gets a page about it; an MCP
+    // client asking for a server stream gets the protocol's 405.
+    http.route({
+      path,
+      method: "GET",
+      handler: httpAction(async (_ctx, request) => {
+        const accept = request.headers.get("Accept") ?? "";
+
+        if (accept.includes("text/event-stream") || prefersJson(request)) return mcpGet();
+
+        if (prefersMarkdown(request)) return text(about, MARKDOWN);
+
+        return htmlPage({
+          path,
+          title: `${server.info.title} MCP server`,
+          description: `Connect to ${server.info.title} over the Model Context Protocol.`,
+          body: about,
+        });
+      }),
+    });
     http.route({
       path,
       method: "OPTIONS",

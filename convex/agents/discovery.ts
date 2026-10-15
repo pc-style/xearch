@@ -3,6 +3,8 @@
 // the sitemap and the NLWeb schema map. Served by ./routes.ts.
 
 import {
+  API_URL,
+  OPENAPI_URL,
   DESCRIPTION,
   DOCS_MCP_URL,
   MCP_URL,
@@ -185,6 +187,25 @@ export const AI_CATALOG = {
       trustManifest: trust,
     },
     {
+      identifier: `urn:air:${host}:api:rest`,
+      displayName: "Xearch REST API",
+      description: `${TAGLINE} Read-only JSON API at ${API_URL}, no authentication.`,
+      type: "application/openapi+json",
+      url: OPENAPI_URL,
+      representativeQueries: ["search X posts over HTTP", "list indexed X accounts"],
+      updatedAt: UPDATED,
+      trustManifest: trust,
+    },
+    {
+      identifier: `urn:air:${host}:a2a:search`,
+      displayName: "Xearch A2A agent",
+      description: "An A2A agent that answers each message with matching X posts.",
+      type: "application/a2a-agent-card+json",
+      url: `${SITE_URL}/.well-known/agent-card.json`,
+      updatedAt: UPDATED,
+      trustManifest: trust,
+    },
+    {
       identifier: `urn:air:${host}:skill:${SKILL_NAME}`,
       displayName: "Search X posts (agent skill)",
       description: SKILL_DESCRIPTION,
@@ -219,8 +240,21 @@ export const API_CATALOG = {
     {
       anchor: `${SITE_URL}/.well-known/api-catalog`,
       item: [
+        { href: API_URL, title: "Xearch REST API", type: "application/json" },
         { href: MCP_URL, title: "Xearch MCP server (search)", type: "application/json" },
         { href: DOCS_MCP_URL, title: "Xearch docs MCP server", type: "application/json" },
+      ],
+    },
+    {
+      anchor: API_URL,
+      "service-desc": [
+        { href: OPENAPI_URL, title: "OpenAPI 3.1 document", type: "application/openapi+json" },
+      ],
+      "service-doc": [
+        { href: `${SITE_URL}/docs/api`, title: "REST API reference", type: "text/html" },
+      ],
+      status: [
+        { href: `${API_URL}/accounts`, title: "Indexed accounts", type: "application/json" },
       ],
     },
     {
