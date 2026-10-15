@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 import staticHosting from "@convex-dev/static-hosting/test";
@@ -134,6 +135,8 @@ describe("agent-facing documents", () => {
     const body = await (await t.fetch(skill.url)).text();
 
     expect(skill.digest).toBe(`sha256:${await sha256(body)}`);
+    // The Agent Plugins bundle (plugin.json) ships the same skill from the repo.
+    expect(readFileSync("skills/search-x-posts/SKILL.md", "utf8")).toBe(body);
   });
 
   it("publishes the catalog, API catalog, robots and sitemap", async () => {
