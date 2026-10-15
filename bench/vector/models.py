@@ -42,13 +42,39 @@ subset = json.load(open(path("subset.json")))
 position = {i: n for n, i in enumerate(ids)}
 rows_sub = [rows[position[i]] for i in subset]
 
+# fastembed 0.9's query_embed/passage_embed apply no prompts (measured: identical vectors),
+# so `--prompted` adds each model card's documented query/document prompts by hand.
+PROMPTS = {
+    "BAAI/bge-small-en-v1.5": ("Represent this sentence for searching relevant passages: ", ""),
+    "snowflake/snowflake-arctic-embed-m": ("Represent this sentence for searching relevant passages: ", ""),
+    "google/embeddinggemma-300m": ("task: search result | query: ", "title: none | text: "),
+}
+
 if cmd == "embed":
     from fastembed import TextEmbedding
 
     spec = sys.argv[2]
-    slug = spec.replace("/", "_").replace(":", "_")
-    model = TextEmbedding(spec.split(":", 1)[1], threads=2)
-    texts = [clean(r["text"]) or r["text"] for r in rows_sub]
+    name = spec.split(":", 1)[1]
+    prompted = "--prompted" in sys.argv
+    query_prefix, doc_prefix = PROMPTS.get(name, ("", "")) if prompted else ("", "")
+    slug = ("prompted." if prompted else "") + spec.replace("/", "_").replace(":", "_")
+    plain_slug = spec.replace("/", "_").replace(":", "_")
+    model = TextEmbedding(name, threads=2)
+    texts = [doc_prefix + (clean(r["text"]) or r["text"]) for r in rows_sub]
+    queries = [query_prefix + text for text in queries]
+    reuse = path("emb", f"sub.{plain_slug}.docs.npy")
+    if prompted and not doc_prefix and plain_slug == "fastembed_BAAI_bge-small-en-v1.5":
+        np.save(reuse, np.load(path("emb", f"{plain_slug}.docs.npy"))[[position[i] for i in subset]])
+    if prompted and not doc_prefix and os.path.exists(reuse):
+        # Document side is unchanged: only the queries need the prompt.
+        qv = np.asarray([list(model.query_embed([t]))[0] for t in queries], dtype=np.float32)
+        np.save(path("emb", f"sub.{slug}.docs.npy"), np.load(reuse))
+        np.save(path("emb", f"sub.{slug}.queries.npy"), qv / np.linalg.norm(qv, axis=1, keepdims=True))
+        meta = path("emb", f"sub.{plain_slug}.json")
+        if os.path.exists(meta):
+            json.dump(json.load(open(meta)), open(path("emb", f"sub.{slug}.json"), "w"))
+        print(slug, "queries re-encoded with prompt")
+        sys.exit(0)
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
     out = np.empty((len(texts), 0), dtype=np.float32)
     t0 = time.perf_counter()
@@ -103,4 +129,4 @@ for file in sorted(f for f in os.listdir(path("emb")) if f.startswith("sub.") an
     print(f"| {slug} | {docs.shape[1]} | {known('lex')[0]:.3f} | {known('para')[0]:.3f} | {known('para')[1]:.3f} | "
           f"{known('quote')[0]:.3f} | {topic:.3f} | {meta.get('docs_per_s', '33.5 (50k run)')} | "
           f"{meta.get('query_ms_p50', 4.9)} |")
-print("* topic judgments were pooled from bge-small-based runs; unjudged posts from other models count as 0.")
+print("* topic judgments pooled from every run, including each model's own top 10.")
