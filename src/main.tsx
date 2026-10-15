@@ -8,6 +8,7 @@ import { createHttpQueryFetcher } from "./data/httpQuery";
 import { describeError } from "./errors";
 import { captureError, initPostHog } from "./posthog";
 import { captureShell, replayShell } from "./shellHandoff";
+import { registerWebMcpTools } from "./webmcp";
 import "./style.css";
 
 function Connected(props: { url: string }) {
@@ -77,3 +78,5 @@ render(
 );
 
 replayShell(shell, root);
+
+registerWebMcpTools();

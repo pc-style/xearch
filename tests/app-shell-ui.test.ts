@@ -67,6 +67,14 @@ function normalized(html: string): string {
 
   for (const text of blank) text.remove();
 
+  // Formatter directives (`<!-- prettier-ignore -->`) are not markup App renders.
+  const comments = document.createTreeWalker(template.content, NodeFilter.SHOW_COMMENT);
+  const directives: Node[] = [];
+
+  for (let node = comments.nextNode(); node; node = comments.nextNode()) directives.push(node);
+
+  for (const comment of directives) comment.parentNode?.removeChild(comment);
+
   return template.innerHTML;
 }
 
