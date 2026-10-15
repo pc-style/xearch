@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "xearch",
+  "version": "1.0.0",
+  "description": "Search public X (Twitter) posts by keyword and account. Bundles the search-x-posts skill and the Xearch MCP server.",
+  "author": { "name": "pcstyle", "url": "https://github.com/pc-style" },
+  "homepage": "https://xearch.pcstyle.tech",
+  "repository": "https://github.com/pc-style/xearch",
+  "keywords": ["x", "twitter", "search", "mcp"]
+}

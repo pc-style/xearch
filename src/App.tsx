@@ -1400,6 +1400,22 @@ export default function App() {
           </main>
 
           <footer class="foot">
+            <p>
+              Xearch is a free full-text search engine for public posts on X. Find what indexed
+              accounts said by keyword, start with @handle to search one account, sort by relevance,
+              likes or date, and open every result on x.com. Agents can search it too, through its
+              MCP server, WebMCP tools or plain search links.
+            </p>
+            <nav aria-label="About Xearch">
+              <a href="/about">About</a>
+              <a href="/docs">Docs for agents</a>
+              <a href="/pricing">Pricing</a>
+              <a href="/privacy">Privacy</a>
+              <a href="/contact">Contact</a>
+              <a href="https://github.com/pc-style/xearch" target="_blank" rel="noreferrer">
+                GitHub
+              </a>
+            </nav>
             <a href="https://mdfromx.com" target="_blank" rel="noreferrer">
               Powered by x.md
             </a>

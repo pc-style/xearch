@@ -13,7 +13,179 @@
       name="description"
       content="Search public X posts and conversations, import account histories, and read the pages behind the links."
     />
-    <title>Xearch — Search X posts</title>
+    <title>Xearch — X search for public posts</title>
+    <link rel="canonical" href="https://xearch.pcstyle.tech/" />
+    <!-- What agents read instead of this app shell (convex/agents/). -->
+    <link rel="alternate" type="text/markdown" href="/index.md" title="Xearch as Markdown" />
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Xearch" />
+    <meta property="og:title" content="Xearch — X search for public posts" />
+    <meta
+      property="og:description"
+      content="Full-text search for public X posts: search by keyword or @handle, sort by relevance, likes or date."
+    />
+    <meta property="og:url" content="https://xearch.pcstyle.tech/" />
+    <meta property="og:image" content="https://xearch.pcstyle.tech/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://xearch.pcstyle.tech/#website",
+            "url": "https://xearch.pcstyle.tech/",
+            "name": "Xearch",
+            "alternateName": "Xearch X search",
+            "description": "Xearch is a free full-text search engine for public posts on X (formerly Twitter). Search indexed posts by keyword, narrow to one account with @handle, and sort by relevance, engagement, likes or date.",
+            "inLanguage": "en",
+            "publisher": {
+              "@id": "https://xearch.pcstyle.tech/#organization"
+            },
+            "potentialAction": {
+              "@type": "SearchAction",
+              "target": {
+                "@type": "EntryPoint",
+                "urlTemplate": "https://xearch.pcstyle.tech/?q={search_term_string}"
+              },
+              "query-input": "required name=search_term_string"
+            }
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://xearch.pcstyle.tech/#organization",
+            "name": "Xearch",
+            "url": "https://xearch.pcstyle.tech/",
+            "logo": "https://xearch.pcstyle.tech/icon-512.png",
+            "description": "The independent open-source project that builds and runs Xearch.",
+            "sameAs": ["https://github.com/pc-style/xearch"],
+            "founder": {
+              "@type": "Person",
+              "name": "Adam",
+              "alternateName": "pcstyle",
+              "url": "https://pcstyle.dev",
+              "sameAs": ["https://github.com/pc-style", "https://x.com/pcstyle53"]
+            },
+            "contactPoint": {
+              "@type": "ContactPoint",
+              "contactType": "customer support",
+              "email": "adam@pcstyle.dev",
+              "url": "https://xearch.pcstyle.tech/contact",
+              "availableLanguage": ["English", "Polish"]
+            },
+            "address": {
+              "@type": "PostalAddress",
+              "addressCountry": "PL"
+            }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://xearch.pcstyle.tech/#app",
+            "name": "Xearch",
+            "url": "https://xearch.pcstyle.tech/",
+            "description": "Xearch is a free full-text search engine for public posts on X (formerly Twitter). Search indexed posts by keyword, narrow to one account with @handle, and sort by relevance, engagement, likes or date.",
+            "applicationCategory": "SearchApplication",
+            "operatingSystem": "Web",
+            "isAccessibleForFree": true,
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD",
+              "url": "https://xearch.pcstyle.tech/pricing",
+              "availability": "https://schema.org/InStock"
+            },
+            "author": {
+              "@id": "https://xearch.pcstyle.tech/#organization"
+            },
+            "publisher": {
+              "@id": "https://xearch.pcstyle.tech/#organization"
+            },
+            "sameAs": ["https://github.com/pc-style/xearch"],
+            "featureList": [
+              "Full-text search of indexed public X posts",
+              "Search one account with @handle",
+              "Sort by relevance, engagement, likes, newest or oldest",
+              "Saved searches and bookmarks",
+              "MCP server and WebMCP tools for AI agents"
+            ],
+            "softwareHelp": {
+              "@type": "CreativeWork",
+              "url": "https://xearch.pcstyle.tech/docs"
+            }
+          },
+          {
+            "@type": "Service",
+            "@id": "https://xearch.pcstyle.tech/#mcp",
+            "name": "Xearch MCP server",
+            "serviceType": "Model Context Protocol server",
+            "url": "https://xearch.pcstyle.tech/mcp",
+            "description": "Anonymous Streamable HTTP MCP server for searching public X posts indexed by Xearch.",
+            "provider": {
+              "@id": "https://xearch.pcstyle.tech/#organization"
+            },
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://xearch.pcstyle.tech/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is Xearch?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Xearch is a free full-text search engine for public posts on X. It searches the accounts it has indexed and links every result to the original post on x.com."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How do I search one account?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Start the search with @handle, for example \"@levelsio pricing\". One account per search."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does Xearch cost anything?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. Searching, saved searches, bookmarks and the MCP server are free and need no account."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can AI agents use Xearch?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Agents can call the MCP server at https://xearch.pcstyle.tech/mcp, use the WebMCP tools on the page, or open search links like https://xearch.pcstyle.tech/?q=words."
+                }
+              }
+            ]
+          },
+          {
+            "@type": "BreadcrumbList",
+            "@id": "https://xearch.pcstyle.tech/#breadcrumbs",
+            "itemListElement": [
+              {
+                "@type": "ListItem",
+                "position": 1,
+                "name": "Xearch",
+                "item": "https://xearch.pcstyle.tech/"
+              }
+            ]
+          }
+        ]
+      }
+    </script>
     <!--prefetch-->
     <script>
       // The home page's public reads, started now rather than after the app's
@@ -207,6 +379,16 @@
           </div>
         </main>
         <footer class="foot">
+          <!-- prettier-ignore -->
+          <p>Xearch is a free full-text search engine for public posts on X. Find what indexed accounts said by keyword, start with @handle to search one account, sort by relevance, likes or date, and open every result on x.com. Agents can search it too, through its MCP server, WebMCP tools or plain search links.</p>
+          <nav aria-label="About Xearch">
+            <a href="/about">About</a><a href="/docs">Docs for agents</a
+            ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+            ><a href="/contact">Contact</a
+            ><a href="https://github.com/pc-style/xearch" target="_blank" rel="noreferrer"
+              >GitHub</a
+            >
+          </nav>
           <a href="https://mdfromx.com" target="_blank" rel="noreferrer">Powered by x.md</a>
         </footer>
       </div>

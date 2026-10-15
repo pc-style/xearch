@@ -1,0 +1,7 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "xearch": { "type": "streamable-http", "url": "https://xearch.pcstyle.tech/mcp" },
+    "xearch-docs": { "type": "streamable-http", "url": "https://xearch.pcstyle.tech/docs/mcp" }
+  }
+}

@@ -1,11 +1,11 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { components } from "./_generated/api";
-import { registerStaticRoutes } from "@convex-dev/static-hosting";
 import { AgentMail } from "@agentmail/convex";
 import { auth } from "./auth";
 import { receiveUpdate } from "./publication";
 import { receiveReport } from "./health";
+import { registerAgentRoutes } from "./agents/routes";
 
 const http = httpRouter();
 
@@ -54,6 +54,8 @@ http.route({
   }),
 });
 
-registerStaticRoutes(http, components.staticHosting);
+// Agent-facing documents and MCP servers, then the static frontend with real
+// 404s for unknown paths. See convex/agents/routes.ts.
+registerAgentRoutes(http);
 
 export default http;

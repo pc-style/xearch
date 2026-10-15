@@ -1375,13 +1375,32 @@ select.sort {
   margin-top: 64px;
   padding-bottom: 28px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 18px;
+  gap: 10px 18px;
   font-size: 12.5px;
   color: var(--faint);
 }
 .foot a {
   text-decoration: none;
+}
+.foot a:hover {
+  color: var(--muted);
+}
+/* What Xearch is, in the page itself: crawlers that never run the script
+   read it from index.html's static shell. */
+.foot p {
+  flex-basis: 100%;
+  max-width: 68ch;
+  margin: 0 auto 4px;
+  text-align: center;
+  line-height: 1.6;
+}
+.foot nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px;
 }
 .foot button {
   display: inline-flex;
