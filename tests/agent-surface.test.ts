@@ -110,6 +110,11 @@ describe("agent-facing documents", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("Content-Type")).toContain("text/markdown");
     expect(await response.text()).toContain("/llms.txt");
+
+    const browser = await t.fetch("/no/such/page", { headers: { Accept: "text/html" } });
+
+    // No index.html is uploaded here, so this checks the status, not the app page.
+    expect(browser.status).toBe(404);
   });
 
   it("serves trust pages as HTML with real content, and their Markdown twins", async () => {

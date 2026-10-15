@@ -313,7 +313,7 @@ const listAccounts: Tool = {
     properties: {
       prefix: {
         type: "string",
-        maxLength: 15,
+        maxLength: 16,
         description: "Only return handles that start with this text (case-insensitive).",
       },
     },
