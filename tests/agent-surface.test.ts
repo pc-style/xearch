@@ -90,7 +90,9 @@ describe("agent-facing documents", () => {
     expect(response.headers.get("Content-Type")).toContain("text/markdown");
     expect(response.headers.get("Vary")).toContain("Accept");
     expect(response.headers.get("Link")).toContain('</sitemap.xml>; rel="sitemap"');
-    expect(await response.text()).toMatch(/^# Xearch\n/);
+    expect(await response.text()).toMatch(
+      /^---\ntitle: "Xearch: search public X posts"\n[^]*?\n---\n\n# Xearch\n/,
+    );
 
     const crawler = await t.fetch("/", {
       headers: { "User-Agent": "GPTBot/1.2", Accept: "text/html" },
@@ -104,23 +106,27 @@ describe("agent-facing documents", () => {
     expect(await agentMode.text()).toMatch(/## Endpoints[^]*## Authentication/);
   });
 
-  it("serves every Markdown twin heading-first, including the llms.txt files", async () => {
+  it("opens Markdown twins with frontmatter then the heading, and auth.md with its heading", async () => {
     const t = setup();
 
-    for (const path of [
+    const paths = [
       "/index.md",
       "/docs.md",
       "/docs/api.md",
-      "/auth.md",
+      "/api/v1.md",
       "/docs/llms.txt.md",
       "/mcp.md",
-    ]) {
+    ];
+
+    for (const path of paths) {
       const response = await t.fetch(path);
 
       expect(response.status, path).toBe(200);
       expect(response.headers.get("Content-Type"), path).toContain("text/markdown");
-      expect(await response.text(), path).toMatch(/^# /);
+      expect(await response.text(), path).toMatch(/^---\ntitle: "[^"]+"\n[^]*?\n---\n\n# /);
     }
+
+    expect(await (await t.fetch("/auth.md")).text()).toMatch(/^# Authentication for agents\n/);
   });
 
   it("returns a real 404 with Markdown guidance for unknown paths", async () => {
@@ -380,6 +386,23 @@ describe("REST API, NLWeb and A2A", () => {
     expect([400, 503]).toContain(operator.status);
     expect((await t.fetch("/api/v2/nothing")).status).toBe(404);
     expect((await t.fetch("/api/v1/search", { method: "POST" })).status).toBe(405);
+  });
+
+  it("answers the sandbox from fixed sample posts, with paging and the same errors", async () => {
+    const t = setup();
+    const first = await (await t.fetch("/api/sandbox/v1/search?q=pricing&sort=likes")).json();
+
+    expect(first.total).toBe(3);
+    expect(first.posts.map((post: { id: string }) => post.id)).toEqual(["5", "2"]);
+
+    const next = await (
+      await t.fetch(`/api/sandbox/v1/search?q=pricing&sort=likes&cursor=${first.nextCursor}`)
+    ).json();
+
+    expect(next.posts.map((post: { id: string }) => post.id)).toEqual(["1"]);
+    expect(next.nextCursor).toBeUndefined();
+    expect((await t.fetch("/api/sandbox/v1/search?q=pricing&cursor=stale")).status).toBe(410);
+    expect((await (await t.fetch("/api/sandbox/v1/accounts")).json()).accounts).toHaveLength(2);
   });
 
   it("runs several searches in one batch request", async () => {

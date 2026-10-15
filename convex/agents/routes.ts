@@ -35,6 +35,8 @@ import {
   MCP_URL,
   PAGES,
   SITE_URL,
+  TAGLINE,
+  frontmatter,
   llmsFullTxt,
   markdownPath,
   pageMarkdown,
@@ -358,13 +360,22 @@ export function registerAgentRoutes(http: HttpRouter): void {
   getRoute(http, "/api/llms.txt", () => text(API_LLMS_TXT, "text/plain; charset=utf-8"));
 
   // llms.txt files are Markdown already; `.md` on their address serves them as such.
-  for (const [path, body] of [
-    ["/llms.txt.md", LLMS_TXT],
-    ["/llms-full.txt.md", llmsFullTxt()],
-    ["/docs/llms.txt.md", DOCS_LLMS_TXT],
-    ["/api/llms.txt.md", API_LLMS_TXT],
+  for (const [path, title, body] of [
+    ["/llms.txt", "Xearch llms.txt", LLMS_TXT],
+    ["/llms-full.txt", "Xearch: full documentation", llmsFullTxt()],
+    ["/docs/llms.txt", "Xearch docs index", DOCS_LLMS_TXT],
+    ["/api/llms.txt", "Xearch REST API index", API_LLMS_TXT],
   ] as const)
-    getRoute(http, path, () => text(body, MARKDOWN));
+    getRoute(http, `${path}.md`, () =>
+      text(`${frontmatter(title, TAGLINE, `${SITE_URL}${path}`)}${body}`, MARKDOWN),
+    );
+
+  // The REST API's addresses answer JSON; `.md` on them gives its reference.
+  const apiReference = PAGES.find((page) => page.path === "/docs/api");
+
+  if (apiReference)
+    for (const path of ["/api.md", "/api/v1.md", "/api/sandbox/v1.md", "/openapi.json.md"])
+      getRoute(http, path, () => markdownPage(apiReference));
   getRoute(http, "/robots.txt", () => text(ROBOTS_TXT, "text/plain; charset=utf-8"));
   getRoute(http, "/sitemap.xml", () => text(sitemapXml(), "application/xml; charset=utf-8"));
   getRoute(http, "/schemamap.xml", () => text(SCHEMAMAP_XML, "application/xml; charset=utf-8"));
@@ -400,7 +411,12 @@ export function registerAgentRoutes(http: HttpRouter): void {
     ["/mcp", PRODUCT_SERVER, mcpAbout(PRODUCT_SERVER, MCP_URL)],
     ["/docs/mcp", DOCS_SERVER, mcpAbout(DOCS_SERVER, DOCS_MCP_URL)],
   ] as const) {
-    getRoute(http, `${path}.md`, () => text(about, MARKDOWN));
+    getRoute(http, `${path}.md`, () =>
+      text(
+        `${frontmatter(`${server.info.title} MCP server`, server.info.instructions.split(".")[0], `${SITE_URL}${path}`)}${about}`,
+        MARKDOWN,
+      ),
+    );
     http.route({
       path,
       method: "POST",

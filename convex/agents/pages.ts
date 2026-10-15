@@ -269,6 +269,7 @@ Plain JSON over HTTPS, no authentication. Full reference: [REST API](${SITE_URL}
 - \`GET ${API_URL}/search?q=<query>&sort=<sort>&cursor=<cursor>\`: one page of up to 20 posts.
 - \`GET ${API_URL}/accounts?prefix=<text>\`: the indexed accounts.
 - \`POST ${API_URL}/search/batch\`: up to 10 searches in one request.
+- Sandbox: the same endpoints under \`${SITE_URL}/api/sandbox/v1\`, answered from fixed sample posts for testing.
 
 \`\`\`bash
 curl -s '${API_URL}/search?q=%40levelsio+pricing&sort=likes'
@@ -388,6 +389,14 @@ curl -s ${API_URL}/search/batch \\
 
 Each entry in \`results\` has its own \`status\` and either \`result\` or \`error\`. Searches change nothing, so retrying is always safe; an optional \`Idempotency-Key\` header is echoed back.
 
+## Sandbox
+
+\`${SITE_URL}/api/sandbox/v1\` has the same endpoints, parameters and errors, answered from five fixed sample posts by \`@sandbox_ada\` and \`@sandbox_lin\` instead of the live index. It pages two posts at a time, so an integration can test paging, errors and expired cursors against data that never changes:
+
+\`\`\`bash
+curl -s '${SITE_URL}/api/sandbox/v1/search?q=pricing&sort=likes'
+\`\`\`
+
 ## Pagination
 
 Each page holds up to 20 posts. Pass \`nextCursor\` back as \`cursor\` with the same query and sort. No \`nextCursor\` means there are no more results. \`total\` is reported on the first page.
@@ -435,14 +444,25 @@ export function markdownPath(page: Page): string {
   return page.path === "/" ? "/index.md" : `${page.path}.md`;
 }
 
-/** A page's Markdown twin: its body, which opens with the page's heading, then where it lives. */
-export function pageMarkdown(page: Page): string {
-  return `${page.body.trimEnd()}
-
+/** The metadata block agents read before a Markdown document. Values are
+ * JSON strings, which YAML reads as quoted scalars. */
+export function frontmatter(title: string, description: string, canonical: string): string {
+  return `---
+title: ${JSON.stringify(title)}
+description: ${JSON.stringify(description)}
+canonical: ${JSON.stringify(canonical)}
+last-updated: ${JSON.stringify(UPDATED)}
 ---
 
-Canonical: ${SITE_URL}${page.path}. Last updated: ${UPDATED}.
 `;
+}
+
+/** A page's Markdown twin: frontmatter, then the body, which opens with the page's heading. */
+export function pageMarkdown(page: Page): string {
+  // auth.md follows WorkOS's auth.md format, a walkthrough that opens with its heading.
+  if (page.path === "/auth") return page.body;
+
+  return `${frontmatter(page.title, page.description, `${SITE_URL}${page.path}`)}${page.body}`;
 }
 
 export const HOME = home;
@@ -515,6 +535,7 @@ export const API_LLMS_TXT = `# Xearch REST API
 - [Search](${API_URL}/search?q=convex): \`GET /api/v1/search?q=&sort=&cursor=\`
 - [Indexed accounts](${API_URL}/accounts): \`GET /api/v1/accounts?prefix=\`
 - Batch: \`POST /api/v1/search/batch\` with up to 10 searches
+- [Sandbox](${SITE_URL}/api/sandbox/v1/search?q=pricing): the same endpoints over fixed sample posts, for testing
 - [NLWeb ask](${SITE_URL}/ask?query=convex): \`POST /ask\`, streaming with \`prefer.streaming\`
 - [Back to the site index](${SITE_URL}/llms.txt)
 `;
@@ -538,6 +559,7 @@ Read-only. Xearch cannot post to X, read private accounts or read direct message
 - MCP (Streamable HTTP): ${MCP_URL}. Tools: \`search_posts\`, \`list_indexed_accounts\`, \`get_search_link\`. Card: ${MCP_URL}/server-card
 - Docs MCP: ${DOCS_MCP_URL}
 - REST API: ${API_URL}. \`GET /search?q=\`, \`GET /accounts\`, \`POST /search/batch\`. OpenAPI: ${OPENAPI_URL}
+- Sandbox: ${SITE_URL}/api/sandbox/v1, the same REST endpoints over fixed sample posts
 - NLWeb: \`POST ${SITE_URL}/ask\` with \`{"query":{"text":"..."}}\`
 - A2A: ${SITE_URL}/a2a, card at ${SITE_URL}/.well-known/agent-card.json
 - WebMCP: \`search_posts\` and \`list_indexed_accounts\` on ${SITE_URL}/

@@ -56,7 +56,7 @@ export function searchLink(query: string, sort: Sort): string {
   return url.toString();
 }
 
-function postOut(post: ResultPost) {
+export function postOut(post: ResultPost) {
   return {
     id: post.tweetId,
     author: post.author,
