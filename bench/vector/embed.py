@@ -10,6 +10,7 @@ model's query encoding (instruction/prefix) where it has one.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import resource
@@ -109,7 +110,8 @@ else:
 
 # Batch similar lengths together so local models don't pad short posts to long ones,
 # shrink batches for long posts (ONNX Runtime's arena grows with the largest batch shape),
-# and checkpoint chunks so an interrupted run resumes.
+# and checkpoint chunks so an interrupted run resumes. A chunk is reused only if its texts
+# are unchanged; the model is already part of the directory name.
 order = sorted(range(len(docs)), key=lambda i: len(docs[i]))
 parts = path("emb", f"{slug}.parts{args.limit or ''}")
 os.makedirs(parts, exist_ok=True)
@@ -117,7 +119,8 @@ encoded, doc_secs = [], 0.0
 for c in range(0, len(order), 2000):
     part = os.path.join(parts, f"{c:07d}.npy")
     texts = [docs[i] for i in order[c : c + 2000]]
-    if os.path.exists(part):
+    digest = hashlib.sha256("\0".join(texts).encode()).hexdigest()
+    if os.path.exists(part) and os.path.exists(part + ".sha") and open(part + ".sha").read() == digest:
         encoded += list(np.load(part))
         doc_secs += float(open(part + ".secs").read())
         continue
@@ -128,6 +131,7 @@ for c in range(0, len(order), 2000):
     secs = time.perf_counter() - t0
     np.save(part, chunk)
     open(part + ".secs", "w").write(str(secs))
+    open(part + ".sha", "w").write(digest)
     encoded += list(chunk)
     doc_secs += secs
 doc_m = np.empty((len(docs), len(encoded[0])), dtype=np.float32)

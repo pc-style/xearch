@@ -65,7 +65,10 @@ scan, which this sample did not expose.
 
 ## Corrections after review
 
-- The published corpus kept duplicate copies of a post in filesystem order. `extract.py`
-  now keeps the most recently received copy. That changes the cleaned text of 56 of the
-  50,000 sampled posts (HTML entities and trailing links). The post ids and the sample
-  are unchanged, and the quality runs above were not repeated.
+- The published run kept duplicate copies of a post in directory order. `extract.py`
+  and `sample.py` now keep the most recently received copy. On the same, unchanged
+  archive that gives 132 posts a different quote link, and because quote pairs seed the
+  sample, seed 7 now draws a different 50k sample (37,929 posts differ). The numbers
+  above come from the earlier sample and were not rerun. Every system was measured on
+  that one sample, so comparisons between systems hold; rerunning the documented steps
+  will shift absolute values.

@@ -34,8 +34,9 @@ for quoting, quoted in pairs[: size // 20]:
 rest = sorted(set(rows) - chosen)
 chosen.update(rng.sample(rest, size - len(chosen)))
 
-raw = {}
-for entry in os.scandir(archive):
+# Same copy as extract.py: the most recently received record wins, ties go to the later capture.
+raw, received = {}, {}
+for entry in sorted(os.scandir(archive), key=lambda e: e.name):
     name = entry.name
     if not name.endswith(".json") or name.endswith(".receipt.json"):
         continue
@@ -46,9 +47,13 @@ for entry in os.scandir(archive):
         continue
     for record in capture.get("records") or []:
         payload = record.get("payload") or {}
+        at = int(record.get("receivedAt") or 0)
         for post in (payload.get("posts") or []) + [payload.get("post")]:
-            if isinstance(post, dict) and str(post.get("id")) in chosen:
+            if not isinstance(post, dict) or not post.get("text") or str(post.get("id")) not in chosen:
+                continue
+            if at >= received.get(str(post["id"]), -1):
                 raw[str(post["id"])] = post
+                received[str(post["id"])] = at
 
 ids = sorted(chosen)
 with open(os.path.join(data, "sample.jsonl"), "w", encoding="utf8") as handle:
