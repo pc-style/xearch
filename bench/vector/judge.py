@@ -2,8 +2,8 @@
 
     python judge.py [MODEL]
 
-Pools the top 10 ids from every DATA/runs/*.json for each topic query, asks the
-judge for 0 (not relevant) / 1 (partly) / 2 (relevant) per post, and writes
+Pools the top 10 ids from every DATA/runs/*.json and DATA/pool/*.json for each topic
+query, asks the judge for 0 (not relevant) / 1 (partly) / 2 (relevant) per post, and writes
 DATA/judgments.json {query index: {id: grade}}. Existing grades are reused, so
 adding a run only judges the new posts. The judge never sees which system
 returned a post, and posts are shuffled.
@@ -22,7 +22,7 @@ rows = {r["id"]: r for r in load_sample()}
 topics = read_json("queries.json")["topic"]
 judged = read_json("judgments.json") if os.path.exists(path("judgments.json")) else {}
 pools = {str(n): set() for n in range(len(topics))}
-for file in glob.glob(path("runs", "*.json")):
+for file in glob.glob(path("runs", "*.json")) + glob.glob(path("pool", "*.json")):
     run = json.load(open(file))["runs"].get("topic") or []
     for n, ranked in enumerate(run):
         pools[str(n)].update(ranked[:10])

@@ -17,7 +17,7 @@ def load(pattern):
 print("| model | dims | docs/s | threads | query ms p50/p95 | peak RSS MB |")
 print("|---|---|---|---|---|---|")
 for e in load(("emb", "*.json")):
-    if e.get("docs", 0) < 10000:
+    if e.get("docs", 0) < 10000 or "peak_rss_mb" not in e:  # models.py subset metadata
         continue
     print(f"| {e['spec']} | {e['dims']} | {e['docs_per_s']} | {e['threads']} | "
           f"{e['query_ms_p50']}/{e['query_ms_p95']} | {e['peak_rss_mb']} |")

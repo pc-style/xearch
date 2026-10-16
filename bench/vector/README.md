@@ -50,7 +50,12 @@ $PY report.py
 $PY models.py subset
 $PY models.py embed fastembed:snowflake/snowflake-arctic-embed-m
 $PY models.py embed fastembed:google/embeddinggemma-300m
-$PY models.py score
+for m in BAAI/bge-small-en-v1.5 snowflake/snowflake-arctic-embed-m google/embeddinggemma-300m; do
+  $PY models.py embed fastembed:$m --prompted   # model-card prompts: the published table
+done
+$PY models.py score      # writes each model's topic top 10 to DATA/pool
+$PY judge.py claude-sonnet-5-5
+$PY models.py score      # now every model's topic results are judged
 ```
 
 ## What is measured

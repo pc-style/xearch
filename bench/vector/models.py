@@ -2,7 +2,7 @@
 
     python models.py subset                       # write DATA/subset.json (deterministic)
     python models.py embed fastembed:MODEL        # embed the subset with one model
-    python models.py score                        # table over every embedded model
+    python models.py score                        # table over every embedded model; writes DATA/pool
 
 The subset holds every eval target, quote source and judged topic post, padded with
 random sample posts to 10,000, so all models face the same distractors. bge-small
@@ -65,6 +65,7 @@ if cmd == "embed":
     reuse = path("emb", f"sub.{plain_slug}.docs.npy")
     if prompted and not doc_prefix and plain_slug == "fastembed_BAAI_bge-small-en-v1.5":
         np.save(reuse, np.load(path("emb", f"{plain_slug}.docs.npy"))[[position[i] for i in subset]])
+        np.save(path("emb", f"sub.{plain_slug}.queries.npy"), np.load(path("emb", f"{plain_slug}.queries.npy")))
     if prompted and not doc_prefix and os.path.exists(reuse):
         # Document side is unchanged: only the queries need the prompt.
         qv = np.asarray([list(model.query_embed([t]))[0] for t in queries], dtype=np.float32)
@@ -117,6 +118,10 @@ for file in sorted(f for f in os.listdir(path("emb")) if f.startswith("sub.") an
     for s in SETS:
         out[s] = ranked[n : n + len(q[s])]
         n += len(q[s])
+    # judge.py pools these too; not runs/, which evaluate.py scores against the 50k sample.
+    os.makedirs(path("pool"), exist_ok=True)
+    json.dump({"system": f"sub.{slug}", "runs": {"topic": [r[:10] for r in out["topic"]]}},
+              open(path("pool", f"sub.{slug}.json"), "w"))
     def known(s):
         r = m = 0.0
         for item, ranks in zip(q[s], out[s]):
@@ -129,4 +134,4 @@ for file in sorted(f for f in os.listdir(path("emb")) if f.startswith("sub.") an
     print(f"| {slug} | {docs.shape[1]} | {known('lex')[0]:.3f} | {known('para')[0]:.3f} | {known('para')[1]:.3f} | "
           f"{known('quote')[0]:.3f} | {topic:.3f} | {meta.get('docs_per_s', '33.5 (50k run)')} | "
           f"{meta.get('query_ms_p50', 4.9)} |")
-print("* topic judgments pooled from every run, including each model's own top 10.")
+print("* topic judgments pooled from every run and DATA/pool; run judge.py after the first score.")

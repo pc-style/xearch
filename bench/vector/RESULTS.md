@@ -16,7 +16,7 @@ Everything below is **measured** unless marked *estimate*.
 | BM25 OR, no stemming (ES, ParadeDB) | 0.995 / 0.982 | 0.370 | 0% | 0.215 | 0.432 |
 | BM25 OR, stemmed + stop words (Qdrant/bm25) | 0.995 / 0.969 | 0.420 | 0% | 0.275 | 0.574 |
 | Dense only (exact kNN) | 0.665 / 0.511 | 0.565 | 0% | 0.265 | 0.486 |
-| RRF hybrid, unstemmed OR + dense (ES app-side / ParadeDB SQL) | 0.990 / 0.79 / 0.75 | 0.545 / 0.540 | 0% | 0.290 | 0.512 / 0.496 |
+| RRF hybrid, unstemmed OR + dense (ES app-side / ParadeDB SQL) | 0.990 / 0.79 (ES), 0.75 (ParadeDB) | 0.545 / 0.540 | 0% | 0.290 | 0.512 / 0.496 |
 | RRF hybrid, stemmed + dense (Qdrant native) | 0.995 / 0.854 | 0.595 | 0% | 0.305 | 0.605 |
 | RRF of Tantivy AND + HNSW (sidecar) | 0.995 / 0.984 | 0.510 | 0% | 0.260 | 0.503 |
 | **Cascade: Tantivy AND first, then stemmed hybrid** | **0.995 / 0.983** | **0.595** | 0% | **0.305** | **0.598** |
