@@ -81,6 +81,7 @@ Use `bunx convex env set NAME` and supply the value through stdin/the prompt. Do
 | `FIRECRAWL_API_KEY`         | Linked-page scraping and web-context search                              |
 | `OPENAI_API_KEY`            | Editable query interpretation                                            |
 | `OPENAI_MODEL`              | Optional model override; default `gpt-5-mini`                            |
+| `TYPESAFE_API_KEY`          | Jev search at `/pc-jev` on the operator site (TypeSafe System One API)   |
 | `AGENTMAIL_API_KEY`         | Result-digest delivery                                                   |
 | `AGENTMAIL_INBOX_ID`        | Existing sender inbox                                                    |
 | `AGENTMAIL_WEBHOOK_SECRET`  | Verification of delivery webhooks                                        |

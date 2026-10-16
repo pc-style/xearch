@@ -1,0 +1,213 @@
+/* /pc-jev (src/jev), operator site only. Scoped under .jev. */
+.jev {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 20px 48px;
+}
+.jev-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 0 14px;
+}
+.jev-top h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.jev-chip {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+.jev-form {
+  display: flex;
+  gap: 8px;
+}
+.jev-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--field-line);
+  border-radius: 10px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+}
+.jev-form button {
+  padding: 0 16px;
+  border: 1px solid var(--field-line);
+  border-radius: 10px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.jev-form .jev-it {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.jev-form button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.jev-error {
+  margin: 12px 0 0;
+  color: var(--warn);
+}
+.jev-note {
+  margin: 12px 0 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+.jev-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 18px;
+}
+.jev-col {
+  min-width: 0;
+}
+.jev-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 13px;
+}
+.jev-col-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+.jev-methods {
+  display: flex;
+  gap: 4px;
+}
+.jev-methods button {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.jev-methods button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.jev-stats {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.jev-empty {
+  margin: 18px 0;
+  color: var(--faint);
+}
+.jev-thinking {
+  animation: jev-pulse 1.2s ease-in-out infinite;
+}
+@keyframes jev-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.jev-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.jev-card {
+  display: grid;
+  grid-template-columns: 22px 32px 1fr auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.jev-rank {
+  padding-top: 6px;
+  color: var(--faint);
+  font-size: 12px;
+  text-align: right;
+}
+.jev-av {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.jev-av-letters {
+  display: grid;
+  place-items: center;
+  background: var(--av);
+  color: var(--muted);
+  font-size: 12px;
+}
+.jev-body {
+  min-width: 0;
+}
+.jev-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 13px;
+}
+.jev-meta a {
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+}
+.jev-meta a:hover {
+  text-decoration: underline;
+}
+.jev-body p {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 14px;
+}
+.jev-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 12px;
+}
+.jev-value {
+  color: var(--accent);
+  font-weight: 600;
+}
+.jev-move.up {
+  color: var(--ok);
+}
+.jev-move.down {
+  color: var(--faint);
+}
+@media (max-width: 760px) {
+  .jev-cols {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jev-thinking {
+    animation: none;
+  }
+}

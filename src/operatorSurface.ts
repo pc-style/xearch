@@ -39,3 +39,10 @@ export type DashboardProps = {
 export const Dashboard: Component<DashboardProps> | null = lazy(() => import("./ops/Ops"));
 
 export const ConnectionsPanel: Component | null = lazy(() => import("./operator/Connections"));
+
+export type JevLabProps = {
+  ensureSession: () => Promise<void>;
+};
+
+/** Adam's Jev search at `JEV_PATH` (src/jev). */
+export const JevLab: Component<JevLabProps> | null = lazy(() => import("./jev/JevLab"));

@@ -37,6 +37,8 @@ const FORBIDDEN = [
   "Collected range and coverage",
   "Clear finished",
   "signed in with the operator key",
+  // Jev search at /pc-jev (src/jev), the same operatorSurface.ts swap.
+  "Jev's order lands here",
 ];
 
 const files = [];
