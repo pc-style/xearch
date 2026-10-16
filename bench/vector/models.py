@@ -68,12 +68,18 @@ if cmd == "embed":
         np.save(path("emb", f"sub.{plain_slug}.queries.npy"), np.load(path("emb", f"{plain_slug}.queries.npy")))
     if prompted and not doc_prefix and os.path.exists(reuse):
         # Document side is unchanged: only the queries need the prompt.
-        qv = np.asarray([list(model.query_embed([t]))[0] for t in queries], dtype=np.float32)
+        lat, qv = [], []
+        for text in queries:
+            t1 = time.perf_counter()
+            qv.append(list(model.query_embed([text]))[0])
+            lat.append((time.perf_counter() - t1) * 1000)
+        qv = np.asarray(qv, dtype=np.float32)
         np.save(path("emb", f"sub.{slug}.docs.npy"), np.load(reuse))
         np.save(path("emb", f"sub.{slug}.queries.npy"), qv / np.linalg.norm(qv, axis=1, keepdims=True))
         meta = path("emb", f"sub.{plain_slug}.json")
-        if os.path.exists(meta):
-            json.dump(json.load(open(meta)), open(path("emb", f"sub.{slug}.json"), "w"))
+        meta = json.load(open(meta)) if os.path.exists(meta) else {"spec": spec, "docs": len(texts)}
+        meta.update(query_ms_p50=round(percentile(lat, 50), 1), query_ms_p95=round(percentile(lat, 95), 1))
+        json.dump(meta, open(path("emb", f"sub.{slug}.json"), "w"))
         print(slug, "queries re-encoded with prompt")
         sys.exit(0)
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))

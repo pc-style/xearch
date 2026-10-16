@@ -24,12 +24,14 @@ Everything below is **measured** unless marked *estimate*.
 
 ## Embedding models (shared 10k sub-corpus, exact kNN, model-card prompts applied)
 
-| Model | Dims | lex R@10 | para R@10 | para MRR | quote R@10 | topic nDCG@10 | Encode posts/s (2 threads) | Query ms p50 |
+| Model | Dims | lex R@10 | para R@10 | para MRR | quote R@10 | topic nDCG@10 | Encode posts/s (2 threads) | Prompted query ms p50 |
 |---|---|---|---|---|---|---|---|---|
-| bge-small-en-v1.5 | 384 | 0.815 | 0.720 | 0.575 | 0.375 | 0.652 | 33.5 | 4.9 |
-| snowflake-arctic-embed-m | 768 | 0.905 | 0.790 | 0.644 | 0.385 | 0.732 | 9.5 | 17.7 |
-| embeddinggemma-300m | 768 | 0.855 | 0.905 | 0.733 | 0.485 | 0.757 | 11.0 | 42.4 |
+| bge-small-en-v1.5 | 384 | 0.815 | 0.720 | 0.575 | 0.375 | 0.652 | 33.5 | 6.3–7.4 |
+| snowflake-arctic-embed-m | 768 | 0.905 | 0.790 | 0.644 | 0.385 | 0.732 | 9.5 | 26–46 |
+| embeddinggemma-300m | 768 | 0.855 | 0.905 | 0.733 | 0.485 | 0.757 | 11.0 | 42.4 (one run) |
 
+Query latency is noisy on this shared CPU: the ranges are separate runs, and the prompt
+prefix itself costs time (bge-small 4.4–4.7 ms without it, 6.3 ms with it, in one process).
 fastembed 0.9 applies no query/document prompts (measured: identical vectors). Without
 them arctic-embed-m scored 0.265 para R@10 and EmbeddingGemma 0.785. OpenAI and Gemini
 embeddings were not measured: the OpenAI key in `.env.local` and in the production
@@ -41,10 +43,11 @@ Convex deployment returns 401, and no Gemini key exists.
 |---|---|---|---|---|---|---|---|---|
 | Tantivy (existing, HTTP) | ~23,500 | 18 MB | 45 MiB RSS | — | 0.8 / 1.9 (AND) | — | — | — |
 | In-process HNSW (hnswlib) | 4,775 | 84 MB | in process | 0.914 | — | 0.26 / 0.35 | — | — |
-| Qdrant 1.19.2 (gRPC) | 1,069 | 151 MB | 165 MiB | 0.961 | 1.8 / 3.0 (sparse OR) | 2.9 / 4.1 | 1.6 / 2.6 | 3.6 / 4.5 native RRF |
+| Qdrant 1.19.2 (gRPC) | 1,035 | 151 MB | 165 MiB | 0.961 | 1.8 / 3.0 (sparse OR) | 2.9 / 4.1 | 1.6 / 2.6 | 3.6 / 4.5 native RRF |
 | ParadeDB 0.26.1 + pgvector 0.8.6 | 1,539 | 218 MB | 378 MiB | 0.955 | 1.4 / 4.2 AND, 1.7 / 5.7 OR | 2.0 / 2.6 | 2.5 / 8.8 | 4.4 / 9.1 one SQL |
 | Elasticsearch 9.5.3, Basic | 1,391 | 90 MB | 983 MiB (512m heap) | 0.936 | 3.7 / 33.5 AND, 4.0 / 46.0 OR | 5.2 / 40.5 | 4.5 / 44.9 | native RRF: **HTTP 403** on Basic |
 
+Qdrant's rate includes encoding the `Qdrant/bm25` sparse vectors (1.5 s of 48.3 s).
 Add query embedding to every vector or hybrid latency: bge-small 4.9 ms p50 / 31 ms
 p95 on this CPU. Every engine returned complete author-filtered results here
 (recall 0.98–0.998 against exact filtered search); pgvector filters after the HNSW
@@ -59,3 +62,10 @@ scan, which this sample did not expose.
   EmbeddingGemma ≈ 8 h of two cores.
 - Vectors for 313k posts: 384-d float32 481 MB (int8 120 MB); 768-d 962 MB (int8
   240 MB); 1536-d 1.92 GB. HNSW graph adds roughly 10%.
+
+## Corrections after review
+
+- The published corpus kept duplicate copies of a post in filesystem order. `extract.py`
+  now keeps the most recently received copy. That changes the cleaned text of 56 of the
+  50,000 sampled posts (HTML entities and trailing links). The post ids and the sample
+  are unchanged, and the quality runs above were not repeated.

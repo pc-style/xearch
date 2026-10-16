@@ -35,7 +35,7 @@ INSTRUCTIONS = (
     'Return JSON {"grades": {"<number>": 0|1|2, ...}} covering every number.'
 )
 rng = random.Random(5)
-asked = 0
+asked = missing = 0
 for n, topic in enumerate(topics):
     key = str(n)
     done = judged.setdefault(key, {})
@@ -52,7 +52,14 @@ for n, topic in enumerate(topics):
         text = text[text.find("{") : text.rfind("}") + 1]
         grades = json.loads(text)["grades"]
         for k, i in enumerate(batch):
-            done[i] = int(grades.get(str(k + 1), 0))
+            try:
+                grade = int(grades.get(str(k + 1)))
+            except (TypeError, ValueError):
+                grade = None
+            if grade in (0, 1, 2):
+                done[i] = grade
+            else:
+                missing += 1  # left ungraded, so the next run asks again
         asked += len(batch)
     write_json("judgments.json", judged)
-print("judged", asked, "new posts with", MODEL)
+print("judged", asked - missing, "new posts with", MODEL, "|", missing, "left ungraded; rerun to retry")

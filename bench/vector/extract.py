@@ -2,8 +2,8 @@
 
     python3 -I extract.py ARCHIVE_DIR OUT_DIR
 
-Writes OUT_DIR/corpus.jsonl (one normalized post per line, newest copy of each
-id wins) and OUT_DIR/corpus.stats.json. Never writes to ARCHIVE_DIR.
+Writes OUT_DIR/corpus.jsonl (one normalized post per line; the copy from the most
+recently received record wins, ties go to the later capture name) and OUT_DIR/corpus.stats.json. Never writes to ARCHIVE_DIR.
 """
 
 import json
@@ -15,10 +15,11 @@ archive, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
 
 posts = {}
+received = {}
 files = 0
 
 
-def keep(post):
+def keep(post, at):
     if not isinstance(post, dict) or not post.get("id") or not post.get("text"):
         return
     author = (post.get("author") or {}).get("screen_name") or ""
@@ -35,10 +36,12 @@ def keep(post):
         "replyTo": post.get("replying_to") or None,
         "quoteId": str(quote["id"]) if quote.get("id") else None,
     }
-    posts[row["id"]] = row
+    if at >= received.get(row["id"], -1):
+        posts[row["id"]] = row
+        received[row["id"]] = at
 
 
-for entry in os.scandir(archive):
+for entry in sorted(os.scandir(archive), key=lambda e: e.name):
     name = entry.name
     if not name.endswith(".json") or name.endswith(".receipt.json"):
         continue
@@ -50,9 +53,10 @@ for entry in os.scandir(archive):
     files += 1
     for record in capture.get("records") or []:
         payload = record.get("payload") or {}
+        at = int(record.get("receivedAt") or 0)
         for post in payload.get("posts") or []:
-            keep(post)
-        keep(payload.get("post"))
+            keep(post, at)
+        keep(payload.get("post"), at)
 
 tokens = re.compile(r"\w+", re.UNICODE)
 lengths = sorted(len(tokens.findall(p["text"])) for p in posts.values())

@@ -137,6 +137,13 @@ def run_modes(lex_and, lex_or, vec, vec_author, hybrid_native):
     report["ann_recall@10_vs_exact"] = round(sum(hits) / len(hits), 4)
 
 
+def fresh(data, image):
+    """Empty an engine's data directory so a rerun indexes from scratch. The engines write
+    as their own users (Postgres as 999), so remove it from inside the image as root."""
+    parent, name = os.path.split(data)
+    sh("docker", "run", "--rm", "--user", "0", "-v", f"{parent}:/r", "--entrypoint", "rm", image, "-rf", f"/r/{name}")
+
+
 def docker_run(*opts, image):
     sh("docker", "rm", "-f", f"vecbench-{args.engine}", check=False)
     sh("docker", "run", "-d", "--name", f"vecbench-{args.engine}", f"--cpus={CPUS}", *opts, image)
@@ -147,6 +154,7 @@ def docker_run(*opts, image):
 def elasticsearch():
     base = "http://127.0.0.1:9290"
     data = os.path.join(root, "data")
+    fresh(data, "docker.elastic.co/elasticsearch/elasticsearch:9.5.3")
     os.makedirs(data, exist_ok=True)
     os.chmod(data, 0o777)
     docker_run("-p", "127.0.0.1:9290:9200", "-m", "2g", "-v", f"{data}:/usr/share/elasticsearch/data",
@@ -217,6 +225,7 @@ def qdrant():
 
     base = "http://127.0.0.1:6390"
     data = os.path.join(root, "storage")
+    fresh(data, "qdrant/qdrant:v1.19.2")
     os.makedirs(data, exist_ok=True)
     docker_run("-p", "127.0.0.1:6390:6333", "-p", "127.0.0.1:6391:6334", "-m", "1g", "-v", f"{data}:/qdrant/storage",
                image="qdrant/qdrant:v1.19.2")
@@ -248,7 +257,7 @@ def qdrant():
          "qdrant hnsw", timeout=1800)
     hnsw = time.perf_counter() - t1
     report["index"] = {"sparse_encode_s": round(sparse_secs, 1), "upsert_s": round(upsert, 1),
-                       "hnsw_wait_s": round(hnsw, 1), "docs_per_s": round(len(rows) / (upsert + hnsw)),
+                       "hnsw_wait_s": round(hnsw, 1), "docs_per_s": round(len(rows) / (sparse_secs + upsert + hnsw)),
                        "count": info()["points_count"], "segments": info()["segments_count"]}
 
     # Queries go over gRPC, as the Rust client would. Over REST, any response larger than
@@ -305,6 +314,7 @@ def paradedb():
     import psycopg
 
     data = os.path.join(root, "pgdata")
+    fresh(data, "paradedb/paradedb:0.26.1-pg17")
     docker_run("-p", "127.0.0.1:5490:5432", "-m", "1g", "--shm-size=256m", "-e", "POSTGRES_PASSWORD=bench",
                "-e", "PGDATA=/var/lib/postgresql/data/pgdata", "-v", f"{data}:/var/lib/postgresql/data/pgdata",
                image="paradedb/paradedb:0.26.1-pg17")
