@@ -111,6 +111,20 @@ describe("semantic response decoding", () => {
     ]);
   });
 
+  it("counts display string limits as Unicode code points", () => {
+    const bounded = { ...post, text: "😀".repeat(6000), displayName: "😀".repeat(100) };
+
+    expect(
+      decodeSemanticResponse({ ...response(), hits: [{ post: bounded, score: 0.5 }] }).rows[0],
+    ).toMatchObject({ text: bounded.text, displayName: bounded.displayName });
+    expect(() =>
+      decodeSemanticResponse({
+        ...response(),
+        hits: [{ post: { ...bounded, text: bounded.text + "x" }, score: 0.5 }],
+      }),
+    ).toThrow();
+  });
+
   it("rejects malformed or oversized responses", () => {
     const many = { ...response(), hits: Array.from({ length: 21 }, () => ({ post, score: 0.5 })) };
 
