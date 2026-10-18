@@ -80,7 +80,7 @@ export function renderResults(props: Partial<ResultsSectionProps> = {}) {
     visible: [],
     bookmarkedIds: new Set<string>(),
     busy: false,
-    onSearch: noop,
+    onAuthor: noop,
     onOpenModal: noop,
     onImportAccount: noop,
     onRetry: noop,
