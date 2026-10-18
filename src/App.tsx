@@ -640,6 +640,7 @@ export default function App() {
           query: redactEmail(request.raw),
           trigger: request.trigger,
           sort: request.sort,
+          mode: request.mode ?? "keyword",
           result_count: current.rows.length,
           duration_ms: Math.round(
             performance.now() - (searchStartedAt.get(request.attemptId) ?? performance.now()),

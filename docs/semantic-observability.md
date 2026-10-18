@@ -21,6 +21,21 @@ URLs, request bodies, bearer tokens, model download credentials and raw
 exception messages. Record only allowlisted properties. Analytics failures
 must not change the indexing acknowledgement or search result.
 
+## Frontend search outcomes
+
+`search_results_loaded` and `search_failed` include `mode` (`keyword` or
+`semantic`) from the initiating request. Requests without a mode default to
+`keyword`. Session completion and failure use the same mode contract as a
+failed start mutation; each terminal session outcome is captured once per
+attempt. The existing production-only PostHog initialization and query email
+redaction remain in effect.
+
+In project 283153, split frontend outcome counts and duration distributions by
+`mode` before comparing keyword and semantic search. Historical events missing
+`mode` are unknown, not evidence of keyword traffic. For semantic failures,
+correlate the frontend outcome with the service stage events below; a successful
+mutation alone does not prove that retrieval completed.
+
 ## Scout context
 
 Semantic retrieval is a projection of the retained corpus, separate from the

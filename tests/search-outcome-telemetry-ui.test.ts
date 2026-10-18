@@ -1,19 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { Value } from "convex/values";
 import App from "../src/App";
-import { capture } from "../src/posthog";
+import * as analytics from "../src/posthog";
 import { fakeConvex, mount, settle, type Mounted } from "./solid";
 
-vi.mock("../src/posthog", async (original) => ({
-  ...(await original<typeof import("../src/posthog")>()),
-  capture: vi.fn(),
-}));
-
 let mounted: Mounted | undefined;
+
 afterEach(() => {
   mounted?.unmount();
   mounted = undefined;
-  vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 it.each([
@@ -22,8 +18,11 @@ it.each([
   { mode: "keyword", status: "failed", event: "search_failed" },
   { mode: "semantic", status: "failed", event: "search_failed" },
 ])("reports $mode on a $status search outcome exactly once", async ({ mode, status, event }) => {
+  const capture = vi.spyOn(analytics, "capture");
+
   window.history.replaceState(null, "", `/?search=1&q=software&mode=${mode}`);
   let session: Value = null;
+
   const convex = fakeConvex({
     query: (name) => {
       if (name === "integrations:configured")
@@ -35,8 +34,11 @@ it.each([
           openai: false,
           email: false,
         };
+
       if (name === "search:accounts") return [];
+
       if (name === "search:resultsByKey") return session;
+
       return undefined;
     },
     mutation: async (name, args) => {
@@ -55,9 +57,11 @@ it.each([
         warnings: [],
       };
       queueMicrotask(() => convex.changed("search:resultsByKey"));
+
       return "session-1";
     },
   });
+
   mounted = mount(App, {}, convex);
   await settle();
   expect(capture).toHaveBeenCalledWith(
@@ -66,5 +70,5 @@ it.each([
   );
   convex.changed("search:resultsByKey");
   await settle();
-  expect(vi.mocked(capture).mock.calls.filter(([name]) => name === event)).toHaveLength(1);
+  expect(capture.mock.calls.filter(([name]) => name === event)).toHaveLength(1);
 });
