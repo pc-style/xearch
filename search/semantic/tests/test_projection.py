@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import json
 from pathlib import Path
 import random
 import tempfile
@@ -214,6 +215,41 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(
             self.search.search(Request("x", 1))["hits"][0]["post"]["likes"], 5
         )
+
+    def test_search_bounds_display_fields_without_changing_indexed_content(self):
+        text = "a" * 5999 + "😀" + "tail"
+        event = self.event(
+            text,
+            url="https://x.com/alice/status/1",
+            displayName="😀" * 101,
+            links=[f"https://example.com/{i}" for i in range(11)],
+            media=[{
+                "kind": "photo", "image": "https://example.com/image",
+                "alt": "😀" * 1000, "width": 100001, "height": 100000,
+            }],
+            card={
+                "url": "https://example.com/", "title": "😀" * 300,
+                "description": "😀" * 500, "domain": "😀" * 253,
+            },
+            quote={
+                "url": "https://x.com/bob/status/2", "author": "bob",
+                "text": "😀" * 2000, "displayName": "😀" * 100,
+            },
+        )
+        self.capture("a" * 64, [event])
+        self.projection.deliver(self.encoder, self.store)
+        result = self.search.search(Request("x", 1))["hits"][0]["post"]
+        self.assertEqual(result["text"], "a" * 5999 + "😀")
+        self.assertEqual(result["displayName"], "😀" * 100)
+        self.assertEqual(result["links"], event["post"]["links"][:10])
+        self.assertEqual(result["media"][0]["alt"], "😀" * 1000)
+        self.assertNotIn("width", result["media"][0])
+        self.assertEqual(result["media"][0]["height"], 100000)
+        self.assertEqual(result["card"], event["post"]["card"])
+        self.assertEqual(result["quote"], event["post"]["quote"])
+        self.assertEqual(json.loads(self.row()["post"]), event["post"])
+        self.assertEqual(self.row()["searchable"], text)
+        self.assertEqual(self.encoder.calls, [text])
 
     def test_text_edit_and_lost_ack_retry_reuses_exact_vector(self):
         self.capture("a" * 64, [self.event()])
