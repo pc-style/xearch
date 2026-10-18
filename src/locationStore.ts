@@ -1,11 +1,12 @@
 import type { Accessor } from "solid-js";
 import { fromStore } from "./data/external";
-import type { Sort } from "../convex/lib/search";
+import type { SearchMode, Sort } from "../convex/lib/search";
 import { ViewMode } from "./uiState";
 
 export interface LocationSnapshot {
   readonly version: number;
   readonly raw: string;
+  readonly mode: SearchMode;
   readonly sort: Sort;
   readonly includeStats: boolean;
   readonly dashboard: boolean;
@@ -31,6 +32,7 @@ export interface LocationSnapshot {
 export interface LocationPatch {
   readonly path?: string;
   readonly raw?: string;
+  readonly mode?: SearchMode;
   readonly sort?: Sort;
   readonly includeStats?: boolean;
   readonly dashboard?: boolean;
@@ -54,6 +56,7 @@ const VIEW_VALUES: ReadonlySet<string> = new Set([ViewMode.Search, ViewMode.Book
 const SERVER_SNAPSHOT: LocationSnapshot = Object.freeze({
   version: 0,
   raw: "",
+  mode: "keyword",
   sort: DEFAULT_SORT,
   includeStats: false,
   dashboard: false,
@@ -94,7 +97,13 @@ function parseUrl(input: string | URL): Omit<LocationSnapshot, "version"> {
 
   return {
     raw: url.searchParams.get("q") ?? "",
-    sort: isSort(sortValue) ? sortValue : DEFAULT_SORT,
+    mode: url.searchParams.get("mode") === "semantic" ? "semantic" : "keyword",
+    sort:
+      url.searchParams.get("mode") === "semantic"
+        ? "relevance"
+        : isSort(sortValue)
+          ? sortValue
+          : DEFAULT_SORT,
     includeStats: url.searchParams.get("stats") === "1",
     dashboard: url.searchParams.has("dashboard"),
     search: url.searchParams.has("search"),
@@ -207,6 +216,11 @@ function applyPatch(url: URL, patch: LocationPatch): void {
   if (patch.raw !== undefined) {
     if (patch.raw) url.searchParams.set("q", patch.raw);
     else url.searchParams.delete("q");
+  }
+
+  if (patch.mode !== undefined) {
+    if (patch.mode === "semantic") url.searchParams.set("mode", "semantic");
+    else url.searchParams.delete("mode");
   }
 
   if (patch.sort !== undefined) url.searchParams.set("sort", patch.sort);

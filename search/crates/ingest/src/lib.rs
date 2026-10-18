@@ -73,7 +73,9 @@ pub fn import(input: &Path, archive: &Path, mut sink: impl IndexSink) -> Result<
         rejected: 0,
     };
     let mut context = Context {
-        sink: &mut sink,
+        target: ReplayTarget::Sink(&mut sink),
+        observed_at_ms: None,
+        ordinal: 0,
         receipt: &mut receipt,
         quarantine: &mut quarantine,
         failure: None,
@@ -128,7 +130,9 @@ pub fn replay(input: &Path, sink: &mut dyn IndexSink) -> Result<Receipt> {
     };
     let mut quarantine = std::io::sink();
     let mut context = Context {
-        sink,
+        target: ReplayTarget::Sink(sink),
+        observed_at_ms: None,
+        ordinal: 0,
         receipt: &mut receipt,
         quarantine: &mut quarantine,
         failure: None,
@@ -148,8 +152,70 @@ pub fn replay(input: &Path, sink: &mut dyn IndexSink) -> Result<Receipt> {
     Ok(receipt)
 }
 
+/// An additive observer over the same walker and normalizer as keyword replay.
+pub trait ReplayObserver {
+    /// Receive an accepted post with capture acquisition time and deterministic candidate ordinal.
+    ///
+    /// # Errors
+    /// Propagates output failures; callers must not issue a terminal receipt after failure.
+    fn post(&mut self, observed_at_ms: Option<i64>, ordinal: u64, post: &Post) -> Result<()>;
+}
+
+/// Stream normalized observations, without changing keyword replay semantics.
+/// Missing times represent legacy provenance, never file modification time.
+///
+/// # Errors
+/// Returns malformed envelope/timestamp, size, I/O, and observer errors.
+pub fn replay_observed(input: &Path, observer: &mut dyn ReplayObserver) -> Result<Receipt> {
+    if File::open(input)
+        .map_err(storage)?
+        .metadata()
+        .map_err(storage)?
+        .len()
+        > MAX_INPUT
+    {
+        return Err(Error::Invalid(
+            "Input exceeds the 64 MiB import limit".into(),
+        ));
+    }
+    let mut receipt = Receipt {
+        sha256: String::new(),
+        accepted: 0,
+        rejected: 0,
+    };
+    let mut quarantine = std::io::sink();
+    let mut context = Context {
+        target: ReplayTarget::Observer(observer),
+        observed_at_ms: None,
+        ordinal: 0,
+        receipt: &mut receipt,
+        quarantine: &mut quarantine,
+        failure: None,
+    };
+    let source = File::open(input)
+        .map_err(storage)?
+        .take(MAX_INPUT.saturating_add(1));
+    let mut deserializer = serde_json::Deserializer::from_reader(BufReader::new(source));
+    let parsed = Envelope(&mut context).deserialize(&mut deserializer);
+    if let Some(error) = context.failure.take() {
+        return Err(error);
+    }
+    parsed.map_err(|e| Error::Invalid(e.to_string()))?;
+    deserializer
+        .end()
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    Ok(receipt)
+}
+
+enum ReplayTarget<'a> {
+    Sink(&'a mut dyn IndexSink),
+    Observer(&'a mut dyn ReplayObserver),
+}
+
 struct Context<'a> {
-    sink: &'a mut dyn IndexSink,
+    target: ReplayTarget<'a>,
+    observed_at_ms: Option<i64>,
+    ordinal: u64,
     receipt: &'a mut Receipt,
     quarantine: &'a mut dyn Write,
     failure: Option<Error>,
@@ -173,9 +239,19 @@ impl Context<'_> {
     }
 
     fn try_record(&mut self, value: &Value) -> Result<()> {
+        let ordinal = self.ordinal;
+        self.ordinal = self
+            .ordinal
+            .checked_add(1)
+            .ok_or_else(|| storage("Ordinal overflow"))?;
         match normalize(value) {
             Ok(post) => {
-                self.sink.upsert(&post)?;
+                match &mut self.target {
+                    ReplayTarget::Sink(sink) => sink.upsert(&post)?,
+                    ReplayTarget::Observer(observer) => {
+                        observer.post(self.observed_at_ms, ordinal, &post)?;
+                    }
+                }
                 self.receipt.accepted = self.receipt.accepted.saturating_add(1);
             }
             Err(error) => {
@@ -254,6 +330,17 @@ impl<'de> Visitor<'de> for Records<'_, '_> {
     fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> std::result::Result<(), S::Error> {
         while let Some(value) = seq.next_element::<Value>()? {
             if self.captures {
+                if matches!(self.context.target, ReplayTarget::Observer(_)) {
+                    self.context.observed_at_ms = match value.get("receivedAt") {
+                        None | Some(Value::Null) => None,
+                        Some(timestamp) => Some(
+                            timestamp
+                                .as_i64()
+                                .filter(|n| *n >= 0)
+                                .ok_or_else(|| serde::de::Error::custom("Invalid receivedAt"))?,
+                        ),
+                    };
+                }
                 let payload = value
                     .get("payload")
                     .ok_or_else(|| serde::de::Error::custom("Missing capture payload"))?;

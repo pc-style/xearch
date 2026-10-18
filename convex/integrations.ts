@@ -17,6 +17,7 @@ const firecrawl = new FirecrawlClient(components.firecrawl);
 const capabilitiesValidator = v.object({
   indexing: v.boolean(),
   search: v.boolean(),
+  semantic: v.boolean(),
   firecrawl: v.boolean(),
   openai: v.boolean(),
   email: v.boolean(),
@@ -77,6 +78,7 @@ async function capabilities(ctx: QueryCtx, now: number) {
     values: {
       indexing: !!process.env.X_MD_API_KEY && saving,
       search: !!process.env.SEARCH_API_URL,
+      semantic: !!process.env.SEMANTIC_API_URL && !!process.env.SEMANTIC_SEARCH_TOKEN,
       firecrawl: !!process.env.FIRECRAWL_API_KEY,
       openai: !!process.env.OPENAI_API_KEY,
       email: !!process.env.AGENTMAIL_API_KEY && !!process.env.AGENTMAIL_INBOX_ID,

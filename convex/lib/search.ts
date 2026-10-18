@@ -1,6 +1,8 @@
 import { ConvexError } from "convex/values";
 import type { SummaryScope } from "./contracts";
 
+export type SearchMode = "keyword" | "semantic";
+
 export type Sort = "relevance" | "engagement" | "likes" | "newest" | "oldest";
 
 // Three spellings of one author filter: `@theo`, `from:@theo` and `from:theo`.
@@ -137,4 +139,29 @@ export class StaleSearchCursorError extends Error {
     super("The search cursor is no longer valid.");
     this.name = "StaleSearchCursorError";
   }
+}
+
+/**
+ * A semantic search is natural text plus at most one author filter
+ * (docs/semantic-architecture.md). The embedding has no notion of Boolean
+ * logic, so `-word` and `OR` are refused rather than passed on as words the
+ * person believes are operators; quotes and parentheses are harmless text.
+ * Keyword searches keep `parseQuery`'s rules exactly.
+ */
+export function parseSearch(raw: string, mode: SearchMode | undefined) {
+  const parsed = parseQuery(raw);
+
+  if (mode !== "semantic") return parsed;
+
+  if (!parsed.text)
+    throw new Error(
+      "Describe what you are looking for. Semantic search needs words, not only @handle.",
+    );
+
+  if (/(?:^|\s)(?:-\S|OR(?=\s|$))/.test(parsed.text))
+    throw new Error(
+      "Semantic search reads plain language. Switch to keyword search to exclude words or use OR.",
+    );
+
+  return parsed;
 }

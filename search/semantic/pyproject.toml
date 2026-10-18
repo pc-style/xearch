@@ -1,0 +1,15 @@
+[project]
+name = "xearch-semantic"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["fastembed==0.9.0", "onnxruntime==1.31.0", "qdrant-client==1.19.1"]
+
+[project.scripts]
+xearch-semantic = "semantic.service:main"
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["semantic"]

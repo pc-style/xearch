@@ -7,8 +7,14 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
-import schema, { postFields, searchStatsFields, sortValidator } from "./schema";
-import { parseQuery, assertAuthorizedScope, STALE_CURSOR_STATUS } from "./lib/search";
+import schema, {
+  postFields,
+  searchStatsFields,
+  sortValidator,
+  searchModeValidator,
+} from "./schema";
+import { parseSearch, assertAuthorizedScope, STALE_CURSOR_STATUS } from "./lib/search";
+import { decodeSemanticResponse } from "./lib/semanticResults";
 import { decodeSearchResponse } from "./lib/results";
 import { serviceToken } from "./lib/serviceAuth";
 import { summaryScopeValidator } from "./lib/contracts";
@@ -26,6 +32,18 @@ export type SearchRequestBody = {
   limit: number;
   includeStats?: true;
 };
+
+/** Wire request body for the private semantic API (search/semantic/README.md). */
+export type SemanticRequestBody = {
+  text: string;
+  author?: string;
+  limit: number;
+};
+
+/** Both halves of the semantic connection, or semantic search stays off. */
+function semanticConfigured() {
+  return !!process.env.SEMANTIC_API_URL && !!process.env.SEMANTIC_SEARCH_TOKEN;
+}
 
 // The search API's own page size (`limit: 20` below, in `execute`) and
 // `lib/results.ts`'s decode-time `z.maxLength(20)` both already
@@ -70,6 +88,7 @@ export const start = mutation({
   args: {
     raw: v.string(),
     sort: sortValidator,
+    mode: v.optional(searchModeValidator),
     cursor: v.optional(v.string()),
     // Optional and forward-looking: today the only value this app can
     // authorize is "global" (see assertAuthorizedScope in ./lib/search), so
@@ -84,11 +103,18 @@ export const start = mutation({
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    parseQuery(args.raw);
+    parseSearch(args.raw, args.mode);
 
     if (!args.raw.trim()) throw new ConvexError("Enter a search.");
 
-    if (!process.env.SEARCH_API_URL)
+    if (args.mode === "semantic") {
+      // Nearest posts in similarity order: no other order, and no next page.
+      if (args.sort !== "relevance" || args.cursor !== undefined)
+        throw new ConvexError("Semantic search sorts by relevance and has one page.");
+
+      if (!semanticConfigured())
+        throw new ConvexError("Semantic search is not connected yet. Use keyword search for now.");
+    } else if (!process.env.SEARCH_API_URL)
       throw new ConvexError(
         "The search service is not connected yet. Configure SEARCH_API_URL to use your corpus.",
       );
@@ -117,6 +143,7 @@ export const start = mutation({
       owner,
       raw: args.raw,
       sort: args.sort,
+      mode: args.mode ?? "keyword",
       cursor,
       includeStats: args.includeStats === true,
       status: "queued",
@@ -263,8 +290,11 @@ type SearchFailure =
   | { kind: "client_error"; status: number }
   | { kind: "invalid_body"; detail: string };
 
+type SearchResult = Pick<ReturnType<typeof decodeSearchResponse>, "rows" | "warnings"> &
+  Partial<ReturnType<typeof decodeSearchResponse>>;
+
 type SearchAttempt =
-  | { kind: "ok"; result: ReturnType<typeof decodeSearchResponse> }
+  | { kind: "ok"; result: SearchResult }
   | { kind: "failed"; failure: SearchFailure };
 
 export const RETRYABLE_FAILURE_KINDS = new Set<SearchFailure["kind"]>([
@@ -277,8 +307,9 @@ export const RETRYABLE_FAILURE_KINDS = new Set<SearchFailure["kind"]>([
 export async function attemptSearch(
   url: string,
   headers: Record<string, string>,
-  requestBody: SearchRequestBody,
+  requestBody: SearchRequestBody | SemanticRequestBody,
   hasCursor: boolean,
+  decode: (body: Parameters<typeof decodeSearchResponse>[0]) => SearchResult = decodeSearchResponse,
 ): Promise<SearchAttempt> {
   let response: Response;
 
@@ -319,7 +350,7 @@ export async function attemptSearch(
   }
 
   try {
-    return { kind: "ok", result: decodeSearchResponse(body) };
+    return { kind: "ok", result: decode(body) };
   } catch {
     return {
       kind: "failed",
@@ -374,10 +405,12 @@ export const execute = internalAction({
     const startedAt = Date.now();
 
     try {
-      const parsed = parseQuery(session.raw);
+      const semantic = session.mode === "semantic";
+      const parsed = parseSearch(session.raw, session.mode);
 
       const baseHeaders = { "Content-Type": "application/json" } satisfies Record<string, string>;
-      const token = serviceToken("search");
+      // The semantic API has its own read token; never the keyword one.
+      const token = semantic ? process.env.SEMANTIC_SEARCH_TOKEN : serviceToken("search");
       const headers = token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders;
 
       const requestBody: SearchRequestBody = {
@@ -391,15 +424,21 @@ export const execute = internalAction({
 
       if (session.includeStats) requestBody.includeStats = true;
 
-      const url = process.env.SEARCH_API_URL!;
+      const url = semantic ? process.env.SEMANTIC_API_URL! : process.env.SEARCH_API_URL!;
+
+      const body: SearchRequestBody | SemanticRequestBody = semantic
+        ? { text: parsed.text, author: parsed.author, limit: 20 }
+        : requestBody;
+
+      const decode = semantic ? decodeSemanticResponse : decodeSearchResponse;
       const hasCursor = !!session.cursor;
-      let attempt = await attemptSearch(url, headers, requestBody, hasCursor);
+      let attempt = await attemptSearch(url, headers, body, hasCursor, decode);
       let retried = false;
 
       if (attempt.kind === "failed" && RETRYABLE_FAILURE_KINDS.has(attempt.failure.kind)) {
         await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_BACKOFF_MS));
         retried = true;
-        attempt = await attemptSearch(url, headers, requestBody, hasCursor);
+        attempt = await attemptSearch(url, headers, body, hasCursor, decode);
       }
 
       if (attempt.kind === "ok") {
@@ -409,6 +448,7 @@ export const execute = internalAction({
           event: "search_service_completed",
           properties: {
             session_id: sessionId,
+            mode: session.mode ?? "keyword",
             result_count: attempt.result.rows.length,
             duration_ms: Date.now() - startedAt,
             retried,
@@ -427,6 +467,7 @@ export const execute = internalAction({
           event: "search_service_failed",
           properties: {
             session_id: sessionId,
+            mode: session.mode ?? "keyword",
             failure_kind: attempt.failure.kind,
             duration_ms: Date.now() - startedAt,
             retried,
@@ -450,6 +491,7 @@ export const execute = internalAction({
         event: "search_service_failed",
         properties: {
           session_id: sessionId,
+          mode: session.mode ?? "keyword",
           failure_kind: "unexpected",
           duration_ms: Date.now() - startedAt,
           retried: false,
@@ -476,26 +518,38 @@ export const saved = query({
 });
 
 export const save = mutation({
-  args: { raw: v.string(), sort: sortValidator },
+  args: { raw: v.string(), sort: sortValidator, mode: v.optional(searchModeValidator) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const owner = await user(ctx);
-    parseQuery(args.raw);
+    parseSearch(args.raw, args.mode);
 
     if (!args.raw.trim()) throw new ConvexError("Enter a search first.");
+
+    if (args.mode === "semantic" && args.sort !== "relevance")
+      throw new ConvexError("Semantic search sorts by relevance.");
 
     const saved = await ctx.db
       .query("saved")
       .withIndex("by_owner", (q) => q.eq("owner", owner))
       .take(31);
 
-    if (saved.some((s) => s.query === args.raw.trim() && s.sort === args.sort)) return null;
+    if (
+      saved.some(
+        (s) =>
+          s.query === args.raw.trim() &&
+          s.sort === args.sort &&
+          (s.mode ?? "keyword") === (args.mode ?? "keyword"),
+      )
+    )
+      return null;
 
     if (saved.length >= 30) throw new ConvexError("You can save 30 searches. Remove one first.");
     await ctx.db.insert("saved", {
       owner,
       query: args.raw.trim(),
       sort: args.sort,
+      mode: args.mode ?? "keyword",
     });
 
     return null;
