@@ -1,5 +1,5 @@
 import type { Component } from "solid-js";
-import type { DashboardProps } from "./operatorSurface";
+import type { DashboardProps, JevLabProps } from "./operatorSurface";
 import { OPERATOR_BUILD } from "./operatorBuild";
 
 /**
@@ -13,8 +13,10 @@ import { OPERATOR_BUILD } from "./operatorBuild";
  */
 export { OPERATOR_BUILD };
 
-export type { DashboardProps };
+export type { DashboardProps, JevLabProps };
 
 export const Dashboard: Component<DashboardProps> | null = null;
 
 export const ConnectionsPanel: Component | null = null;
+
+export const JevLab: Component<JevLabProps> | null = null;

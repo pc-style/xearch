@@ -18,6 +18,7 @@ for (const name of [
   "POSTHOG_HOST",
   "OPENAI_API_KEY",
   "OPENAI_MODEL",
+  "TYPESAFE_API_KEY",
   "AGENTMAIL_API_KEY",
   "AGENTMAIL_INBOX_ID",
 ]) {

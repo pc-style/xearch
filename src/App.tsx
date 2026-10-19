@@ -22,7 +22,7 @@ import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { EmailSignIn } from "./auth/EmailSignIn";
 import { IMPORTS_UNAVAILABLE, OPERATOR_SIGN_IN_NOTICE } from "./integrationStatus";
-import { ConnectionsPanel, Dashboard, OPERATOR_BUILD } from "./operatorSurface";
+import { ConnectionsPanel, Dashboard, JevLab, OPERATOR_BUILD } from "./operatorSurface";
 import { prefetched } from "./prefetch";
 import { capture, captureError, identifyUser, redactEmail, resetUser } from "./posthog";
 import { operatorArgs } from "./operatorToken";
@@ -35,6 +35,7 @@ import type { ResultPost } from "../convex/lib/results";
 import { parseSearch, type SearchMode, type Sort } from "../convex/lib/search";
 import {
   getSnapshot,
+  JEV_PATH,
   OPS_PATH,
   opsEntryPatch,
   opsTabFromPath,
@@ -1032,8 +1033,20 @@ export default function App() {
           );
         }}
       </Match>
+      <Match when={OPERATOR_BUILD && route().path.replace(/(.)\/$/, "$1") === JEV_PATH && JevLab}>
+        {(Lab) => {
+          const Component = Lab();
+
+          return (
+            <Loading fallback={null}>
+              <Component ensureSession={ensureSession} />
+            </Loading>
+          );
+        }}
+      </Match>
       {/* The search app lives at "/" (its views are query params) and the
-          dashboard is matched above, so any other path is unknown. */}
+          dashboard and Jev search are matched above, so any other path is
+          unknown. */}
       <Match when={route().path !== "/"}>
         <div class="page not-found">
           <h1>Page not found</h1>
