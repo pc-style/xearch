@@ -385,7 +385,7 @@ export interface ResultsSectionProps {
   busy: boolean;
   /** An `@handle` the query filters to that isn't among the imported accounts. */
   unknownAuthor?: string;
-  onSearch: (query: string, nextSort?: Sort) => void;
+  onAuthor: (handle: string) => void;
   onOpenModal: (modal: ModalKind) => void;
   onImportAccount: (handle: string) => void;
   onRetry: () => void;
@@ -551,7 +551,7 @@ export function ResultsSection(props: ResultsSectionProps) {
                 index={i()}
                 query={props.raw}
                 bookmarked={props.bookmarkedIds.has(post().tweetId)}
-                onAuthor={() => props.onSearch(`@${post().author}`)}
+                onAuthor={() => props.onAuthor(post().author)}
                 onBookmark={() => props.onBookmark(post())}
                 onThread={() => props.onThread(post())}
                 onRead={props.onRead}

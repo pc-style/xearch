@@ -752,6 +752,8 @@ export default function App() {
     if (trimmed && runSearch(request)) kickedAttempt = request.attemptId;
   };
 
+  const searchAuthor = (handle: string) => search(`@${handle}`, "newest", "keyword");
+
   const goHome = () => {
     if (!raw() && view() === ViewMode.Search) return;
     search("");
@@ -1436,7 +1438,7 @@ export default function App() {
                   bookmarkedIds={bookmarkedIds()}
                   busy={busy()}
                   unknownAuthor={unknownAuthor()}
-                  onSearch={search}
+                  onAuthor={searchAuthor}
                   onOpenModal={(which) => setModal(which)}
                   onImportAccount={openImport}
                   onRetry={retrySearch}
@@ -1466,7 +1468,7 @@ export default function App() {
                 accounts={accounts()}
                 posts={wallPosts() ?? earlyWallPosts() ?? []}
                 loading={libraryLoading()}
-                onAccount={(handle) => search(`@${handle}`)}
+                onAccount={searchAuthor}
               />
               {/* Short paragraphs on purpose: none may out-size the h1, or the
                   largest contentful paint moves to the live app's repaint. */}
