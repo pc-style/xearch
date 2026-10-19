@@ -1,11 +1,12 @@
 import type { Id } from "../convex/_generated/dataModel";
-import type { Sort } from "../convex/lib/search";
+import type { SearchMode, Sort } from "../convex/lib/search";
 
 export type SearchSessionId = Id<"sessions">;
 
 /** The public arguments accepted by the existing `api.search.start` mutation. */
 export interface SearchRequest {
   readonly raw: string;
+  readonly mode?: SearchMode;
   readonly sort: Sort;
   readonly cursor?: string;
   readonly includeStats?: boolean;
@@ -32,9 +33,9 @@ export async function searchFlow(
   dependencies.beforeStart?.();
   // Callers pass a wider request (attemptId, trigger for telemetry). Convex
   // rejects unknown fields, so send only the mutation's own arguments.
-  const { raw, sort, cursor, includeStats, clientKey } = request;
+  const { raw, sort, mode, cursor, includeStats, clientKey } = request;
 
-  return dependencies.startSearch({ raw, sort, cursor, includeStats, clientKey });
+  return dependencies.startSearch({ raw, sort, mode, cursor, includeStats, clientKey });
 }
 
 /**

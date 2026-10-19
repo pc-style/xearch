@@ -1,0 +1,34 @@
+name: Semantic projection
+on:
+  push:
+    paths:
+      [
+        "search/semantic/**",
+        "deploy/semantic/**",
+        "deploy/systemd/xearch-semantic*",
+        "scripts/semantic-ctl.py",
+        ".github/workflows/semantic.yml",
+      ]
+  pull_request:
+    paths:
+      [
+        "search/semantic/**",
+        "deploy/semantic/**",
+        "deploy/systemd/xearch-semantic*",
+        "scripts/semantic-ctl.py",
+        ".github/workflows/semantic.yml",
+      ]
+jobs:
+  semantic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.7"
+      - run: uv sync --project search/semantic --frozen
+      - run: uv run --project search/semantic --frozen python search/semantic/tests/run_qdrant.py
+      - run: python -m py_compile deploy/semantic/setup.py scripts/semantic-ctl.py

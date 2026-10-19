@@ -1,0 +1,13 @@
+[package]
+name = "xearch-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[lints]
+workspace = true
+[dependencies]
+search-ingest.workspace = true
+search-model.workspace = true
+serde_json.workspace = true
+[dev-dependencies]
+tempfile.workspace = true

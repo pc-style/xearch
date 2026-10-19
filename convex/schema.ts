@@ -2,6 +2,8 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
 
+export const searchModeValidator = v.union(v.literal("keyword"), v.literal("semantic"));
+
 export const sortValidator = v.union(
   v.literal("relevance"),
   v.literal("engagement"),
@@ -540,6 +542,7 @@ export default defineSchema({
     owner: v.id("users"),
     raw: v.string(),
     sort: sortValidator,
+    mode: v.optional(searchModeValidator),
     cursor: v.optional(v.string()),
     includeStats: v.optional(v.boolean()),
     status: v.union(
@@ -566,6 +569,7 @@ export default defineSchema({
     owner: v.id("users"),
     query: v.string(),
     sort: sortValidator,
+    mode: v.optional(searchModeValidator),
   }).index("by_owner", ["owner"]),
   // The home page's "popular posts" wall: a small, periodically refreshed
   // copy of each imported account's most-liked posts (convex/wall.ts). Kept

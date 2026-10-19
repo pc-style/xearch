@@ -51,7 +51,14 @@ function app() {
   const convex = fakeConvex({
     query: (name) => {
       if (name === "integrations:configured")
-        return { indexing: true, search: true, firecrawl: false, openai: false, email: false };
+        return {
+          indexing: true,
+          search: true,
+          semantic: false,
+          firecrawl: false,
+          openai: false,
+          email: false,
+        };
 
       if (name === "search:accounts") return [];
 

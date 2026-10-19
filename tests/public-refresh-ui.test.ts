@@ -17,6 +17,7 @@ let mounted: Mounted | null = null;
 const CONFIGURED: Value = {
   indexing: true,
   search: true,
+  semantic: false,
   firecrawl: false,
   openai: false,
   email: false,

@@ -1,0 +1,22 @@
+[Unit]
+Description=Xearch private Qdrant 1.19.2
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/xearch-data/semantic
+EnvironmentFile=%h/xearch-data/semantic/qdrant.env
+ExecStart=%h/xearch-semantic/current/bin/qdrant --config-path %h/xearch-data/semantic/qdrant.yaml
+Restart=on-failure
+RestartSec=5
+UMask=0077
+Nice=10
+MemoryHigh=1536M
+MemoryMax=2G
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=append:%h/xearch-data/semantic/logs/qdrant.log
+StandardError=append:%h/xearch-data/semantic/logs/qdrant.log
+
+[Install]
+WantedBy=default.target

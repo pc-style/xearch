@@ -1,0 +1,24 @@
+[Unit]
+Description=Xearch replayable semantic projection worker
+After=xearch-qdrant.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/xearch-semantic/current/runtime
+EnvironmentFile=%h/xearch-data/semantic/semantic.env
+Environment=HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=false OMP_NUM_THREADS=1
+ExecStart=%h/xearch-semantic/current/runtime/.venv/bin/python -m semantic.service watch
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=180
+UMask=0077
+Nice=15
+MemoryHigh=768M
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=append:%h/xearch-data/semantic/logs/worker.log
+StandardError=append:%h/xearch-data/semantic/logs/worker.log
+
+[Install]
+WantedBy=default.target

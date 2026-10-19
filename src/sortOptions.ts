@@ -1,4 +1,4 @@
-import type { Sort } from "../convex/lib/search";
+import type { SearchMode, Sort } from "../convex/lib/search";
 
 // Shared between the sort <select> and the Saved searches modal (both in
 // App.tsx), so a saved query's sort always reads back with the exact label
@@ -25,13 +25,16 @@ export function sortLabel(sort: Sort): string {
  * (CodeRabbit finding on PR #46).
  */
 export function isAlreadySaved(
-  saved: readonly { query: string; sort: Sort }[],
+  saved: readonly { query: string; sort: Sort; mode?: SearchMode }[],
   raw: string,
   sort: Sort,
+  mode: SearchMode = "keyword",
 ): boolean {
   const trimmed = raw.trim();
 
-  return saved.some((s) => s.query === trimmed && s.sort === sort);
+  return saved.some(
+    (s) => s.query === trimmed && s.sort === sort && (s.mode ?? "keyword") === mode,
+  );
 }
 
 /**

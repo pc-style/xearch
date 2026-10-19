@@ -203,3 +203,99 @@ fn embeds_and_replies_are_kept() {
     );
     assert!(!older("and another thing").replies_to_other());
 }
+
+#[derive(Default)]
+struct Observations(Vec<(Option<i64>, u64, search_model::Post)>);
+impl search_ingest::ReplayObserver for Observations {
+    fn post(
+        &mut self,
+        time: Option<i64>,
+        ordinal: u64,
+        post: &search_model::Post,
+    ) -> search_model::Result<()> {
+        self.0.push((time, ordinal, post.clone()));
+        Ok(())
+    }
+}
+
+#[test]
+fn observed_replay_parity_times_profiles_and_rejects() {
+    let good = serde_json::json!({"id":"123", "text":"@bob hello https://a.b", "replying_to":{"screen_name":"bob"}, "author":{"id":"7","screen_name":"Alice"}, "card":{"url":"https://a.b","title":"Title"}});
+    let mut input = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        input,
+        "{}",
+        serde_json::json!({"records":[
+            {"receivedAt":1234,"payload":{"posts":[good, {"id":"bad"}]}},
+            {"receivedAt":2222,"payload":{"type":"profile"}},
+            {"payload":{"post":good}}
+        ]})
+    )
+    .unwrap();
+    let mut observed = Observations::default();
+    let receipt = search_ingest::replay_observed(input.path(), &mut observed).unwrap();
+    assert_eq!((receipt.accepted, receipt.rejected), (2, 1));
+    let first = observed
+        .0
+        .first()
+        .ok_or("Missing first observation")
+        .unwrap();
+    assert_eq!((first.0, first.1), (Some(1234), 0));
+    assert_eq!(first.2, search_ingest::normalize(&good).unwrap());
+    assert_eq!(first.2.searchable(), "hello  \nTitle");
+    let last = observed.0.last().ok_or("Missing last observation").unwrap();
+    assert_eq!((last.0, last.1), (None, 2));
+}
+
+#[test]
+fn observed_invalid_timestamp_and_partial_eof_fail() {
+    let good = serde_json::json!({"id":"1","text":"x","author":{"id":"2","screen_name":"a"}});
+    for timestamp in [
+        serde_json::json!(-1),
+        serde_json::json!("today"),
+        serde_json::json!(true),
+        serde_json::json!(1.5),
+    ] {
+        let mut input = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            input,
+            "{}",
+            serde_json::json!({"records":[{"receivedAt":timestamp,"payload":{"post":good}}]})
+        )
+        .unwrap();
+        assert!(
+            search_ingest::replay_observed(input.path(), &mut Observations::default()).is_err()
+        );
+    }
+    let mut input = tempfile::NamedTempFile::new().unwrap();
+    write!(input, "{{\"posts\":[{good}]").unwrap();
+    let mut observed = Observations::default();
+    assert!(search_ingest::replay_observed(input.path(), &mut observed).is_err());
+    assert_eq!(observed.0.len(), 1);
+}
+
+#[test]
+fn observed_output_failure_propagates() {
+    struct Broken;
+    impl search_ingest::ReplayObserver for Broken {
+        fn post(
+            &mut self,
+            _: Option<i64>,
+            _: u64,
+            _: &search_model::Post,
+        ) -> search_model::Result<()> {
+            Err(search_model::Error::Storage("broken pipe".into()))
+        }
+    }
+    let mut input = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        input,
+        "{}",
+        serde_json::json!({"posts":[{"id":"1","text":"x","author":{"id":"2","screen_name":"a"}}]})
+    )
+    .unwrap();
+    assert!(matches!(
+        search_ingest::replay_observed(input.path(), &mut Broken),
+        Err(search_model::Error::Storage(_))
+    ));
+}

@@ -32,7 +32,7 @@ import { JobRow } from "./JobRow";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { ResultPost } from "../convex/lib/results";
-import { parseQuery, type Sort } from "../convex/lib/search";
+import { parseSearch, type SearchMode, type Sort } from "../convex/lib/search";
 import {
   getSnapshot,
   OPS_PATH,
@@ -96,9 +96,9 @@ function newClientKey(): string {
 }
 
 /** What a query is scoped to, or null when it doesn't parse. */
-function parsed(raw: string) {
+function parsed(raw: string, mode?: SearchMode) {
   try {
-    return parseQuery(raw);
+    return parseSearch(raw, mode);
   } catch {
     return null;
   }
@@ -198,6 +198,7 @@ export default function App() {
   const [draft, setDraft] = createSignal(initialRoute.raw);
   const [raw, setRaw] = createSignal(initialRoute.raw);
   const [sort, setSort] = createSignal<Sort>(initialRoute.sort);
+  const [mode, setMode] = createSignal<SearchMode>(initialRoute.mode);
   const [statsForNerds, setStatsForNerds] = createSignal(initialRoute.includeStats);
   const [view, setView] = createSignal<ViewMode>(initialRoute.view);
 
@@ -206,6 +207,7 @@ export default function App() {
       ? {
           raw: initialRoute.raw,
           sort: initialRoute.sort,
+          mode: initialRoute.mode,
           includeStats: initialRoute.includeStats,
           attemptId: initialRoute.version,
           trigger: SearchTrigger.InitialUrl,
@@ -297,12 +299,14 @@ export default function App() {
     const queryChanged =
       next.raw !== untrack(raw) ||
       next.sort !== untrack(sort) ||
+      next.mode !== untrack(mode) ||
       next.includeStats !== untrack(statsForNerds);
 
     if (queryChanged) {
       setRaw(next.raw);
       setDraft(next.raw);
       setSort(next.sort);
+      setMode(next.mode);
       setStatsForNerds(next.includeStats);
       setSearchKey(null);
       setRows([]);
@@ -312,6 +316,7 @@ export default function App() {
           ? {
               raw: next.raw,
               sort: next.sort,
+              mode: next.mode,
               includeStats: next.includeStats,
               attemptId: next.version,
               trigger: SearchTrigger.InitialUrl,
@@ -428,12 +433,17 @@ export default function App() {
   );
 
   const queryError = () => {
+    // A shared `mode=semantic` link opened where it isn't connected says so,
+    // rather than quietly answering a different (keyword) search.
+    if (mode() === "semantic" && configured() && !configured()?.semantic)
+      return "Search by meaning isn’t available here yet. Switch to keyword search.";
+
     try {
-      parseQuery(raw());
+      parseSearch(raw(), mode());
 
       return "";
     } catch (e) {
-      // SAFETY: `parseQuery` (convex/lib/search.ts) only throws `new Error(...)`.
+      // SAFETY: `parseSearch` (convex/lib/search.ts) only throws `new Error(...)`.
       return (e as Error).message;
     }
   };
@@ -450,7 +460,13 @@ export default function App() {
   const result = () => {
     const s = snapshot();
 
-    return s && s.clientKey === searchKey() && s.raw === raw() && s.sort === sort() ? s : undefined;
+    return s &&
+      s.clientKey === searchKey() &&
+      s.raw === raw() &&
+      s.sort === sort() &&
+      (s.mode ?? "keyword") === mode()
+      ? s
+      : undefined;
   };
 
   const sessionId = () => result()?._id ?? null;
@@ -515,7 +531,10 @@ export default function App() {
 
     // The request's own query, not `raw()`: a view transition applies the
     // state that goes with this request a frame later.
-    if (!untrack(configured)?.search || !parsed(request.raw)) return false;
+    const ready =
+      request.mode === "semantic" ? untrack(configured)?.semantic : untrack(configured)?.search;
+
+    if (!ready || !parsed(request.raw, request.mode)) return false;
     searchStartedAt.set(request.attemptId, performance.now());
     latestAttempt = request.attemptId;
     appendMode = request.cursor !== undefined;
@@ -558,6 +577,7 @@ export default function App() {
           query: redactEmail(request.raw),
           trigger: request.trigger,
           sort: request.sort,
+          mode: request.mode ?? "keyword",
         });
         setNotice(describeError(cause));
         setBusy(false);
@@ -570,7 +590,11 @@ export default function App() {
   // Kick a pending search (the initial URL, or one Back/Forward brought in)
   // once search is known to be configured.
   createEffect(
-    () => ({ request: searchRequest(), ready: configured()?.search }),
+    () => ({
+      request: searchRequest(),
+      ready: configured()?.search,
+      semanticReady: configured()?.semantic,
+    }),
     ({ request }) => {
       if (request !== null && kickedAttempt !== request.attemptId && runSearch(request))
         kickedAttempt = request.attemptId;
@@ -668,14 +692,22 @@ export default function App() {
     });
   }
 
-  const search = (query: string, nextSort?: Sort) => {
+  const search = (query: string, nextSort?: Sort, nextMode?: SearchMode) => {
     const trimmed = query.trim();
-    const effectiveSort = nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort());
+    const effectiveMode = nextMode ?? mode();
+
+    // Semantic results come back nearest first; there is no other order.
+    const effectiveSort =
+      effectiveMode === "semantic"
+        ? "relevance"
+        : (nextSort ?? (isAccountOnlyQuery(trimmed) ? "newest" : sort()));
+
     const attemptId = allocateAttempt();
 
     const request: SearchRequest = {
       raw: trimmed,
       sort: effectiveSort,
+      mode: effectiveMode,
       includeStats: statsForNerds(),
       attemptId,
       trigger: SearchTrigger.Submit,
@@ -687,6 +719,7 @@ export default function App() {
       setRaw(trimmed);
       setDraft(trimmed);
       setSort(effectiveSort);
+      setMode(effectiveMode);
 
       // A real search resets these itself in `runSearch`.
       if (!trimmed) {
@@ -703,6 +736,7 @@ export default function App() {
       pushLocation({
         raw: trimmed,
         sort: effectiveSort,
+        mode: effectiveMode,
         includeStats: statsForNerds(),
         view: ViewMode.Search,
         search: OPERATOR_BUILD ? true : undefined,
@@ -727,6 +761,7 @@ export default function App() {
     const request: SearchRequest = {
       raw: raw(),
       sort: sort(),
+      mode: mode(),
       includeStats: statsForNerds(),
       attemptId: allocateAttempt(),
       trigger: SearchTrigger.Retry,
@@ -749,6 +784,7 @@ export default function App() {
     const request: SearchRequest = {
       raw: raw(),
       sort: sort(),
+      mode: mode(),
       cursor,
       includeStats: result()?.includeStats === true,
       attemptId: allocateAttempt(),
@@ -852,8 +888,12 @@ export default function App() {
       })(),
     );
 
-  const savedEntry = () => saved().find((s) => s.query === raw().trim() && s.sort === sort());
-  const alreadySaved = () => isAlreadySaved(saved(), raw(), sort());
+  const savedEntry = () =>
+    saved().find(
+      (s) => s.query === raw().trim() && s.sort === sort() && (s.mode ?? "keyword") === mode(),
+    );
+
+  const alreadySaved = () => isAlreadySaved(saved(), raw(), sort(), mode());
 
   const toggleSaved = () => {
     const entry = savedEntry();
@@ -863,8 +903,8 @@ export default function App() {
     task(
       (async () => {
         await ensureSession();
-        await save({ raw: raw(), sort: sort() });
-        capture("search_saved", { query: redactEmail(raw()), sort: sort() });
+        await save({ raw: raw(), sort: sort(), mode: mode() });
+        capture("search_saved", { query: redactEmail(raw()), sort: sort(), mode: mode() });
         setJustSaved(true);
         setTimeout(() => setJustSaved(false), 1600);
       })(),
@@ -1068,9 +1108,16 @@ export default function App() {
                       <For each={saved()} keyed={(s) => s._id}>
                         {(item) => (
                           <div class="pi">
-                            <button type="button" onClick={() => search(item().query, item().sort)}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                search(item().query, item().sort, item().mode ?? "keyword")
+                              }
+                            >
                               <b>{item().query}</b>
-                              <small>{sortLabel(item().sort)}</small>
+                              <small>
+                                {item().mode === "semantic" ? "By meaning" : sortLabel(item().sort)}
+                              </small>
                             </button>
                             <button
                               type="button"
@@ -1169,6 +1216,7 @@ export default function App() {
                     capture("search_submitted", {
                       query: redactEmail(draft().trim()),
                       sort: sort(),
+                      mode: mode(),
                     });
                     search(draft());
                   } else document.getElementById("query")?.focus();
@@ -1265,8 +1313,32 @@ export default function App() {
                       </div>
                     </Show>
                   </div>
+                  <Show when={configured()?.semantic || mode() === "semantic"}>
+                    <select
+                      class="sort"
+                      aria-label="Search by"
+                      onChange={(e) => {
+                        const nextMode: SearchMode =
+                          e.currentTarget.value === "semantic" ? "semantic" : "keyword";
+
+                        const query = sortChangeQuery(draft(), raw());
+
+                        // A mode switch is a new search, never the other mode's page.
+                        if (query !== null) search(query, undefined, nextMode);
+                        else setMode(nextMode);
+                      }}
+                    >
+                      <option value="keyword" selected={mode() === "keyword"}>
+                        Keywords
+                      </option>
+                      <option value="semantic" selected={mode() === "semantic"}>
+                        Meaning
+                      </option>
+                    </select>
+                  </Show>
                   <select
                     class="sort"
+                    hidden={mode() === "semantic"}
                     aria-label="Sort results"
                     onChange={(e) => {
                       // SAFETY: every <option> comes from `sorts`, whose values are `Sort`s.

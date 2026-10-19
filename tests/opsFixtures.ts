@@ -126,6 +126,7 @@ export const healthy = (): ServiceStatus[] =>
 export const liveWorker = (): OperatorConfig => ({
   indexing: true,
   search: true,
+  semantic: false,
   firecrawl: false,
   openai: false,
   email: false,

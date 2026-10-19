@@ -9,6 +9,7 @@ import { renderHtml } from "../solid";
 export const configured = {
   indexing: true,
   search: true,
+  semantic: false,
   firecrawl: true,
   openai: true,
   email: true,
