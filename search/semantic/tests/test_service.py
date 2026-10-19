@@ -17,7 +17,7 @@ from semantic.contracts import (
     canonical,
     credential,
 )
-from semantic.service import handler, strict_json
+from semantic.service import display_post, handler, strict_json
 from semantic.telemetry import Telemetry
 
 TOKEN = "0123456789abcdef" * 4
@@ -38,6 +38,19 @@ class DummySearch:
 
 
 class ServiceTests(unittest.TestCase):
+    def test_display_text_bounds_count_codepoints_without_splitting_characters(self):
+        for text, expected in (
+            ("a" * 6000, "a" * 6000),
+            ("a" * 6001, "a" * 6000),
+            ("😀" * 6000, "😀" * 6000),
+            ("😀" * 6001, "😀" * 6000),
+            ("a" * 5999 + "😀", "a" * 5999 + "😀"),
+        ):
+            with self.subTest(length=len(text)):
+                post = {"text": text, "links": []}
+                self.assertEqual(display_post(post)["text"], expected)
+                self.assertEqual(post["text"], text)
+
     def test_strict_fields_and_types(self):
         for value in (
             {},

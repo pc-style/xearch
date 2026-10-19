@@ -16,6 +16,30 @@ from .qdrant import Qdrant
 from .telemetry import Telemetry
 
 
+def display_post(post: dict) -> dict:
+    """Adapt a normalized corpus post to the app's bounded display contract.
+
+    Keep full stored/searchable text. Zod's string limits count code points,
+    as Python slices do; ingest already bounds nested strings and collections.
+    """
+    result = {**post, "text": post["text"][:6000]}
+    if "displayName" in result:
+        result["displayName"] = result["displayName"][:100]
+    if "links" in result:
+        result["links"] = result["links"][:10]
+    if "media" in result:
+        # Ingest accepts positive u32 dimensions; the app caps display pixels.
+        result["media"] = [
+            {
+                key: value
+                for key, value in item.items()
+                if key not in ("width", "height") or value <= 100_000
+            }
+            for item in result["media"]
+        ]
+    return result
+
+
 class Search:
     def __init__(self, path, manifest, encoder, store, telemetry):
         self.path, self.manifest, self.encoder, self.store, self.telemetry = (
@@ -97,7 +121,7 @@ class Search:
                     created is None or created >= request.until_ms
                 ):
                     continue
-                hits.append({"post": post, "score": candidate["score"]})
+                hits.append({"post": display_post(post), "score": candidate["score"]})
                 seen.add(post_id)
                 if len(hits) == request.limit:
                     break
